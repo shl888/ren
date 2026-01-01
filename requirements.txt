@@ -1,0 +1,9 @@
+aiohttp==3.9.1
+websockets==12.0
+ccxt==4.2.77
+python-dotenv==1.0.0
+psutil==5.9.6  # ← 新增系统监控依赖
+
+# 可选开发工具
+# black==23.11.0
+# pylint==3.0.3
