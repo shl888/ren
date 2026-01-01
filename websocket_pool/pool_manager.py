@@ -6,12 +6,13 @@ import logging
 import sys
 import os
 import time
-import threading  # 🚨 新增：线程锁
+import threading  # 线程锁
 from typing import Dict, Any, List, Optional
 import ccxt.async_support as ccxt_async
 
+# 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(os.path.dirname(current_dir))
+root_dir = os.path.dirname(os.path.dirname(current_dir))  # brain_core目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
@@ -22,7 +23,7 @@ from .static_symbols import STATIC_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
-# 🚨 修复：线程安全的计数器锁
+# 线程安全的计数器
 _counter_lock = threading.Lock()
 _counter = 0
 
@@ -72,7 +73,7 @@ class WebSocketPoolManager:
         self._shutting_down = False
     
     async def initialize(self):
-        """初始化所有交易所连接池 - 防重入"""
+        """初始化所有交易所连接池 - 防重入版"""
         if self.initialized or self._initializing:
             logger.info("WebSocket连接池已在初始化或已初始化")
             return
@@ -134,36 +135,25 @@ class WebSocketPoolManager:
             logger.error(traceback.format_exc())
     
     async def _fetch_exchange_symbols(self, exchange_name: str) -> List[str]:
-        """获取交易所的合约列表 - 修复资源泄露版"""
+        """获取交易所的合约列表 - 资源泄露修复版"""
         symbols = []
         
-        # 🚨 修复：使用单个exchange实例，避免重复创建
-        exchange = None
-        try:
-            symbols = await self._fetch_symbols_via_api(exchange_name, exchange)
-            if symbols:
-                logger.info(f"✅ [{exchange_name}] 通过API成功获取 {len(symbols)} 个合约")
-                return symbols
-            
-            # API失败，使用静态列表
-            logger.warning(f"[{exchange_name}] API获取失败，使用内置静态合约列表")
-            symbols = self._get_static_symbols(exchange_name)
-            logger.info(f"⚠️ [{exchange_name}] 使用静态合约列表，共 {len(symbols)} 个")
+        symbols = await self._fetch_symbols_via_api(exchange_name)
+        if symbols:
+            logger.info(f"✅ [{exchange_name}] 通过API成功获取 {len(symbols)} 个合约")
             return symbols
-            
-        finally:
-            # 🚨 修复：确保exchange被关闭
-            if exchange:
-                try:
-                    await exchange.close()
-                except:
-                    pass
+        
+        logger.warning(f"[{exchange_name}] API获取失败，使用内置静态合约列表")
+        symbols = self._get_static_symbols(exchange_name)
+        logger.info(f"⚠️ [{exchange_name}] 使用静态合约列表，共 {len(symbols)} 个")
+        return symbols
     
-    async def _fetch_symbols_via_api(self, exchange_name: str, exchange) -> List[str]:
-        """方法1: 通过交易所API动态获取 - 修复资源泄露"""
+    async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
+        """核心方法：通过API获取合约，确保100%资源释放"""
         max_retries = 3
         
         for attempt in range(1, max_retries + 1):
+            exchange = None
             try:
                 config = self._get_exchange_config(exchange_name)
                 exchange_class = getattr(ccxt_async, exchange_name)
@@ -188,7 +178,6 @@ class WebSocketPoolManager:
                 filtered_symbols = self._filter_and_format_symbols(exchange_name, markets)
                 
                 if filtered_symbols:
-                    # 打印分组统计
                     symbol_groups = {}
                     for s in filtered_symbols:
                         prefix = s[:3]
@@ -205,12 +194,20 @@ class WebSocketPoolManager:
                 error_detail = str(e) if e else '未知错误'
                 
                 if attempt < max_retries:
-                    wait_time = min(2 ** attempt, 30)  # 🚨 修复：上限30秒
+                    wait_time = min(2 ** attempt, 30)
                     logger.warning(f'[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {error_detail}')
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f'[{exchange_name}] 所有{max_retries}次尝试均失败: {error_detail}')
                     return []
+            finally:
+                # 🚨 核心修复：确保exchange被正确关闭
+                if exchange:
+                    try:
+                        await exchange.close()
+                        logger.debug(f"[{exchange_name}] exchange实例已关闭")
+                    except Exception as e:
+                        logger.debug(f"[{exchange_name}] 关闭exchange时出错: {e}")
     
     def _get_exchange_config(self, exchange_name: str) -> dict:
         """获取针对不同交易所优化的配置"""
