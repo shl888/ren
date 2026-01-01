@@ -1,3 +1,4 @@
+# websocket_pool/connection.py
 """
 单个WebSocket连接实现 - 支持角色互换
 支持自动重连、数据解析、状态管理
@@ -5,6 +6,7 @@
 import asyncio
 import json
 import logging
+import time  # 🚨 修改1：加这行
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import websockets
@@ -73,8 +75,8 @@ class WebSocketConnection:
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
         
-        # 🚨 新增：心跳日志时间记录
-        self.last_heartbeat_log_time = datetime.now()
+        # 🚨 修改2：加这1行
+        self.last_log_time = time.time()
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -410,46 +412,10 @@ class WebSocketConnection:
             elif self.exchange == "okx":
                 await self._process_okx_message(data)
             
-            # 🚨 新增：每5分钟打印一次心跳日志
-            await self._log_heartbeat_if_needed(data)
-            
         except json.JSONDecodeError:
             logger.warning(f"[{self.connection_id}] 无法解析JSON消息")
         except Exception as e:
             logger.error(f"[{self.connection_id}] 处理消息错误: {e}")
-    
-    async def _log_heartbeat_if_needed(self, data):
-        """每5分钟打印一次心跳日志"""
-        now = datetime.now()
-        elapsed = (now - self.last_heartbeat_log_time).total_seconds()
-        
-        # 如果超过5分钟（300秒）
-        if elapsed >= 300:
-            # 根据交易所和消息类型提取关键信息
-            if self.exchange == "binance":
-                event_type = data.get("e", "")
-                if event_type == "24hrTicker":
-                    symbol = data.get("s", "")
-                    logger.info(f"[{self.connection_id}] 数据心跳 - ticker: {symbol}")
-                elif event_type == "markPriceUpdate":
-                    symbol = data.get("s", "")
-                    logger.info(f"[{self.connection_id}] 数据心跳 - mark_price: {symbol}")
-            
-            elif self.exchange == "okx":
-                arg = data.get("arg", {})
-                channel = arg.get("channel", "")
-                symbol = arg.get("instId", "")
-                
-                if channel == "funding-rate":
-                    # 转换格式：BTC-USDT-SWAP → BTCUSDT
-                    display_symbol = symbol.replace('-USDT-SWAP', 'USDT')
-                    logger.info(f"[{self.connection_id}] 数据心跳 - funding_rate: {display_symbol}")
-                elif channel == "tickers":
-                    display_symbol = symbol.replace('-USDT-SWAP', 'USDT')
-                    logger.info(f"[{self.connection_id}] 数据心跳 - ticker: {display_symbol}")
-            
-            # 更新上次打印时间
-            self.last_heartbeat_log_time = now
     
     async def _process_binance_message(self, data):
         """处理币安消息 - 完全保留原始数据，不做任何过滤"""
@@ -466,10 +432,6 @@ class WebSocketConnection:
             
             # 🚨 【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
-            
-            # 🚨 注释掉高频日志
-            # if self.ticker_count % 100 == 0:
-            #     logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个ticker消息")
             
             # 🚨 【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -538,10 +500,13 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨 注释掉高频日志
-                    # if "fundingRate" in funding_data:
-                    #     funding_rate = float(funding_data.get("fundingRate", 0))
-                    #     logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
+                    # 🚨 【关键修复】记录哪个连接收到的数据，但保留完整原始数据
+                    if "fundingRate" in funding_data:
+                        funding_rate = float(funding_data.get("fundingRate", 0))
+                        # 🚨 🚨 🚨 修改3：加时间判断
+                        if time.time() - self.last_log_time >= 300:
+                            logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
+                            self.last_log_time = time.time()
                     
                     # 🚨 【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -563,9 +528,11 @@ class WebSocketConnection:
                     # 🚨 【关键修复】每个连接独立的计数器
                     self.okx_ticker_count += 1
                     
-                    # 🚨 注释掉高频日志
-                    # if self.okx_ticker_count % 50 == 0:
-                    #     logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
+                    # 🚨 🚨 🚨 修改4：加时间判断
+                    if self.okx_ticker_count % 50 == 0:
+                        if time.time() - self.last_log_time >= 300:
+                            logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
+                            self.last_log_time = time.time()
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
