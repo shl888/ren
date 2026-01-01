@@ -1,16 +1,17 @@
 """
-单个交易所的连接池管理 - 监控调度版 + 冷却期 + 连接ID管理
+单个交易所的连接池管理 - 监控调度版 + 冷却期 + 自动重连 + 资源清理
 """
 import asyncio
 import logging
 import sys
 import os
-import time  # 🚨 新增：需要time模块
+import time  # 🚨 核心修复：必须导入
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
+# 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(os.path.dirname(current_dir))
+root_dir = os.path.dirname(os.path.dirname(current_dir))  # brain_core目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
@@ -42,8 +43,8 @@ class ExchangeWebSocketPool:
         self.symbols = []
         self.symbol_groups = []
         
-        # 🚨 新增：故障转移冷却期记录
-        self.failover_cooldown = {}  # connection_id -> 上次切换时间戳
+        # 🚨 核心修复：冷却期绑定到槽位，不是连接ID
+        self.failover_cooldown = {}  # master_index -> 时间戳
         
         # 任务
         self.health_check_task = None
@@ -272,19 +273,21 @@ class ExchangeWebSocketPool:
         
         while True:
             try:
-                # 🚨 修复：冷却期检查，避免乒乓循环
+                # 1. 监控所有主连接状态
                 for i, master_conn in enumerate(self.master_connections):
-                    # 检查冷却期
-                    if master_conn.connection_id in self.failover_cooldown:
-                        elapsed = time.time() - self.failover_cooldown[master_conn.connection_id]
-                        if elapsed < 30:  # 30秒内不重复切换
-                            continue
+                    # 🚨 核心修复：冷却期检查（30秒内不重复切换）
+                    if i in self.failover_cooldown:
+                        elapsed = time.time() - self.failover_cooldown[i]
+                        if elapsed < 30:
+                            continue  # 跳过这个槽位的检查
                     
                     if not master_conn.connected:
                         logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} ({master_conn.connection_id}) 断开")
                         await self._monitor_handle_master_failure(i, master_conn)
+                        # 🚨 记录冷却期
+                        self.failover_cooldown[i] = time.time()
                 
-                # 监控温备连接
+                # 2. 监控温备连接
                 for i, warm_conn in enumerate(self.warm_standby_connections):
                     if not warm_conn.connected:
                         logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} ({warm_conn.connection_id}) 断开")
@@ -292,6 +295,7 @@ class ExchangeWebSocketPool:
                         if warm_conn.connected:
                             logger.info(f"[监控调度] [{self.exchange}] 温备连接{i} 重连成功")
                 
+                # 3. 定期报告状态
                 await self._report_status_to_data_store()
                 await asyncio.sleep(3)
                 
@@ -361,7 +365,7 @@ class ExchangeWebSocketPool:
                 logger.error(f"[监控调度] [{self.exchange}] 温备切换角色失败")
                 return False
             
-            # 🚨 修复：更新连接池结构（处理越界）
+            # 🚨 核心修复：更新连接池结构（处理越界）
             if new_master in self.warm_standby_connections:
                 self.warm_standby_connections.remove(new_master)
             
@@ -387,8 +391,8 @@ class ExchangeWebSocketPool:
             logger.info(f"[监控调度] [{self.exchange}] 故障转移完成")
             await self._report_failover_to_data_store(master_index, old_master.connection_id, new_master.connection_id)
             
-            # 🚨 修复：记录冷却期
-            self.failover_cooldown[new_master.connection_id] = time.time()
+            # 🚨 删除重复记录（已在调度循环中记录）
+            # self.failover_cooldown[master_index] = time.time()
             
             return True
             
