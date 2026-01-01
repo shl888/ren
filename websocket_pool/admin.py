@@ -1,5 +1,6 @@
+# websocket_pool/admin.py
 """
-WebSocket连接池管理员 - 生产级实现 + 后置检查 + 时序修复
+WebSocket连接池管理员 - 生产级实现 + 后置检查
 """
 
 import asyncio
@@ -7,6 +8,7 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
+# 模块内部导入
 from .pool_manager import WebSocketPoolManager
 from .monitor import ConnectionMonitor
 
@@ -24,6 +26,8 @@ class WebSocketAdmin:
         
         logger.info("WebSocketAdmin 初始化完成")
     
+    # ========== 对外接口（大脑核心只调用这些方法）==========
+    
     async def start(self):
         """启动整个WebSocket模块 - 增强版"""
         if self._running:
@@ -39,15 +43,11 @@ class WebSocketAdmin:
             logger.info("[管理员] 步骤1: 初始化WebSocket连接池")
             await self._pool_manager.initialize()
             
-            # 🚨 修复：等待池稳定后再启动监控
-            logger.info("[管理员] 等待连接池稳定（5秒）...")
-            await asyncio.sleep(5)
-            
             # 2. 启动监控
             logger.info("[管理员] 步骤2: 启动连接监控")
             await self._monitor.start_monitoring()
             
-            # 3. 强制检查每个交易所的监控调度器
+            # 3. 🚨 新增：强制检查每个交易所的监控调度器
             logger.info("[管理员] 步骤3: 强制检查各交易所监控调度器")
             await self._enforce_all_monitor_schedulers()
             
@@ -64,7 +64,7 @@ class WebSocketAdmin:
             return False
     
     async def _enforce_all_monitor_schedulers(self):
-        """强制检查所有交易所的监控调度器"""
+        """🚨 强制检查所有交易所的监控调度器"""
         for exchange_name, pool in self._pool_manager.exchange_pools.items():
             logger.info(f"[管理员] 检查 [{exchange_name}] 监控调度器状态...")
             
@@ -119,15 +119,12 @@ class WebSocketAdmin:
                     connected_masters = sum(1 for m in masters if isinstance(m, dict) and m.get("connected", False))
                     connected_warm = sum(1 for w in warm_standbys if isinstance(w, dict) and w.get("connected", False))
                     
-                    # 🚨 修复：考虑冗余的健康判断
-                    min_required_masters = max(1, len(masters) - 1)  # 至少保留n-1个
-                    
                     summary["exchanges"][exchange] = {
                         "masters_connected": connected_masters,
                         "masters_total": len(masters),
                         "standbys_connected": connected_warm,
                         "standbys_total": len(warm_standbys),
-                        "health": "good" if connected_masters >= min_required_masters else "warning"
+                        "health": "good" if connected_masters == len(masters) else "warning"
                     }
             
             return summary
@@ -156,18 +153,17 @@ class WebSocketAdmin:
             for exchange_info in status.get("exchanges", {}).values():
                 masters_connected = exchange_info.get("masters_connected", 0)
                 masters_total = exchange_info.get("masters_total", 0)
-                min_required = max(1, masters_total - 1)
                 
-                if masters_connected < min_required:
+                if masters_connected == 0 and masters_total > 0:
                     return {
                         "healthy": False,
-                        "message": f"交易所主连接不足（{masters_connected}/{min_required}）",
+                        "message": f"交易所主连接全部断开",
                         "details": status
                     }
             
             return {
                 "healthy": True,
-                "message": "所有交易所主连接正常（考虑冗余）",
+                "message": "所有交易所主连接正常",
                 "details": status
             }
             
@@ -176,6 +172,8 @@ class WebSocketAdmin:
                 "healthy": False,
                 "message": f"健康检查异常: {e}"
             }
+    
+    # ========== 扩展接口（可选）==========
     
     async def reconnect_exchange(self, exchange_name: str):
         """重连指定交易所"""
