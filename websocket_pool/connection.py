@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import websockets
 import aiohttp
-import time  # 确保导入了time
+import time
 
 # 🚨 新增导入 - 合约收集器
 try:
@@ -63,9 +63,7 @@ class WebSocketConnection:
         
         # 🚨 【关键修复】每个连接独立的计数器
         self.ticker_count = 0          # 币安ticker计数
-        self.mark_price_count = 0      # 币安标记价格计数
         self.okx_ticker_count = 0      # OKX ticker计数
-        self.okx_funding_count = 0     # OKX资金费率计数
         
         # 连接配置
         self.ping_interval = 15
@@ -408,6 +406,7 @@ class WebSocketConnection:
                 await self._process_binance_message(data)
             elif self.exchange == "okx":
                 await self._process_okx_message(data)
+                
         except json.JSONDecodeError:
             logger.warning(f"[{self.connection_id}] 无法解析JSON消息")
         except Exception as e:
@@ -429,9 +428,8 @@ class WebSocketConnection:
             # 🚨 【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
             
-            # 🚨 【修改1】币安ticker每10000个打印一次
-            if self.ticker_count % 10000 == 0:
-                logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个币安ticker数据")
+            if self.ticker_count % 100 == 0:
+                logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个ticker消息")
             
             # 🚨 【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -457,13 +455,6 @@ class WebSocketConnection:
                     add_symbol_from_websocket("binance", symbol)
                 except Exception as e:
                     logger.debug(f"收集币安合约失败 {symbol}: {e}")
-            
-            # 🚨 【新增】币安标记价格计数器
-            self.mark_price_count += 1
-            
-            # 🚨 【修改2】币安标记价格每10000个打印一次（和ticker一致）
-            if self.mark_price_count % 10000 == 0:
-                logger.info(f"[{self.connection_id}] 已处理 {self.mark_price_count} 个币安标记价格数据")
             
             # 🚨 【关键修复】完全保留原始标记价格数据
             processed = {
@@ -507,12 +498,10 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨 【新增】OKX资金费率计数器
-                    self.okx_funding_count += 1
-                    
-                    # 🚨 【修改3】OKX资金费率每5000个打印一次统计
-                    if self.okx_funding_count % 5000 == 0:
-                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_funding_count} 个OKX资金费率数据")
+                    # 🚨 【关键修复】记录哪个连接收到的数据，但保留完整原始数据
+                    if "fundingRate" in funding_data:
+                        funding_rate = float(funding_data.get("fundingRate", 0))
+                        logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
                     
                     # 🚨 【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -534,9 +523,9 @@ class WebSocketConnection:
                     # 🚨 【关键修复】每个连接独立的计数器
                     self.okx_ticker_count += 1
                     
-                    # 🚨 【修改4】OKX ticker每5000个打印一次
-                    if self.okx_ticker_count % 5000 == 0:
-                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker数据")
+                    # 🚨 【关键修复】每处理一定数量就打印一次，包含真实连接ID
+                    if self.okx_ticker_count % 50 == 0:
+                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
@@ -583,6 +572,7 @@ class WebSocketConnection:
             logger.info(f"[{self.connection_id}] 连接已完全断开")
             
         except Exception as e:
+            # 🚨 修复：SyntaxError - 确保字符串正确闭合
             logger.error(f"[{self.connection_id}] 断开连接时发生错误: {e}")
     
     @property
