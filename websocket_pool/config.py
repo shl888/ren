@@ -25,6 +25,14 @@ EXCHANGE_CONFIGS = {
         "monitor_enabled": True,        # 启用监控
         "reconnect_interval": 3,        # 重连间隔(秒)
         "ping_interval": 30,            # 心跳间隔(秒)
+        
+        # 在 binance 和 okx 的配置字典里添加这些键
+        "failover_cooldown_seconds": 30,        # 故障转移冷却期
+        "auto_reconnect_max_attempts": 3,       # 自动重连最大尝试次数
+        "auto_reconnect_delay": 5,              # 自动重连延迟基数
+        "warm_standby_delay_base": 15,          # 温备延迟订阅基数
+        "monitor_check_interval": 10,           # 监控检查间隔
+        
     },
     "okx": {
         "ws_public_url": "wss://ws.okx.com:8443/ws/v5/public",
@@ -46,6 +54,13 @@ EXCHANGE_CONFIGS = {
         "monitor_enabled": True,
         "reconnect_interval": 3,
         "ping_interval": 30,
+                
+        # 在 binance 和 okx 的配置字典里添加这些键
+        "failover_cooldown_seconds": 30,        # 故障转移冷却期
+        "auto_reconnect_max_attempts": 3,       # 自动重连最大尝试次数
+        "auto_reconnect_delay": 5,              # 自动重连延迟基数
+        "warm_standby_delay_base": 15,          # 温备延迟订阅基数
+        "monitor_check_interval": 10,           # 监控检查间隔
     }
 }
 
