@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: brain-core-trading
+    env: python
+    pythonVersion: "3.11.0"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python brain_core.py
+    envVars:
+      - key: PORT
+        value: 10000  # ✅ Render要求必须用10000
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: OKX_API_KEY
+        sync: false
+      - key: OKX_API_SECRET
+        sync: false
+      - key: OKX_PASSPHRASE
+        sync: false
+    healthCheckPath: /health
+    autoDeploy: true
