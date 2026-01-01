@@ -56,9 +56,6 @@ class WebSocketConnection:
         self.subscribed = False
         self.is_active = False
         
-        # 🚨【关键修复】新增：数据过滤标志
-        self._filter_data = (connection_type == ConnectionType.WARM_STANDBY)
-        
         # 任务
         self.keepalive_task = None
         self.receive_task = None
@@ -75,9 +72,6 @@ class WebSocketConnection:
         # 频率控制
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
-        
-        # 消息计数器
-        self._warm_message_count = 0
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -167,17 +161,9 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
-        """切换连接角色 - 修复版：同步更新数据过滤策略"""
+        """切换连接角色"""
         try:
             old_role = self.connection_type
-            
-            # 🚨【关键修复】根据角色设置数据过滤
-            if new_role == ConnectionType.MASTER:
-                self._filter_data = False  # 主连接不过滤数据
-                logger.info(f"[{self.connection_id}] 设置为【主连接】模式，不过滤数据")
-            elif new_role == ConnectionType.WARM_STANDBY:
-                self._filter_data = True   # 温备连接过滤数据
-                logger.info(f"[{self.connection_id}] 设置为【温备连接】模式，过滤数据")
             
             # 温备升级为主连接
             if new_role == ConnectionType.MASTER and old_role == ConnectionType.WARM_STANDBY:
@@ -409,45 +395,13 @@ class WebSocketConnection:
             self.is_active = False
     
     async def _process_message(self, message):
-        """处理接收到的消息 - 修复版：温备连接过滤数据"""
+        """处理接收到的消息"""
         try:
             data = json.loads(message)
             
-            # 如果是订阅响应，直接记录日志
             if self.exchange == "binance" and "id" in data:
                 logger.info(f"[{self.connection_id}] 收到订阅响应 ID={data.get('id')}")
-                return
-            elif self.exchange == "okx" and data.get("event") == "subscribe":
-                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
-                return
             
-            # 🚨【关键修复】温备连接跳过数据处理（只维持连接）
-            if self._filter_data and self.connection_type == ConnectionType.WARM_STANDBY:
-                # 温备连接只维持连接，不处理数据到业务层
-                self._warm_message_count += 1
-                
-                # 每100条消息记录一次日志（减少日志量）
-                if self._warm_message_count % 100 == 0:
-                    # 简单记录消息类型
-                    if self.exchange == "binance":
-                        event_type = data.get("e", "")
-                        if event_type == "24hrTicker":
-                            symbol = data.get("s", "").upper()
-                            logger.debug(f"[{self.connection_id}] 温备收到第{self._warm_message_count}条心跳数据: {symbol}")
-                    elif self.exchange == "okx":
-                        arg = data.get("arg", {})
-                        channel = arg.get("channel", "")
-                        if channel == "tickers":
-                            self.okx_ticker_count += 1
-                            logger.debug(f"[{self.connection_id}] 温备收到第{self._warm_message_count}个OKX心跳")
-                        elif channel == "funding-rate":
-                            symbol = arg.get("instId", "").replace('-USDT-SWAP', 'USDT')
-                            logger.debug(f"[{self.connection_id}] 温备收到资金费率心跳: {symbol}")
-                
-                # 🚨 重要：温备连接不调用 data_callback！
-                return
-            
-            # 只有主连接和监控连接才处理数据
             if self.exchange == "binance":
                 await self._process_binance_message(data)
             elif self.exchange == "okx":
@@ -460,7 +414,7 @@ class WebSocketConnection:
     
     async def _process_binance_message(self, data):
         """处理币安消息 - 完全保留原始数据，不做任何过滤"""
-        # 订阅响应已在上层处理，这里不再处理
+        # 订阅响应
         if "result" in data or "id" in data:
             return
         
@@ -519,13 +473,12 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
-        # 如果是错误消息
-        if data.get("event") == "error":
-            logger.error(f"[{self.connection_id}] OKX错误: {data}")
-            return
-        
-        # 如果是订阅响应，已在上层处理
         if data.get("event"):
+            event_type = data.get("event")
+            if event_type == "error":
+                logger.error(f"[{self.connection_id}] OKX错误: {data}")
+            elif event_type == "subscribe":
+                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
             return
         
         arg = data.get("arg", {})
