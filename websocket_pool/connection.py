@@ -75,6 +75,9 @@ class WebSocketConnection:
         # 频率控制
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
+        
+        # 消息计数器
+        self._warm_message_count = 0
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -410,17 +413,18 @@ class WebSocketConnection:
         try:
             data = json.loads(message)
             
+            # 如果是订阅响应，直接记录日志
             if self.exchange == "binance" and "id" in data:
                 logger.info(f"[{self.connection_id}] 收到订阅响应 ID={data.get('id')}")
+                return
+            elif self.exchange == "okx" and data.get("event") == "subscribe":
+                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
+                return
             
             # 🚨【关键修复】温备连接跳过数据处理（只维持连接）
             if self._filter_data and self.connection_type == ConnectionType.WARM_STANDBY:
                 # 温备连接只维持连接，不处理数据到业务层
-                # 但需要记录消息，保持连接活跃
-                if hasattr(self, '_warm_message_count'):
-                    self._warm_message_count += 1
-                else:
-                    self._warm_message_count = 1
+                self._warm_message_count += 1
                 
                 # 每100条消息记录一次日志（减少日志量）
                 if self._warm_message_count % 100 == 0:
@@ -435,8 +439,10 @@ class WebSocketConnection:
                         channel = arg.get("channel", "")
                         if channel == "tickers":
                             self.okx_ticker_count += 1
-                            if self.okx_ticker_count % 50 == 0:
-                                logger.debug(f"[{self.connection_id}] 温备收到第{self.okx_ticker_count}个OKX心跳")
+                            logger.debug(f"[{self.connection_id}] 温备收到第{self._warm_message_count}个OKX心跳")
+                        elif channel == "funding-rate":
+                            symbol = arg.get("instId", "").replace('-USDT-SWAP', 'USDT')
+                            logger.debug(f"[{self.connection_id}] 温备收到资金费率心跳: {symbol}")
                 
                 # 🚨 重要：温备连接不调用 data_callback！
                 return
@@ -454,7 +460,7 @@ class WebSocketConnection:
     
     async def _process_binance_message(self, data):
         """处理币安消息 - 完全保留原始数据，不做任何过滤"""
-        # 订阅响应
+        # 订阅响应已在上层处理，这里不再处理
         if "result" in data or "id" in data:
             return
         
@@ -513,22 +519,13 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
-        # 🚨【关键修复】只有主连接才处理数据
-        if self.connection_type != ConnectionType.MASTER:
-            # 不是主连接，只计数不处理
-            if "arg" in data:
-                arg = data.get("arg", {})
-                channel = arg.get("channel", "")
-                if channel == "tickers":
-                    self.okx_ticker_count += 1
+        # 如果是错误消息
+        if data.get("event") == "error":
+            logger.error(f"[{self.connection_id}] OKX错误: {data}")
             return
         
+        # 如果是订阅响应，已在上层处理
         if data.get("event"):
-            event_type = data.get("event")
-            if event_type == "error":
-                logger.error(f"[{self.connection_id}] OKX错误: {data}")
-            elif event_type == "subscribe":
-                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
             return
         
         arg = data.get("arg", {})
@@ -649,8 +646,3 @@ class WebSocketConnection:
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
         }
-    
-    def set_filter_data(self, enabled: bool):
-        """设置数据过滤开关（供外部调用）"""
-        self._filter_data = enabled
-        logger.info(f"[{self.connection_id}] 数据过滤已{'开启' if enabled else '关闭'}")
