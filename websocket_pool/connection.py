@@ -56,6 +56,9 @@ class WebSocketConnection:
         self.subscribed = False
         self.is_active = False
         
+        # 🚨【关键修复】新增：数据过滤标志
+        self._filter_data = (connection_type == ConnectionType.WARM_STANDBY)
+        
         # 任务
         self.keepalive_task = None
         self.receive_task = None
@@ -72,6 +75,13 @@ class WebSocketConnection:
         # 频率控制
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
+        
+        # 消息计数器
+        self._warm_message_count = 0
+        
+        # ✅ 新增：订阅确认相关
+        self._pending_confirm = None
+        self._confirm_timeout = 5
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -97,9 +107,9 @@ class WebSocketConnection:
             
             # 🚨 【关键修复】只有主连接立即订阅（保持原来逻辑）
             if self.connection_type == ConnectionType.MASTER and self.symbols:
-                await self._subscribe()
-                self.subscribed = True
-                self.is_active = True
+                success = await self._subscribe()
+                self.subscribed = success
+                self.is_active = success
                 logger.info(f"[{self.connection_id}] 主连接已激活并订阅")
             
             # 🚨 【关键修复】温备连接延迟订阅（避免触发交易所限制）
@@ -149,8 +159,8 @@ class WebSocketConnection:
             
             if self.connected and not self.subscribed and self.symbols:
                 logger.info(f"[{self.connection_id}] 开始延迟订阅")
-                await self._subscribe()
-                self.subscribed = True
+                success = await self._subscribe()
+                self.subscribed = success
                 logger.info(f"[{self.connection_id}] 延迟订阅完成")
             elif not self.connected:
                 logger.warning(f"[{self.connection_id}] 连接已断开，取消延迟订阅")
@@ -161,90 +171,91 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
-        """切换连接角色"""
+        """切换连接角色 - 原子操作版"""
         try:
             old_role = self.connection_type
             
-            # 温备升级为主连接
-            if new_role == ConnectionType.MASTER and old_role == ConnectionType.WARM_STANDBY:
-                logger.info(f"[{self.connection_id}] 从温备切换为主连接")
-                
-                # 取消延迟订阅任务（如果还在等待）
-                if self.delayed_subscribe_task:
-                    self.delayed_subscribe_task.cancel()
-                
-                # 如果已经有订阅（心跳），先取消
-                if self.connected and self.subscribed:
-                    await self._unsubscribe()
-                    self.subscribed = False
-                
-                # 更新合约列表
-                if new_symbols:
-                    self.symbols = new_symbols
-                
-                self.is_active = True
-                self.connection_type = new_role
-                
-                # 订阅新合约（主连接的合约）
-                if self.connected and self.symbols:
-                    await self._subscribe()
-                    self.subscribed = True
-                
-                logger.info(f"[{self.connection_id}] 切换完成，订阅 {len(self.symbols)} 个合约")
-                return True
-                
-            # 主连接降级为温备
-            elif new_role == ConnectionType.WARM_STANDBY and old_role == ConnectionType.MASTER:
-                logger.info(f"[{self.connection_id}] 从主连接切换为温备")
-                
-                # 如果已经有订阅（主连接合约），先取消
-                if self.connected and self.subscribed:
-                    await self._unsubscribe()
-                    self.subscribed = False
-                
-                # 更新为心跳合约
-                if new_symbols:
-                    self.symbols = new_symbols
-                else:
-                    # 默认心跳合约
+            # ✅ 阶段1: 取消当前订阅（如果已订阅）
+            if self.connected and self.subscribed and self.symbols:
+                logger.info(f"[{self.connection_id}] 取消当前订阅")
+                await self._unsubscribe()
+                await asyncio.sleep(1)  # 等待交易所处理
+                self.subscribed = False
+            
+            # ✅ 阶段2: 更新角色和合约
+            self.connection_type = new_role
+            self._filter_data = (new_role == ConnectionType.WARM_STANDBY)
+            
+            if new_symbols:
+                self.symbols = new_symbols
+            else:
+                # 如果没有提供新合约，温备使用心跳合约
+                if new_role == ConnectionType.WARM_STANDBY:
                     if self.exchange == "binance":
                         self.symbols = ["BTCUSDT"]
                     elif self.exchange == "okx":
                         self.symbols = ["BTC-USDT-SWAP"]
-                
-                self.is_active = False
-                self.connection_type = new_role
-                
-                # 订阅心跳合约
-                if self.connected and self.symbols:
-                    await self._subscribe()
-                    self.subscribed = True
-                
-                logger.info(f"[{self.connection_id}] 切换完成，订阅 {len(self.symbols)} 个心跳合约")
-                return True
             
-            # 其他情况
-            else:
-                self.connection_type = new_role
-                logger.info(f"[{self.connection_id}] 角色从 {old_role} 改为 {new_role}")
-                return True
+            # ✅ 阶段3: 按新角色订阅
+            if self.connected and self.symbols:
+                success = await self._subscribe()
+                self.is_active = (new_role == ConnectionType.MASTER and success)
                 
+                if success:
+                    logger.info(f"[{self.connection_id}] 角色切换成功: {old_role} -> {new_role}")
+                else:
+                    logger.error(f"[{self.connection_id}] 角色切换失败: 订阅确认超时")
+                
+                return success
+            
+            return True
+            
         except Exception as e:
             logger.error(f"[{self.connection_id}] 角色切换失败: {e}")
             return False
     
     async def _subscribe(self):
-        """订阅数据"""
+        """订阅数据（带交易所确认）"""
         if not self.symbols:
             logger.warning(f"[{self.connection_id}] 没有合约可订阅")
-            return
+            return False
         
         logger.info(f"[{self.connection_id}] 开始订阅 {len(self.symbols)} 个合约")
         
-        if self.exchange == "binance":
-            await self._subscribe_binance()
-        elif self.exchange == "okx":
-            await self._subscribe_okx()
+        try:
+            if self.exchange == "binance":
+                await self._subscribe_binance()
+            elif self.exchange == "okx":
+                await self._subscribe_okx()
+            
+            # ✅ 关键：等待交易所确认（5秒超时）
+            logger.info(f"[{self.connection_id}] 等待订阅确认...")
+            await asyncio.wait_for(self._wait_subscribe_confirm(), timeout=5)
+            
+            self.subscribed = True  # ✅ 确认后才标记
+            logger.info(f"[{self.connection_id}] ✅ 订阅确认成功")
+            return True
+            
+        except asyncio.TimeoutError:
+            logger.error(f"[{self.connection_id}] 订阅确认超时，失败")
+            return False
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] 订阅失败: {e}")
+            return False
+    
+    async def _wait_subscribe_confirm(self):
+        """等待订阅确认响应"""
+        # Binance: {"result": null, "id": 1}
+        # OKX: {"event": "subscribe", "arg": {...}}
+        confirm_event = asyncio.Event()
+        
+        # 临时存储确认回调
+        self._pending_confirm = confirm_event
+        
+        try:
+            await confirm_event.wait()
+        finally:
+            self._pending_confirm = None
     
     async def _subscribe_binance(self):
         """订阅币安数据"""
@@ -273,8 +284,7 @@ class WebSocketConnection:
                 if i + batch_size < len(streams):
                     await asyncio.sleep(1.5)
             
-            self.subscribed = True
-            logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
+            logger.info(f"[{self.connection_id}] 订阅发送完成，共 {len(self.symbols)} 个合约")
             
         except Exception as e:
             logger.error(f"[{self.connection_id}] 订阅失败: {e}")
@@ -324,8 +334,7 @@ class WebSocketConnection:
                 if batch_idx < total_batches - 1:
                     await asyncio.sleep(1.5)
             
-            self.subscribed = True
-            logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")
+            logger.info(f"[{self.connection_id}] 订阅发送完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")
             return True
             
         except Exception as e:
@@ -395,13 +404,28 @@ class WebSocketConnection:
             self.is_active = False
     
     async def _process_message(self, message):
-        """处理接收到的消息"""
+        """处理接收到的消息 - 修复版：温备连接彻底丢弃"""
         try:
             data = json.loads(message)
             
+            # ✅ 处理订阅确认响应
             if self.exchange == "binance" and "id" in data:
+                if self._pending_confirm:
+                    self._pending_confirm.set()  # 触发确认
                 logger.info(f"[{self.connection_id}] 收到订阅响应 ID={data.get('id')}")
+                return
             
+            if self.exchange == "okx" and data.get("event") == "subscribe":
+                if self._pending_confirm:
+                    self._pending_confirm.set()
+                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
+                return
+            
+            # ✅ 温备连接直接丢弃（不解析，不创建对象）
+            if self._filter_data:
+                return  # 直接返回，零开销
+            
+            # 主连接处理数据...
             if self.exchange == "binance":
                 await self._process_binance_message(data)
             elif self.exchange == "okx":
@@ -414,7 +438,7 @@ class WebSocketConnection:
     
     async def _process_binance_message(self, data):
         """处理币安消息 - 完全保留原始数据，不做任何过滤"""
-        # 订阅响应
+        # 订阅响应已在上层处理，这里不再处理
         if "result" in data or "id" in data:
             return
         
@@ -473,12 +497,13 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
+        # 如果是错误消息
+        if data.get("event") == "error":
+            logger.error(f"[{self.connection_id}] OKX错误: {data}")
+            return
+        
+        # 如果是订阅响应，已在上层处理
         if data.get("event"):
-            event_type = data.get("event")
-            if event_type == "error":
-                logger.error(f"[{self.connection_id}] OKX错误: {data}")
-            elif event_type == "subscribe":
-                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
             return
         
         arg = data.get("arg", {})
