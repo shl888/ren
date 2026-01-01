@@ -63,7 +63,9 @@ class WebSocketConnection:
         
         # 🚨 【关键修复】每个连接独立的计数器
         self.ticker_count = 0          # 币安ticker计数
+        self.mark_price_count = 0      # 币安标记价格计数
         self.okx_ticker_count = 0      # OKX ticker计数
+        self.okx_funding_count = 0     # OKX资金费率计数
         
         # 连接配置
         self.ping_interval = 15
@@ -72,12 +74,6 @@ class WebSocketConnection:
         # 频率控制
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
-        
-        # 🚨 【关键修复】添加频率控制变量
-        self.last_funding_log_time = 0  # 资金费率日志时间
-        self.last_okx_ticker_log_time = 0  # OKX ticker日志时间
-        self.last_binance_ticker_log_time = 0  # 币安ticker日志时间
-        self.last_health_log_time = 0  # 健康检查日志时间
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -433,12 +429,9 @@ class WebSocketConnection:
             # 🚨 【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
             
-            # 🚨 【关键修复】添加5分钟频率控制
-            if self.ticker_count % 100 == 0:
-                current_time = time.time()
-                if current_time - self.last_binance_ticker_log_time >= 300:  # 5分钟
-                    logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个币安ticker消息")
-                    self.last_binance_ticker_log_time = current_time
+            # 🚨 【修改1】币安ticker每10000个打印一次
+            if self.ticker_count % 10000 == 0:
+                logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个币安ticker数据")
             
             # 🚨 【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -464,6 +457,13 @@ class WebSocketConnection:
                     add_symbol_from_websocket("binance", symbol)
                 except Exception as e:
                     logger.debug(f"收集币安合约失败 {symbol}: {e}")
+            
+            # 🚨 【新增】币安标记价格计数器
+            self.mark_price_count += 1
+            
+            # 🚨 【修改2】币安标记价格每10000个打印一次（和ticker一致）
+            if self.mark_price_count % 10000 == 0:
+                logger.info(f"[{self.connection_id}] 已处理 {self.mark_price_count} 个币安标记价格数据")
             
             # 🚨 【关键修复】完全保留原始标记价格数据
             processed = {
@@ -507,15 +507,12 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨 【关键修复】资金费率日志 - 添加5分钟频率控制
-                    if "fundingRate" in funding_data:
-                        funding_rate = float(funding_data.get("fundingRate", 0))
-                        current_time = time.time()
-                        
-                        # 每5分钟记录一次资金费率
-                        if current_time - self.last_funding_log_time >= 300:
-                            logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
-                            self.last_funding_log_time = current_time
+                    # 🚨 【新增】OKX资金费率计数器
+                    self.okx_funding_count += 1
+                    
+                    # 🚨 【修改3】OKX资金费率每5000个打印一次统计
+                    if self.okx_funding_count % 5000 == 0:
+                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_funding_count} 个OKX资金费率数据")
                     
                     # 🚨 【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -537,12 +534,9 @@ class WebSocketConnection:
                     # 🚨 【关键修复】每个连接独立的计数器
                     self.okx_ticker_count += 1
                     
-                    # 🚨 【关键修复】OKX ticker计数 - 添加5分钟频率控制
-                    if self.okx_ticker_count % 50 == 0:
-                        current_time = time.time()
-                        if current_time - self.last_okx_ticker_log_time >= 300:  # 5分钟
-                            logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
-                            self.last_okx_ticker_log_time = current_time
+                    # 🚨 【修改4】OKX ticker每5000个打印一次
+                    if self.okx_ticker_count % 5000 == 0:
+                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker数据")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
@@ -603,16 +597,6 @@ class WebSocketConnection:
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
         
-        # 🚨 【新增】健康检查日志 - 每5分钟打印一次
-        current_time = time.time()
-        if current_time - self.last_health_log_time >= 300:  # 5分钟
-            logger.info(f"[{self.connection_id}] 健康检查 - "
-                       f"连接: {'已连接' if self.connected else '已断开'}, "
-                       f"最后消息: {last_msg_seconds:.1f}秒前, "
-                       f"订阅: {self.subscribed}, "
-                       f"合约数: {len(self.symbols)}")
-            self.last_health_log_time = current_time
-        
         return {
             "connection_id": self.connection_id,
             "exchange": self.exchange,
@@ -624,4 +608,4 @@ class WebSocketConnection:
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
-                }
+        }
