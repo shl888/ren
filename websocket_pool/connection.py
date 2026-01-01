@@ -27,6 +27,7 @@ class ConnectionType:
     WARM_STANDBY = "warm_standby"
     MONITOR = "monitor"
 
+
 class WebSocketConnection:
     """单个WebSocket连接 - 支持主备切换"""
     
@@ -573,6 +574,13 @@ class WebSocketConnection:
         except Exception as e:
             # 🚨 修复：SyntaxError - 确保字符串正确闭合
             logger.error(f"[{self.connection_id}] 断开连接时发生错误: {e}")
+    
+    @property
+    def last_message_seconds_ago(self) -> float:
+        """返回距上次消息过去了多少秒（监控调度专用）"""
+        if self.last_message_time:
+            return (datetime.now() - self.last_message_time).total_seconds()
+        return 999  # 如果从未收到消息，返回999秒表示异常
     
     async def check_health(self) -> Dict[str, Any]:
         """检查连接健康状态"""
