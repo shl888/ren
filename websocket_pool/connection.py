@@ -56,6 +56,9 @@ class WebSocketConnection:
         self.subscribed = False
         self.is_active = False
         
+        # 🚨【关键修复】新增：数据过滤标志
+        self._filter_data = (connection_type == ConnectionType.WARM_STANDBY)
+        
         # 任务
         self.keepalive_task = None
         self.receive_task = None
@@ -161,9 +164,17 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
-        """切换连接角色"""
+        """切换连接角色 - 修复版：同步更新数据过滤策略"""
         try:
             old_role = self.connection_type
+            
+            # 🚨【关键修复】根据角色设置数据过滤
+            if new_role == ConnectionType.MASTER:
+                self._filter_data = False  # 主连接不过滤数据
+                logger.info(f"[{self.connection_id}] 设置为【主连接】模式，不过滤数据")
+            elif new_role == ConnectionType.WARM_STANDBY:
+                self._filter_data = True   # 温备连接过滤数据
+                logger.info(f"[{self.connection_id}] 设置为【温备连接】模式，过滤数据")
             
             # 温备升级为主连接
             if new_role == ConnectionType.MASTER and old_role == ConnectionType.WARM_STANDBY:
@@ -395,13 +406,42 @@ class WebSocketConnection:
             self.is_active = False
     
     async def _process_message(self, message):
-        """处理接收到的消息"""
+        """处理接收到的消息 - 修复版：温备连接过滤数据"""
         try:
             data = json.loads(message)
             
             if self.exchange == "binance" and "id" in data:
                 logger.info(f"[{self.connection_id}] 收到订阅响应 ID={data.get('id')}")
             
+            # 🚨【关键修复】温备连接跳过数据处理（只维持连接）
+            if self._filter_data and self.connection_type == ConnectionType.WARM_STANDBY:
+                # 温备连接只维持连接，不处理数据到业务层
+                # 但需要记录消息，保持连接活跃
+                if hasattr(self, '_warm_message_count'):
+                    self._warm_message_count += 1
+                else:
+                    self._warm_message_count = 1
+                
+                # 每100条消息记录一次日志（减少日志量）
+                if self._warm_message_count % 100 == 0:
+                    # 简单记录消息类型
+                    if self.exchange == "binance":
+                        event_type = data.get("e", "")
+                        if event_type == "24hrTicker":
+                            symbol = data.get("s", "").upper()
+                            logger.debug(f"[{self.connection_id}] 温备收到第{self._warm_message_count}条心跳数据: {symbol}")
+                    elif self.exchange == "okx":
+                        arg = data.get("arg", {})
+                        channel = arg.get("channel", "")
+                        if channel == "tickers":
+                            self.okx_ticker_count += 1
+                            if self.okx_ticker_count % 50 == 0:
+                                logger.debug(f"[{self.connection_id}] 温备收到第{self.okx_ticker_count}个OKX心跳")
+                
+                # 🚨 重要：温备连接不调用 data_callback！
+                return
+            
+            # 只有主连接和监控连接才处理数据
             if self.exchange == "binance":
                 await self._process_binance_message(data)
             elif self.exchange == "okx":
@@ -473,6 +513,16 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
+        # 🚨【关键修复】只有主连接才处理数据
+        if self.connection_type != ConnectionType.MASTER:
+            # 不是主连接，只计数不处理
+            if "arg" in data:
+                arg = data.get("arg", {})
+                channel = arg.get("channel", "")
+                if channel == "tickers":
+                    self.okx_ticker_count += 1
+            return
+        
         if data.get("event"):
             event_type = data.get("event")
             if event_type == "error":
@@ -599,3 +649,8 @@ class WebSocketConnection:
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
         }
+    
+    def set_filter_data(self, enabled: bool):
+        """设置数据过滤开关（供外部调用）"""
+        self._filter_data = enabled
+        logger.info(f"[{self.connection_id}] 数据过滤已{'开启' if enabled else '关闭'}")

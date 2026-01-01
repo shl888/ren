@@ -343,7 +343,7 @@ class ExchangeWebSocketPool:
         return selected_standby
     
     async def _monitor_execute_failover(self, master_index: int, old_master, new_master):
-        """监控执行故障转移"""
+        """监控执行故障转移 - 增强版：确保数据过滤正确"""
         logger.info(f"[监控调度] [{self.exchange}] 故障转移: {old_master.connection_id} -> {new_master.connection_id}")
         
         try:
@@ -354,6 +354,10 @@ class ExchangeWebSocketPool:
             
             old_master.symbols = []
             
+            # 🚨【增强】确保原主连接设置为温备模式（过滤数据）
+            if hasattr(old_master, 'set_filter_data'):
+                old_master.set_filter_data(True)
+            
             # 2. 温备升级为主
             logger.info(f"[监控调度] [{self.exchange}] 步骤2: 温备升级为主")
             master_symbols = self.symbol_groups[master_index] if master_index < len(self.symbol_groups) else []
@@ -362,6 +366,10 @@ class ExchangeWebSocketPool:
             if not success:
                 logger.error(f"[监控调度] [{self.exchange}] 温备切换角色失败")
                 return False
+            
+            # 🚨【增强】确保新主连接设置为主模式（不过滤数据）
+            if hasattr(new_master, 'set_filter_data'):
+                new_master.set_filter_data(False)
             
             # 3. 更新连接池结构
             if new_master in self.warm_standby_connections:
@@ -377,6 +385,10 @@ class ExchangeWebSocketPool:
             if await old_master.connect():
                 heartbeat_symbols = self._get_heartbeat_symbols()
                 await old_master.switch_role(ConnectionType.WARM_STANDBY, heartbeat_symbols)
+                
+                # 🚨【增强】确保原主连接数据过滤开启
+                if hasattr(old_master, 'set_filter_data'):
+                    old_master.set_filter_data(True)
                 
                 if old_master not in self.warm_standby_connections:
                     self.warm_standby_connections.append(old_master)
