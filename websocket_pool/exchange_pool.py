@@ -144,7 +144,8 @@ class ExchangeWebSocketPool:
             self.monitor_scheduler_task = asyncio.create_task(
                 self._monitor_scheduling_loop()
             )
-            logger.info(f"[self.exchange}_monitor] 🚀 监控调度循环已强制启动")
+            # 🚨【已修复】f-string语法错误
+            logger.info(f"[{self.exchange}_monitor] 🚀 监控调度循环已强制启动")
 
     def _balance_symbol_groups(self, target_groups: int):
         """平衡合约分组"""
