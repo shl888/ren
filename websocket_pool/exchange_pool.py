@@ -69,19 +69,29 @@ class ExchangeWebSocketPool:
         return default_callback
         
     async def initialize(self, symbols: List[str]):
-        """🚀 并发初始化 + 完整日志恢复"""
+        """🚀 并发初始化 + 修复OKX单连接过载"""
         self.symbols = symbols
         
-        # 🚨 恢复原始详细日志
-        symbols_per_master = self.config.get("symbols_per_master", 300)
+        # 🚨【关键修复】使用正确的配置名
+        symbols_per_connection = self.config.get("symbols_per_connection", 300)
+        
+        # 🚨【关键修复】针对OKX确保不超过单连接上限
+        if self.exchange == "okx" and symbols_per_connection > 600:
+            # 每个合约2个频道，1200频道上限 → 600合约上限
+            old_limit = symbols_per_connection
+            symbols_per_connection = 600
+            logger.warning(f"[{self.exchange}] symbols_per_connection从{old_limit}调整为{symbols_per_connection}（OKX单连接1200频道限制）")
+        
         self.symbol_groups = [
-            symbols[i:i + symbols_per_master]
-            for i in range(0, len(symbols), symbols_per_master)
+            symbols[i:i + symbols_per_connection]
+            for i in range(0, len(symbols), symbols_per_connection)
         ]
         
-        masters_count = self.config.get("masters_count", 3)
-        if len(self.symbol_groups) > masters_count:
-            self._balance_symbol_groups(masters_count)
+        # 🚨【关键修复】确保不超过active_connections限制
+        active_connections = self.config.get("active_connections", 3)
+        if len(self.symbol_groups) > active_connections:
+            logger.warning(f"[{self.exchange}] 分组数{len(self.symbol_groups)}超过active_connections={active_connections}，强制重新平衡")
+            self._balance_symbol_groups(active_connections)
         
         # 🚨 恢复原始关键日志（显示分组详情）
         logger.info(f"[{self.exchange}] 初始化连接池，共 {len(symbols)} 个合约，分为 {len(self.symbol_groups)} 组")
@@ -274,7 +284,7 @@ class ExchangeWebSocketPool:
     
     async def _monitor_scheduling_loop(self):
         """监控调度循环 - 限流版"""
-        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每5秒检查一次")
+        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每8秒检查一次")
         
         # 跟踪重连次数用于退避
         reconnect_attempts = {conn.connection_id: 0 for conn in 
@@ -284,13 +294,20 @@ class ExchangeWebSocketPool:
             try:
                 # 1. 监控主连接（带指数退避）
                 for i, master_conn in enumerate(self.master_connections):
-                    if not master_conn.connected:
+                    if not master_conn.connected or not master_conn.subscribed:
+                        if not master_conn.connected:
+                            logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} (ID: {master_conn.connection_id}) 断开")
+                        else:
+                            logger.warning(f"[监控调度] [{self.exchange}] 主连接{i}未订阅成功")
+                        
                         attempts = reconnect_attempts[master_conn.connection_id]
-                        wait_time = min(2 ** attempts, 30)  # 最大30秒退避
-                        logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} (ID: {master_conn.connection_id}) 断开，{wait_time}秒后重试")
+                        wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
+                        
                         await asyncio.sleep(wait_time)
                         reconnect_attempts[master_conn.connection_id] += 1
-                        await self._monitor_handle_master_failure(i, master_conn)
+                        
+                        # 彻底重启连接
+                        await self._restart_master_connection(i)
                     else:
                         # 重置计数
                         reconnect_attempts[master_conn.connection_id] = 0
@@ -299,11 +316,16 @@ class ExchangeWebSocketPool:
                 for i, warm_conn in enumerate(self.warm_standby_connections):
                     if not warm_conn.connected:
                         attempts = reconnect_attempts[warm_conn.connection_id]
-                        wait_time = min(2 ** attempts, 30)
+                        wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
+                        
                         # 🚨【关键修复】显示当前实际角色，而非连接ID中的角色
                         logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}, 当前角色: {warm_conn.connection_type}) 断开，{wait_time}秒后重试")
                         await asyncio.sleep(wait_time)
                         reconnect_attempts[warm_conn.connection_id] += 1
+                        
+                        if self.exchange == "okx" and attempts > 0:
+                            await asyncio.sleep(30)
+                        
                         await warm_conn.connect()
                     else:
                         reconnect_attempts[warm_conn.connection_id] = 0
@@ -311,29 +333,55 @@ class ExchangeWebSocketPool:
                 # 3. 定期报告状态
                 await self._report_status_to_data_store()
                 
-                await asyncio.sleep(5)  # 延长检查间隔
+                await asyncio.sleep(8)  # 延长检查间隔
                 
             except Exception as e:
                 logger.error(f"[监控调度] [{self.exchange}] 调度循环错误: {e}")
                 await asyncio.sleep(5)
-    
-    async def _monitor_handle_master_failure(self, master_index: int, failed_master):
-        """监控处理主连接故障"""
-        logger.info(f"[监控调度] [{self.exchange}] 处理主连接{master_index}故障")
+
+    async def _restart_master_connection(self, master_index: int):
+        """彻底重启主连接"""
+        logger.error(f"[监控调度] [{self.exchange}] 正在重启主连接{master_index}")
         
-        standby_conn = await self._select_best_standby_from_pool()
+        old_conn = self.master_connections[master_index]
         
-        if not standby_conn:
-            logger.warning(f"[监控调度] [{self.exchange}] 无可用温备，尝试重连原主连接")
-            await failed_master.connect()
-            return
+        # 1. 清理旧连接
+        try:
+            await old_conn.disconnect()
+        except:
+            pass
         
-        logger.info(f"[监控调度] [{self.exchange}] 决策：执行故障转移")
-        success = await self._monitor_execute_failover(master_index, failed_master, standby_conn)
+        # 2. 创建新连接（使用相同ID保持日志清晰）
+        ws_url = self.config.get("ws_public_url")
+        symbols = self.symbol_groups[master_index] if master_index < len(self.symbol_groups) else []
         
-        if not success:
-            logger.warning(f"[监控调度] [{self.exchange}] 故障转移失败，重连原主连接")
-            await failed_master.connect()
+        new_conn = WebSocketConnection(
+            exchange=self.exchange,
+            ws_url=ws_url,
+            connection_id=f"{self.exchange}_master_{master_index}",  # 保持相同ID
+            connection_type=ConnectionType.MASTER,
+            data_callback=self.data_callback,
+            symbols=symbols
+        )
+        
+        # 3. 尝试连接（带重试）
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                success = await asyncio.wait_for(new_conn.connect(), timeout=60)
+                if success and new_conn.connected and new_conn.subscribed:
+                    self.master_connections[master_index] = new_conn
+                    logger.info(f"[监控调度] [{self.exchange}] 主连接{master_index}重启成功")
+                    return
+                else:
+                    logger.warning(f"[监控调度] [{self.exchange}] 主连接{master_index}重启失败，尝试{attempt+1}/{max_retries}")
+            except Exception as e:
+                logger.error(f"[监控调度] [{self.exchange}] 重启异常: {e}")
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(10 * (attempt + 1))
+        
+        logger.error(f"[监控调度] [{self.exchange}] 主连接{master_index}重启失败，已放弃")
     
     async def _select_best_standby_from_pool(self):
         """从共享池选择最佳温备"""

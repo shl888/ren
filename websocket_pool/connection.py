@@ -69,6 +69,12 @@ class WebSocketConnection:
         self.ping_interval = 15
         self.reconnect_interval = 3
         
+        # 🚨【关键】OKX需要更短的心跳间隔
+        if exchange == "okx":
+            self.ping_interval = 8  # OKX订阅完成后8秒心跳
+        else:
+            self.ping_interval = 15  # 币安15秒
+        
         # 频率控制
         self.last_subscribe_time = 0
         self.min_subscribe_interval = 2.0
@@ -77,6 +83,10 @@ class WebSocketConnection:
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
         try:
             logger.info(f"[{self.connection_id}] 正在连接 {self.ws_url}")
+            
+            # 🚨【关键】重置订阅状态
+            self.subscribed = False
+            self.is_active = False
             
             # 🚨 增强：增加连接超时保护
             self.ws = await asyncio.wait_for(
@@ -97,8 +107,12 @@ class WebSocketConnection:
             
             # 🚨 【关键修复】只有主连接立即订阅（保持原来逻辑）
             if self.connection_type == ConnectionType.MASTER and self.symbols:
-                await self._subscribe()
-                self.subscribed = True
+                subscribe_success = await self._subscribe()
+                if not subscribe_success:
+                    logger.error(f"[{self.connection_id}] 主连接订阅失败，标记为未就绪")
+                    self.connected = False
+                    return False
+                
                 self.is_active = True
                 logger.info(f"[{self.connection_id}] 主连接已激活并订阅")
             
@@ -123,10 +137,12 @@ class WebSocketConnection:
         except asyncio.TimeoutError:
             logger.error(f"[{self.connection_id}] 连接超时30秒")
             self.connected = False
+            self.subscribed = False
             return False
         except Exception as e:
             logger.error(f"[{self.connection_id}] 连接失败: {e}")
             self.connected = False
+            self.subscribed = False
             return False
     
     def _get_delay_for_warm_standby(self):
@@ -280,7 +296,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 订阅失败: {e}")
     
     async def _subscribe_okx(self):
-        """订阅欧意数据 - 限流版"""
+        """订阅欧意数据 - 大批次+ping保活"""
         try:
             logger.info(f"[{self.connection_id}] 开始订阅OKX数据，共 {len(self.symbols)} 个合约")
             
@@ -290,48 +306,77 @@ class WebSocketConnection:
             
             all_subscriptions = []
             for symbol in self.symbols:
-                all_subscriptions.append({
-                    "channel": "tickers",
-                    "instId": symbol
-                })
-                all_subscriptions.append({
-                    "channel": "funding-rate",
-                    "instId": symbol
-                })
+                all_subscriptions.append({"channel": "tickers", "instId": symbol})
+                all_subscriptions.append({"channel": "funding-rate", "instId": symbol})
             
-            logger.info(f"[{self.connection_id}] 准备订阅 {len(all_subscriptions)} 个频道 (包含资金费率)")
-            
-            # 🚨【关键修复】根据连接类型调整批次大小和延迟
-            is_warm_standby = self.connection_type == ConnectionType.WARM_STANDBY
-            batch_size = 20 if is_warm_standby else 30  # 温备批次更小
-            inter_batch_delay = 2.5 if is_warm_standby else 2.0  # 温备延迟更长
+            # 🚨【关键】每批100个频道(50合约)，506频道只需6批次
+            batch_size = 100  # 增大5倍！
+            inter_batch_delay = 1.0  # 间隔缩短至1秒
             
             total_batches = (len(all_subscriptions) + batch_size - 1) // batch_size
             
+            # 🚨【关键】启动ping保活任务
+            keepalive_task = asyncio.create_task(self._subscribe_keepalive_ping())
+            
             for batch_idx in range(total_batches):
+                # 发送前检查连接健康
+                if not self.connected:
+                    logger.error(f"[{self.connection_id}] 连接在订阅过程中丢失，批次{batch_idx+1}/{total_batches}取消")
+                    keepalive_task.cancel()
+                    return False
+                
                 start_idx = batch_idx * batch_size
                 end_idx = min(start_idx + batch_size, len(all_subscriptions))
                 batch_args = all_subscriptions[start_idx:end_idx]
                 
-                subscribe_msg = {
-                    "op": "subscribe",
-                    "args": batch_args
-                }
+                subscribe_msg = {"op": "subscribe", "args": batch_args}
                 
-                await self.ws.send(json.dumps(subscribe_msg))
-                logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} (包含资金费率)")
+                # 发送并确认
+                try:
+                    await asyncio.wait_for(self.ws.send(json.dumps(subscribe_msg)), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.error(f"[{self.connection_id}] 发送订阅批次超时")
+                    keepalive_task.cancel()
+                    return False
                 
-                # 🚨【关键修复】批次间强制延迟
+                logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} ({len(batch_args)}个频道)")
+                
                 if batch_idx < total_batches - 1:
                     await asyncio.sleep(inter_batch_delay)
             
+            # 订阅完成，取消保活任务
+            keepalive_task.cancel()
+            
+            logger.info(f"[{self.connection_id}] 所有批次发送完成，等待2秒确认...")
+            await asyncio.sleep(2)
+            
+            if not self.connected:
+                logger.error(f"[{self.connection_id}] 订阅确认期间连接断开")
+                return False
+            
             self.subscribed = True
-            logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")
+            logger.info(f"[{self.connection_id}] ✅ OKX订阅成功！频道数:{len(all_subscriptions)}")
             return True
             
         except Exception as e:
-            logger.error(f"[{self.connection_id}] 订阅失败: {e}")
+            logger.error(f"[{self.connection_id}] 订阅异常: {e}")
             return False
+    
+    async def _subscribe_keepalive_ping(self):
+        """订阅期间定期ping保活"""
+        while True:
+            try:
+                await asyncio.sleep(3)  # 每3秒ping一次，确保活跃
+                if self.connected and self.ws:
+                    logger.debug(f"[{self.connection_id}] 订阅期间ping保活")
+                    await self.ws.ping()
+            except asyncio.CancelledError:
+                logger.debug(f"[{self.connection_id}] 保活任务结束")
+                break
+            except Exception as e:
+                logger.error(f"[{self.connection_id}] 保活ping失败: {e}")
+                self.connected = False
+                break
     
     async def _unsubscribe(self):
         """取消订阅"""
@@ -378,19 +423,37 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 取消订阅失败: {e}")
     
     async def _receive_messages(self):
-        """接收消息"""
+        """接收消息 - 增强异常处理"""
         try:
             async for message in self.ws:
                 self.last_message_time = datetime.now()
+                
+                # 🚨【新增】检查消息是否为空（可能为心跳）
+                if not message:
+                    logger.debug(f"[{self.connection_id}] 收到空消息（心跳）")
+                    continue
+                
                 await self._process_message(message)
                 
-        except websockets.exceptions.ConnectionClosed:
-            logger.warning(f"[{self.connection_id}] 连接关闭")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.error(f"[{self.connection_id}] 连接关闭 - 代码: {e.code}, 原因: {e.reason}")
             self.connected = False
             self.subscribed = False
             self.is_active = False
+            
+            # 🚨【关键】如果是OKX，记录错误码
+            if self.exchange == "okx" and e.code == 1006:  # 异常关闭
+                logger.critical(f"[{self.connection_id}] 🔥 OKX强制断开连接，可能触发限流")
+            
         except Exception as e:
             logger.error(f"[{self.connection_id}] 接收消息错误: {e}")
+            self.connected = False
+            self.subscribed = False
+            self.is_active = False
+        
+        finally:
+            # 🚨【关键】确保连接状态被清理
+            logger.warning(f"[{self.connection_id}] 接收任务退出，连接状态重置")
             self.connected = False
             self.subscribed = False
             self.is_active = False
@@ -474,12 +537,22 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
+        # 🚨 打印所有事件消息用于诊断
         if data.get("event"):
             event_type = data.get("event")
+            logger.info(f"[{self.connection_id}] OKX事件: {event_type} - {data}")
+            
             if event_type == "error":
-                logger.error(f"[{self.connection_id}] OKX错误: {data}")
+                logger.critical(f"[{self.connection_id}] 🔥 OKX错误详情: {json.dumps(data)}")
+                # 如果是限流，立即标记连接失效
+                if "too many requests" in str(data).lower():
+                    self.connected = False
+                    return
+            
+            # 订阅成功确认
             elif event_type == "subscribe":
-                logger.info(f"[{self.connection_id}] OKX订阅成功: {data.get('arg', {})}")
+                logger.info(f"[{self.connection_id}] ✅ 订阅确认: {data.get('arg', {})}")
+            
             return
         
         arg = data.get("arg", {})
