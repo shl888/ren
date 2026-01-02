@@ -54,12 +54,13 @@ class WebSocketAdmin:
         
         return default_callback
     
-    async def start(self, all_symbols: Dict[str, list]):
+    async def start(self, all_symbols: Dict[str, list] = None):
         """
         启动整个WebSocket模块
         
         Args:
             all_symbols: 交易所 -> 合约列表 的字典
+                      如果为None，则由GlobalPoolManager自动通过API获取
         """
         if self._running:
             logger.warning("[Admin] 模块已在运行中")
@@ -70,8 +71,11 @@ class WebSocketAdmin:
         logger.info("=" * 60)
         
         try:
-            # 初始化全局连接池
-            await self.global_pool.initialize(all_symbols)
+            # ✅ 关键修改：不处理合约，直接传给GlobalPoolManager
+            logger.info("[Admin] 初始化WebSocket连接池...")
+            logger.info("[Admin] all_symbols参数:", "已提供" if all_symbols else "未提供，将自动获取")
+            
+            await self.global_pool.initialize(all_symbols)  # 可能为None
             
             self._running = True
             
@@ -127,11 +131,16 @@ class WebSocketAdmin:
                 connected_data = sum(1 for w in data_workers if w.get("connected", False))
                 connected_backup = sum(1 for w in backup_workers if w.get("connected", False))
                 
+                # 获取合约数量信息
+                worker_pairs = ex_status.get("worker_pairs", [])
+                total_symbols = sum(len(pair.get("symbols", [])) for pair in worker_pairs)
+                
                 summary["exchanges"][exchange] = {
                     "data_workers_total": len(data_workers),
                     "data_workers_connected": connected_data,
                     "backup_workers_total": len(backup_workers),
                     "backup_workers_connected": connected_backup,
+                    "symbols_total": total_symbols,
                     "health": "good" if connected_data == len(data_workers) else "warning"
                 }
             
@@ -198,3 +207,23 @@ class WebSocketAdmin:
             bool: 运行状态
         """
         return self._running
+    
+    def get_symbol_count(self, exchange: str) -> Optional[int]:
+        """
+        获取指定交易所的合约数量
+        
+        Args:
+            exchange: 交易所名称
+            
+        Returns:
+            int: 合约数量，如果交易所不存在则返回None
+        """
+        try:
+            if exchange in self.global_pool.exchange_pools:
+                pool = self.global_pool.exchange_pools[exchange]
+                # 假设ExchangePool有一个get_symbol_count方法
+                # 如果没有，可以根据实际情况调整
+                return len(pool.get_all_symbols()) if hasattr(pool, 'get_all_symbols') else None
+        except Exception as e:
+            logger.error(f"[Admin] 获取{exchange}合约数量失败: {e}")
+        return None
