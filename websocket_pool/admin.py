@@ -47,7 +47,7 @@ class WebSocketAdmin:
             logger.info("[管理员] 步骤2: 启动连接监控")
             await self._monitor.start_monitoring()
             
-            # 3. 🚨 新增：强制检查每个交易所的监控调度器
+            # 3. 🚨 新增：强制检查各交易所监控调度器
             logger.info("[管理员] 步骤3: 强制检查各交易所监控调度器")
             await self._enforce_all_monitor_schedulers()
             
