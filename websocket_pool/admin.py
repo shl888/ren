@@ -108,7 +108,11 @@ class WebSocketAdmin:
             
             summary = {
                 "module": "websocket_pool",
-                "status": "healthy" if self._running else "stopped",
+                "status": "healthy" if self._running and any(
+                    ex_status.get("masters", [{}])[0].get("connected", False) 
+                    for ex_status in internal_status.values() 
+                    if isinstance(ex_status, dict) and ex_status.get("masters")
+                ) else ("stopped" if not self._running else "warning"),
                 "initialized": self._initialized,
                 "exchanges": {},
                 "timestamp": datetime.now().isoformat()
@@ -122,11 +126,18 @@ class WebSocketAdmin:
                     connected_masters = sum(1 for m in masters if isinstance(m, dict) and m.get("connected", False))
                     connected_warm = sum(1 for w in warm_standbys if isinstance(w, dict) and w.get("connected", False))
                     
+                    # 🚨从连接状态获取实际合约数
+                    total_symbols = 0
+                    for m in masters:
+                        if isinstance(m, dict):
+                            total_symbols += m.get("symbols_count", 0)
+                    
                     summary["exchanges"][exchange] = {
                         "masters_connected": connected_masters,
                         "masters_total": len(masters),
                         "standbys_connected": connected_warm,
                         "standbys_total": len(warm_standbys),
+                        "symbols_count": total_symbols,  # ✅添加实际合约数
                         "health": "good" if connected_masters == len(masters) else "warning"
                     }
             

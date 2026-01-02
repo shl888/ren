@@ -683,19 +683,16 @@ class WebSocketConnection:
         return seconds
     
     async def check_health(self) -> Dict[str, Any]:
-        """检查连接健康状态 - 强制状态同步"""
+        """检查连接健康状态 - 修复强制断开逻辑"""
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
         
-        # 🚨修复：如果长时间无消息但标记为连接，强制同步状态
-        ping_threshold = self.ping_interval * 3  # 24秒（OKX）或45秒（币安）
-        if self.connected and last_msg_seconds > ping_threshold:
-            logger.error(f"[{self.connection_id}] 健康检查：{last_msg_seconds:.1f}秒无消息，强制标记断开")
-            self.connected = False
-            self.subscribed = False  # 🚨同时取消订阅标记
-            self.is_active = False
+        # 🚨【关键】只有connected=True时才检查超时，不强制修改状态
+        if self.connected and last_msg_seconds > self.ping_interval * 4:  # 32秒（OKX）或60秒（币安）
+            logger.error(f"[{self.connection_id}] 健康检查：{last_msg_seconds:.1f}秒无消息且connected=True，可能是假死")
+            # 只打日志，不修改状态，让监控调度器决定
         
-        # 🚨【关键】确保symbols_count与实际一致
+        # 🚨【关键】确保symbols_count与实际symbols列表一致，不受连接状态影响
         actual_symbols_count = len(self.symbols) if self.symbols else 0
         
         return {
@@ -705,7 +702,7 @@ class WebSocketConnection:
             "connected": self.connected,
             "subscribed": self.subscribed,
             "is_active": self.is_active,
-            "symbols_count": actual_symbols_count,  # 🚨使用实际数量
+            "symbols_count": actual_symbols_count,  # ✅使用实际数量
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
