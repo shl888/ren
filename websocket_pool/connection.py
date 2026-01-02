@@ -66,7 +66,7 @@ class WebSocketConnection:
         self.okx_ticker_count = 0      # OKX ticker计数
         
         # 连接配置
-        self.ping_interval = 15
+        self.ping_interval = 30
         self.reconnect_interval = 3
         
         # 频率控制
@@ -271,7 +271,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送订阅批次 {i//batch_size+1}/{(len(streams)+batch_size-1)//batch_size}")
                 
                 if i + batch_size < len(streams):
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(2)
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
@@ -322,7 +322,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} (包含资金费率)")
                 
                 if batch_idx < total_batches - 1:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(2)
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")
