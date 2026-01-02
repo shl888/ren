@@ -1,6 +1,6 @@
 """
 单个WebSocket连接实现 - 支持角色互换
-支持自动重连、数据解析、状态管理
+支持自动重连、数据解析、状态管理 - 修复订阅返回值BUG
 """
 import asyncio
 import json
@@ -250,20 +250,22 @@ class WebSocketConnection:
             return False
     
     async def _subscribe(self):
-        """订阅数据"""
+        """订阅数据 - 修复返回值BUG"""
         if not self.symbols:
             logger.warning(f"[{self.connection_id}] 没有合约可订阅")
-            return
+            return False  # ✅ 明确返回False
         
         logger.info(f"[{self.connection_id}] 开始订阅 {len(self.symbols)} 个合约")
         
         if self.exchange == "binance":
-            await self._subscribe_binance()
+            return await self._subscribe_binance()  # ✅ 返回结果
         elif self.exchange == "okx":
-            await self._subscribe_okx()
+            return await self._subscribe_okx()  # ✅ 返回结果
+        
+        return False  # ✅ 默认返回False
     
     async def _subscribe_binance(self):
-        """订阅币安数据"""
+        """订阅币安数据 - 添加返回值"""
         try:
             streams = []
             
@@ -291,9 +293,11 @@ class WebSocketConnection:
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
+            return True  # ✅ 明确返回True
             
         except Exception as e:
             logger.error(f"[{self.connection_id}] 订阅失败: {e}")
+            return False  # ✅ 明确返回False
     
     async def _subscribe_okx(self):
         """订阅欧意数据 - 大批次+ping保活"""
@@ -315,7 +319,7 @@ class WebSocketConnection:
             
             total_batches = (len(all_subscriptions) + batch_size - 1) // batch_size
             
-            # 🚨【关键】启动ping保活任务
+            # 🚨启动ping保活任务
             keepalive_task = asyncio.create_task(self._subscribe_keepalive_ping())
             
             for batch_idx in range(total_batches):
@@ -352,15 +356,15 @@ class WebSocketConnection:
             
             if not self.connected:
                 logger.error(f"[{self.connection_id}] 订阅确认期间连接断开")
-                return False
+                return False  # ✅ 明确返回False
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] ✅ OKX订阅成功！频道数:{len(all_subscriptions)}")
-            return True
+            return True  # ✅ 明确返回True
             
         except Exception as e:
             logger.error(f"[{self.connection_id}] 订阅异常: {e}")
-            return False
+            return False  # ✅ 明确返回False
     
     async def _subscribe_keepalive_ping(self):
         """订阅期间定期ping保活"""
