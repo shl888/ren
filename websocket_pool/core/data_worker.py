@@ -4,7 +4,7 @@
 import json
 import time
 from typing import Set, Optional
-from .worker_base import BaseWorker
+from websocket_pool.core.worker_base import BaseWorker
 
 class DataWorker(BaseWorker):
     """数据工作者 - 订阅全量数据"""
