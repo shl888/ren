@@ -353,10 +353,10 @@ class WebSocketConnection:
                         "id": 1
                     }
                     await self.ws.send(json.dumps(unsubscribe_msg))
-                    await asyncio.sleep(1)  # 币安取消订阅批次间隔
+                    await asyncio.sleep(5)  # 币安取消订阅批次间隔
             
             elif self.exchange == "okx":
-                batch_size = 10
+                batch_size = 50
                 for i in range(0, len(self.symbols), batch_size):
                     batch = self.symbols[i:i+batch_size]
                     args = []
@@ -369,7 +369,7 @@ class WebSocketConnection:
                         "args": args
                     }
                     await self.ws.send(json.dumps(unsubscribe_msg))
-                    await asyncio.sleep(2)  # OKX取消订阅批次间隔
+                    await asyncio.sleep(5)  # OKX取消订阅批次间隔
             
             logger.info(f"[{self.connection_id}] 取消订阅 {len(self.symbols)} 个合约")
             
