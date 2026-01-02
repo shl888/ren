@@ -13,7 +13,6 @@ from websocket_pool.core.monitor import MonitorCenter
 
 # 配置
 from websocket_pool.config import EXCHANGE_CONFIGS, SUBSCRIPTION_TYPES, SYMBOL_FILTERS
-from websocket_pool.static_symbols import STATIC_SYMBOLS
 
 __all__ = [
     'WebSocketAdmin',           # ✅ 大脑只用这个
@@ -26,5 +25,4 @@ __all__ = [
     'EXCHANGE_CONFIGS',        # 配置
     'SUBSCRIPTION_TYPES',      # 订阅类型
     'SYMBOL_FILTERS',         # 合约筛选
-    'STATIC_SYMBOLS',         # 静态合约
 ]
