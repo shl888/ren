@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import websockets
 import aiohttp
-import time
 
 # 🚨 新增导入 - 合约收集器
 try:
@@ -66,12 +65,12 @@ class WebSocketConnection:
         self.okx_ticker_count = 0      # OKX ticker计数
         
         # 连接配置
-        self.ping_interval = 30
-        self.reconnect_interval = 3
+        self.ping_interval = 30        # 🚨 修改：从15改为30（WebSocket底层心跳间隔）
+        self.reconnect_interval = 3    # 重连等待间隔
         
         # 频率控制
-        self.last_subscribe_time = 0
-        self.min_subscribe_interval = 2.0
+        self.last_subscribe_time = 0     # 上次订阅时间戳
+        self.min_subscribe_interval = 2.0  # 最小订阅间隔（秒）
     
     async def connect(self):
         """建立WebSocket连接 - 修复：避免触发交易所限制"""
@@ -82,11 +81,11 @@ class WebSocketConnection:
             self.ws = await asyncio.wait_for(
                 websockets.connect(
                     self.ws_url,
-                    ping_interval=self.ping_interval,
-                    ping_timeout=self.ping_interval + 5,
-                    close_timeout=1
+                    ping_interval=self.ping_interval,          # WebSocket心跳间隔
+                    ping_timeout=self.ping_interval + 5,       # 心跳超时时间
+                    close_timeout=10                           # 🚨 修改：从1改为10（连接关闭等待时间）
                 ),
-                timeout=30  # 30秒超时
+                timeout=30  # 连接建立超时时间
             )
             
             self.connected = True
@@ -145,7 +144,7 @@ class WebSocketConnection:
         """延迟订阅，避免触发交易所限制"""
         try:
             logger.info(f"[{self.connection_id}] 等待 {delay_seconds} 秒后订阅...")
-            await asyncio.sleep(delay_seconds)
+            await asyncio.sleep(delay_seconds)  # 温备连接延迟订阅等待时间
             
             if self.connected and not self.subscribed and self.symbols:
                 logger.info(f"[{self.connection_id}] 开始延迟订阅")
@@ -271,7 +270,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送订阅批次 {i//batch_size+1}/{(len(streams)+batch_size-1)//batch_size}")
                 
                 if i + batch_size < len(streams):
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(self.min_subscribe_interval)  # 🚨 修改：从1.5改为2.0（批次订阅间隔）
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
@@ -322,7 +321,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} (包含资金费率)")
                 
                 if batch_idx < total_batches - 1:
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(self.min_subscribe_interval)  # 🚨 修改：从1.5改为2.0（批次订阅间隔）
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")
@@ -354,8 +353,8 @@ class WebSocketConnection:
                         "id": 1
                     }
                     await self.ws.send(json.dumps(unsubscribe_msg))
-                    await asyncio.sleep(1)
-                
+                    await asyncio.sleep(1)  # 币安取消订阅批次间隔
+            
             elif self.exchange == "okx":
                 batch_size = 10
                 for i in range(0, len(self.symbols), batch_size):
@@ -363,13 +362,14 @@ class WebSocketConnection:
                     args = []
                     for symbol in batch:
                         args.append({"channel": "tickers", "instId": symbol})
+                        args.append({"channel": "funding-rate", "instId": symbol})  # 🚨 新增：同时取消funding-rate频道
                     
                     unsubscribe_msg = {
                         "op": "unsubscribe",
                         "args": args
                     }
                     await self.ws.send(json.dumps(unsubscribe_msg))
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(2)  # OKX取消订阅批次间隔
             
             logger.info(f"[{self.connection_id}] 取消订阅 {len(self.symbols)} 个合约")
             
