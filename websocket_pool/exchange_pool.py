@@ -1,6 +1,6 @@
 """
 单个交易所的连接池管理 - 监控调度版
-修复：并发初始化 + 强制后置检查 + 完整日志恢复
+修复：并发初始化 + 强制后置检查 + 完整日志恢复 + 退避重连
 """
 import asyncio
 import logging
@@ -273,33 +273,49 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环 - 真正的权力中心"""
-        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
+        """监控调度循环 - 限流版"""
+        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每5秒检查一次")
+        
+        # 跟踪重连次数用于退避
+        reconnect_attempts = {conn.connection_id: 0 for conn in 
+                             self.master_connections + self.warm_standby_connections}
         
         while True:
             try:
-                # 1. 监控所有主连接状态
+                # 1. 监控主连接（带指数退避）
                 for i, master_conn in enumerate(self.master_connections):
                     if not master_conn.connected:
-                        logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} ({master_conn.connection_id}) 断开")
+                        attempts = reconnect_attempts[master_conn.connection_id]
+                        wait_time = min(2 ** attempts, 30)  # 最大30秒退避
+                        logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} (ID: {master_conn.connection_id}) 断开，{wait_time}秒后重试")
+                        await asyncio.sleep(wait_time)
+                        reconnect_attempts[master_conn.connection_id] += 1
                         await self._monitor_handle_master_failure(i, master_conn)
+                    else:
+                        # 重置计数
+                        reconnect_attempts[master_conn.connection_id] = 0
                 
-                # 2. 监控所有温备连接状态
+                # 2. 监控温备连接（带指数退避）
                 for i, warm_conn in enumerate(self.warm_standby_connections):
                     if not warm_conn.connected:
-                        logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} ({warm_conn.connection_id}) 断开")
+                        attempts = reconnect_attempts[warm_conn.connection_id]
+                        wait_time = min(2 ** attempts, 30)
+                        # 🚨【关键修复】显示当前实际角色，而非连接ID中的角色
+                        logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}, 当前角色: {warm_conn.connection_type}) 断开，{wait_time}秒后重试")
+                        await asyncio.sleep(wait_time)
+                        reconnect_attempts[warm_conn.connection_id] += 1
                         await warm_conn.connect()
-                        if warm_conn.connected:
-                            logger.info(f"[监控调度] [{self.exchange}] 温备连接{i} 重连成功")
+                    else:
+                        reconnect_attempts[warm_conn.connection_id] = 0
                 
                 # 3. 定期报告状态
                 await self._report_status_to_data_store()
                 
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)  # 延长检查间隔
                 
             except Exception as e:
                 logger.error(f"[监控调度] [{self.exchange}] 调度循环错误: {e}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
     
     async def _monitor_handle_master_failure(self, master_index: int, failed_master):
         """监控处理主连接故障"""
@@ -339,12 +355,12 @@ class ExchangeWebSocketPool:
             )
         )
         
-        logger.info(f"[监控调度] [{self.exchange}] 选择最佳温备: {selected_standby.connection_id}")
+        logger.info(f"[监控调度] [{self.exchange}] 选择最佳温备: {selected_standby.connection_id} (当前角色: {selected_standby.connection_type})")
         return selected_standby
     
     async def _monitor_execute_failover(self, master_index: int, old_master, new_master):
         """监控执行故障转移"""
-        logger.info(f"[监控调度] [{self.exchange}] 故障转移: {old_master.connection_id} -> {new_master.connection_id}")
+        logger.info(f"[监控调度] [{self.exchange}] 故障转移: {old_master.connection_id} (类型: {old_master.connection_type}) -> {new_master.connection_id} (类型: {new_master.connection_type})")
         
         try:
             # 1. 原主连接降级
@@ -383,7 +399,10 @@ class ExchangeWebSocketPool:
                 
                 logger.info(f"[监控调度] [{self.exchange}] 原主连接已降级为温备")
             
-            logger.info(f"[监控调度] [{self.exchange}] 故障转移完成")
+            # 🚨【关键修复】明确记录新状态
+            logger.info(f"[监控调度] [{self.exchange}] 故障转移完成 - 新主连接: {new_master.connection_id} (类型: {new_master.connection_type})")
+            logger.info(f"[监控调度] [{self.exchange}] 原主连接已降级: {old_master.connection_id} (类型: {old_master.connection_type})")
+            
             await self._report_failover_to_data_store(master_index, old_master.connection_id, new_master.connection_id)
             
             return True

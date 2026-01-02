@@ -66,7 +66,7 @@ class WebSocketConnection:
         self.okx_ticker_count = 0      # OKX ticker计数
         
         # 连接配置
-        self.ping_interval = 30
+        self.ping_interval = 15
         self.reconnect_interval = 3
         
         # 频率控制
@@ -84,7 +84,7 @@ class WebSocketConnection:
                     self.ws_url,
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_interval + 5,
-                    close_timeout=20
+                    close_timeout=1
                 ),
                 timeout=30  # 30秒超时
             )
@@ -280,7 +280,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 订阅失败: {e}")
     
     async def _subscribe_okx(self):
-        """订阅欧意数据"""
+        """订阅欧意数据 - 限流版"""
         try:
             logger.info(f"[{self.connection_id}] 开始订阅OKX数据，共 {len(self.symbols)} 个合约")
             
@@ -288,15 +288,12 @@ class WebSocketConnection:
             if self.symbols and not self.symbols[0].endswith('-SWAP'):
                 logger.warning(f"[{self.connection_id}] OKX合约格式可能错误，应为 BTC-USDT-SWAP 格式")
             
-            # 🚨 【修复】同时订阅 tickers 和 funding-rate 频道
             all_subscriptions = []
             for symbol in self.symbols:
-                # 订阅 tickers 频道
                 all_subscriptions.append({
                     "channel": "tickers",
                     "instId": symbol
                 })
-                # 🚨 新增：订阅 funding-rate 频道
                 all_subscriptions.append({
                     "channel": "funding-rate",
                     "instId": symbol
@@ -304,8 +301,11 @@ class WebSocketConnection:
             
             logger.info(f"[{self.connection_id}] 准备订阅 {len(all_subscriptions)} 个频道 (包含资金费率)")
             
-            # 分批订阅
-            batch_size = 50  # 🚨 调整为50，因为每个合约有2个频道
+            # 🚨【关键修复】根据连接类型调整批次大小和延迟
+            is_warm_standby = self.connection_type == ConnectionType.WARM_STANDBY
+            batch_size = 20 if is_warm_standby else 30  # 温备批次更小
+            inter_batch_delay = 2.5 if is_warm_standby else 2.0  # 温备延迟更长
+            
             total_batches = (len(all_subscriptions) + batch_size - 1) // batch_size
             
             for batch_idx in range(total_batches):
@@ -321,8 +321,9 @@ class WebSocketConnection:
                 await self.ws.send(json.dumps(subscribe_msg))
                 logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} (包含资金费率)")
                 
+                # 🚨【关键修复】批次间强制延迟
                 if batch_idx < total_batches - 1:
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(inter_batch_delay)
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约的资金费率和tickers数据")

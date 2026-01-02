@@ -1,6 +1,6 @@
 # websocket_pool/admin.py
 """
-WebSocket连接池管理员 - 生产级实现 + 后置检查
+WebSocket连接池管理员 - 生产级实现 + 后置检查 + 冷却时间
 """
 
 import asyncio
@@ -64,16 +64,19 @@ class WebSocketAdmin:
             return False
     
     async def _enforce_all_monitor_schedulers(self):
-        """🚨 强制检查所有交易所的监控调度器"""
+        """🚨 强制检查所有交易所的监控调度器 - 增强版"""
         for exchange_name, pool in self._pool_manager.exchange_pools.items():
             logger.info(f"[管理员] 检查 [{exchange_name}] 监控调度器状态...")
             
+            # 🚨【关键修复】检查监控连接是否存活
             if not pool.monitor_connection or not pool.monitor_connection.connected:
-                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 监控连接异常，强制执行初始化")
+                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 监控连接异常，30秒后重试")
+                await asyncio.sleep(30)  # 给交易所冷却时间
                 await pool._initialize_monitor_scheduler()
             
+            # 检查调度循环
             if not pool.monitor_scheduler_task or pool.monitor_scheduler_task.done():
-                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 调度循环未运行，强制执行")
+                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 调度循环未运行，强制启动")
                 pool.monitor_scheduler_task = asyncio.create_task(
                     pool._monitor_scheduling_loop()
                 )
