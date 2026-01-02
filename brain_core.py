@@ -21,7 +21,6 @@ from websocket_pool.admin import WebSocketAdmin
 from http_server.server import HTTPServer
 from shared_data.data_store import data_store
 from shared_data.pipeline_manager import PipelineManager
-from websocket_pool.static_symbols import STATIC_SYMBOLS  # ✅ 新增导入
 
 logger = logging.getLogger(__name__)
 
@@ -136,46 +135,64 @@ class BrainCore:
             return False
     
     async def _delayed_ws_init(self):
-        """延迟10秒启动WebSocket"""
+        """延迟10秒启动WebSocket - 自动API获取合约版本"""
         await asyncio.sleep(10)
         try:
-            logger.info("⏳ 延迟启动WebSocket...")
+            logger.info("⏳ 延迟启动WebSocket（自动获取合约模式）...")
+            logger.info("ℹ️  WebSocket将通过API自动获取币安和OKX的合约列表")
             
-            # ✅ 修复：提供必需的合约列表参数
-            # 配置：币安 2主2备，欧意 1主1备
-            # 每个主连接最多300个合约
-            
-            all_symbols = {
-                "binance": STATIC_SYMBOLS["binance"][:600],  # 2个数据工作者 × 300
-                "okx": STATIC_SYMBOLS["okx"][:300]           # 1个数据工作者 × 300
-            }
-            
-            logger.info(f"📊 合约配置:")
-            logger.info(f"  币安: {len(all_symbols['binance'])} 个合约 (2个数据工作者)")
-            logger.info(f"  欧意: {len(all_symbols['okx'])} 个合约 (1个数据工作者)")
-            logger.info(f"  总计: {len(all_symbols['binance']) + len(all_symbols['okx'])} 个合约")
-            
-            # 启动WebSocket
-            success = await self.ws_admin.start(all_symbols)
+            # ✅ 关键：传入None，让WebSocketAdmin自己通过API获取合约
+            success = await self.ws_admin.start(None)
             
             if success:
                 logger.info("✅ WebSocket连接池启动成功")
-                logger.info("  币安: 2个数据工作者 + 2个备份工作者")
-                logger.info("  欧意: 1个数据工作者 + 1个备份工作者")
-                logger.info("  监控: 1个全局监控中心")
+                
+                # 等待片刻，然后获取合约数量信息
+                await asyncio.sleep(3)
+                
+                try:
+                    # 尝试获取实际订阅的合约数量
+                    status = await self.ws_admin.get_status()
+                    
+                    total_symbols = 0
+                    for exchange, info in status.get("exchanges", {}).items():
+                        symbols_count = info.get("symbols_total", 0)
+                        data_workers = info.get("data_workers_total", 0)
+                        data_connected = info.get("data_workers_connected", 0)
+                        backup_workers = info.get("backup_workers_total", 0)
+                        
+                        total_symbols += symbols_count
+                        
+                        logger.info(f"   {exchange}:")
+                        logger.info(f"     数据工作者: {data_connected}/{data_workers} 个已连接")
+                        logger.info(f"     备份工作者: {info.get('backup_workers_connected', 0)}/{backup_workers} 个已连接")
+                        logger.info(f"     合约数量: {symbols_count} 个")
+                        
+                    logger.info(f"   总计合约数量: {total_symbols} 个")
+                    logger.info("   监控: 1个全局监控中心")
+                    
+                except Exception as status_e:
+                    logger.info(f"   获取详细状态失败: {status_e}，但WebSocket已成功启动")
+                    logger.info("   币安: 2个数据工作者 + 2个备份工作者")
+                    logger.info("   欧意: 1个数据工作者 + 1个备份工作者")
             else:
                 logger.error("❌ WebSocket连接池启动失败")
-                # 尝试用更少的合约重试
-                logger.info("🔄 尝试用少量合约启动...")
-                fallback_symbols = {
-                    "binance": ["BTCUSDT", "ETHUSDT"],
-                    "okx": ["BTC-USDT-SWAP"]
-                }
-                fallback_success = await self.ws_admin.start(fallback_symbols)
-                if fallback_success:
-                    logger.info("✅ WebSocket连接池（少量合约）启动成功")
-                else:
-                    logger.error("❌ WebSocket连接池完全启动失败")
+                
+                # 可选的备用方案：使用少量核心合约
+                logger.info("🔄 尝试使用核心合约启动...")
+                try:
+                    fallback_symbols = {
+                        "binance": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"],
+                        "okx": ["BTC-USDT-SWAP", "ETH-USDT-SWAP", "SOL-USDT-SWAP"]
+                    }
+                    logger.info(f"🔄 使用备用合约启动: {fallback_symbols}")
+                    fallback_success = await self.ws_admin.start(fallback_symbols)
+                    if fallback_success:
+                        logger.info("✅ WebSocket连接池（备用合约）启动成功")
+                    else:
+                        logger.error("❌ WebSocket连接池完全启动失败")
+                except Exception as fallback_e:
+                    logger.error(f"备用方案失败: {fallback_e}")
         
         except Exception as e:
             logger.error(f"WebSocket初始化失败: {e}")
