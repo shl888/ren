@@ -1,46 +1,38 @@
 """
-全局连接池管理器
-启动和管理所有交易所的连接池
+全局连接池管理器 - 纯API版本
+要么全部成功，要么失败
 """
 import asyncio
 import logging
 import time
+import ccxt.async_support as ccxt_async
 from typing import Dict, Any, List, Optional
 
-from websocket_pool.config import EXCHANGE_CONFIGS
-from websocket_pool.pools.exchange_pool import ExchangePool, ExchangePoolConfig
-from websocket_pool.core.monitor import MonitorCenter
+from ..config import EXCHANGE_CONFIGS
+from .exchange_pool import ExchangePool, ExchangePoolConfig
+from ..core.monitor import MonitorCenter
 
 logger = logging.getLogger(__name__)
 
 # 默认工作者配置
 DEFAULT_WORKER_CONFIGS = {
     "binance": {
-        "data_worker_count": 2,     # 2个数据工作者
-        "backup_worker_count": 2,   # 2个备份工作者
+        "data_worker_count": 2,
+        "backup_worker_count": 2,
         "max_symbols_per_worker": 300
     },
     "okx": {
-        "data_worker_count": 1,     # 1个数据工作者
-        "backup_worker_count": 1,   # 1个备份工作者
+        "data_worker_count": 1,
+        "backup_worker_count": 1,
         "max_symbols_per_worker": 300
     }
 }
 
 
 class GlobalPoolManager:
-    """
-    全局连接池管理器
-    管理所有交易所的连接池
-    """
+    """全局连接池管理器 - 纯API版本"""
     
     def __init__(self, data_callback=None):
-        """
-        初始化全局管理器
-        
-        Args:
-            data_callback: 数据回调函数
-        """
         self.data_callback = data_callback
         
         # 交易所连接池
@@ -55,23 +47,31 @@ class GlobalPoolManager:
         
         logger.info("[GlobalPool] 全局连接池管理器初始化完成")
     
-    async def initialize(self, all_symbols: Dict[str, List[str]]):
+    async def initialize(self, all_symbols: Dict[str, List[str]] = None):
         """
         初始化所有交易所连接池
         
         Args:
-            all_symbols: 交易所 -> 合约列表 的字典
+            all_symbols: 如果为None，则通过API自动获取
         """
         if self._initialized:
             logger.warning("[GlobalPool] 已在初始化中或已初始化")
             return
         
         logger.info("=" * 60)
-        logger.info("[GlobalPool] 正在初始化全局连接池...")
+        logger.info("[GlobalPool] 正在初始化WebSocket连接池管理器...")
         logger.info("=" * 60)
         
         try:
-            # 1. 初始化每个交易所的连接池
+            # ✅ 关键修改：如果没提供合约，直接通过API获取
+            if not all_symbols:
+                logger.info("[GlobalPool] 未提供合约列表，通过API获取...")
+                all_symbols = await self._fetch_all_symbols_from_api()
+            
+            if not all_symbols:
+                raise ValueError("无法获取任何合约，初始化失败")
+            
+            # 初始化每个交易所的连接池
             for exchange, symbols in all_symbols.items():
                 if exchange not in EXCHANGE_CONFIGS:
                     logger.warning(f"[GlobalPool] 跳过未配置的交易所: {exchange}")
@@ -80,11 +80,11 @@ class GlobalPoolManager:
                 logger.info(f"[GlobalPool] 初始化交易所: {exchange} - {len(symbols)} 个合约")
                 await self._initialize_exchange_pool(exchange, symbols)
             
-            # 2. 设置监控中心
+            # 设置监控中心
             logger.info("[GlobalPool] 设置监控中心")
             await self._setup_monitor_center()
             
-            # 3. 启动监控中心
+            # 启动监控中心
             logger.info("[GlobalPool] 启动监控中心")
             await self.monitor_center.start()
             
@@ -100,9 +100,190 @@ class GlobalPoolManager:
             await self.shutdown()
             raise
     
+    async def _fetch_all_symbols_from_api(self) -> Dict[str, List[str]]:
+        """
+        通过API获取所有交易所的合约
+        要么全部成功，要么抛出异常
+        """
+        logger.info("[GlobalPool] 开始通过API获取合约列表...")
+        
+        all_symbols = {}
+        max_retries = 3
+        
+        for exchange in ["binance", "okx"]:
+            if exchange not in EXCHANGE_CONFIGS:
+                continue
+            
+            logger.info(f"[GlobalPool] 获取 {exchange} 合约列表...")
+            
+            for attempt in range(1, max_retries + 1):
+                try:
+                    symbols = await self._fetch_symbols_via_api(exchange)
+                    
+                    if symbols:
+                        all_symbols[exchange] = symbols
+                        logger.info(f"[GlobalPool] ✅ {exchange}: 成功获取 {len(symbols)} 个合约")
+                        break
+                    else:
+                        logger.warning(f"[GlobalPool] ⚠️ {exchange}: 第{attempt}次尝试未获取到合约")
+                        
+                except Exception as e:
+                    if attempt == max_retries:
+                        logger.error(f"[GlobalPool] ❌ {exchange}: {max_retries}次尝试均失败: {e}")
+                        raise RuntimeError(f"无法获取 {exchange} 合约列表: {e}")
+                    else:
+                        logger.warning(f"[GlobalPool] ⚠️ {exchange}: 第{attempt}次尝试失败，{2**attempt}秒后重试: {e}")
+                        await asyncio.sleep(2 ** attempt)
+        
+        if not all_symbols:
+            raise RuntimeError("无法获取任何交易所的合约列表")
+        
+        return all_symbols
+    
+    async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
+        """
+        通过交易所API动态获取合约
+        """
+        exchange = None
+        
+        try:
+            # 交易所配置
+            config = self._get_exchange_config(exchange_name)
+            exchange_class = getattr(ccxt_async, exchange_name)
+            exchange = exchange_class(config)
+            
+            logger.info(f"[GlobalPool] [{exchange_name}] 正在加载市场数据...")
+            
+            # 不同交易所使用不同方法
+            if exchange_name == "okx":
+                # OKX需要使用特定参数获取SWAP合约
+                markets = await exchange.fetch_markets(params={'instType': 'SWAP'})
+                # 转换为字典格式
+                markets_dict = {}
+                for market in markets:
+                    symbol = market.get('symbol', '')
+                    if symbol:
+                        markets_dict[symbol.upper()] = market
+                markets = markets_dict
+            else:
+                # 币安等其他交易所使用load_markets
+                markets = await exchange.load_markets()
+                markets = {k.upper(): v for k, v in markets.items()}
+            
+            logger.info(f"[GlobalPool] [{exchange_name}] 市场数据加载完成，共 {len(markets)} 个市场")
+            
+            # 筛选合约
+            filtered_symbols = self._filter_and_format_symbols(exchange_name, markets)
+            
+            if not filtered_symbols:
+                logger.warning(f"[GlobalPool] [{exchange_name}] 未找到USDT永续合约")
+            
+            return filtered_symbols
+            
+        finally:
+            if exchange:
+                await exchange.close()
+    
+    def _get_exchange_config(self, exchange_name: str) -> dict:
+        """获取交易所配置"""
+        base_config = {
+            'apiKey': '',
+            'secret': '',
+            'enableRateLimit': True,
+            'timeout': 30000,
+        }
+        
+        if exchange_name == "okx":
+            base_config.update({
+                'options': {
+                    'defaultType': 'swap',
+                }
+            })
+        elif exchange_name == "binance":
+            base_config.update({
+                'options': {
+                    'defaultType': 'future',
+                }
+            })
+        
+        return base_config
+    
+    def _filter_and_format_symbols(self, exchange_name: str, markets: dict) -> List[str]:
+        """
+        统一的合约筛选与格式化逻辑
+        返回正确的订阅格式：
+        - 币安: BTCUSDT（小写订阅）
+        - OKX: BTC-USDT-SWAP（保持原格式订阅）
+        """
+        usdt_symbols = []
+        
+        for symbol, market in markets.items():
+            try:
+                symbol_upper = symbol.upper()
+                
+                if exchange_name == "binance":
+                    # 币安合约筛选 - 确保是永续USDT合约
+                    is_perpetual = market.get('swap', False) or market.get('linear', False)
+                    is_active = market.get('active', False)
+                    is_usdt = '/USDT' in symbol_upper or ':USDT' in symbol_upper
+                    
+                    if is_perpetual and is_active and is_usdt:
+                        # 从各种格式提取基础币种
+                        # BTC/USDT, BTC/USDT:USDT -> BTCUSDT
+                        if '/USDT' in symbol_upper:
+                            # 移除 /USDT 和可能的 :USDT
+                            base_symbol = symbol_upper.split('/')[0]
+                            base_symbol = base_symbol.replace(':USDT', '')
+                            # 组合成 BTCUSDT 格式
+                            final_symbol = f"{base_symbol}USDT"
+                            usdt_symbols.append(final_symbol)
+                
+                elif exchange_name == "okx":
+                    # OKX合约筛选 - 确保是SWAP USDT合约
+                    market_type = market.get('type', '').upper()
+                    quote = market.get('quote', '').upper()
+                    is_swap = market_type == 'SWAP' or market.get('swap', False)
+                    is_usdt_quote = quote == 'USDT' or '-USDT-' in symbol_upper
+                    
+                    if is_swap and is_usdt_quote:
+                        # OKX保持原始格式 BTC-USDT-SWAP
+                        if '-USDT-SWAP' in symbol_upper:
+                            clean_symbol = symbol.upper()
+                        elif '/USDT:USDT' in symbol_upper:
+                            clean_symbol = symbol.replace('/USDT:USDT', '-USDT-SWAP').upper()
+                        else:
+                            # 尝试从info中获取标准ID
+                            inst_id = market.get('info', {}).get('instId', '')
+                            if inst_id and '-USDT-SWAP' in inst_id.upper():
+                                clean_symbol = inst_id.upper()
+                            else:
+                                continue
+                        
+                        usdt_symbols.append(clean_symbol)
+                
+            except Exception:
+                continue
+        
+        # 去重排序
+        symbols = sorted(list(set(usdt_symbols)))
+        
+        if symbols:
+            logger.info(f"[GlobalPool] [{exchange_name}] 发现 {len(symbols)} 个USDT永续合约")
+            # 限制数量（基于配置）
+            if exchange_name in DEFAULT_WORKER_CONFIGS:
+                data_workers = DEFAULT_WORKER_CONFIGS[exchange_name].get("data_worker_count", 1)
+                max_per_worker = DEFAULT_WORKER_CONFIGS[exchange_name].get("max_symbols_per_worker", 300)
+                max_symbols = data_workers * max_per_worker
+                
+                if len(symbols) > max_symbols:
+                    logger.info(f"[GlobalPool] [{exchange_name}] 合约数量 {len(symbols)} > 限制 {max_symbols}，进行裁剪")
+                    symbols = symbols[:max_symbols]
+        
+        return symbols
+    
     async def _initialize_exchange_pool(self, exchange: str, symbols: List[str]):
         """
-        初始化单个交易所连接池
+        初始化单个交易所连接池 - 添加订阅验证
         """
         # 获取配置
         exchange_config = EXCHANGE_CONFIGS.get(exchange, {})
@@ -120,6 +301,18 @@ class GlobalPoolManager:
         if not pool_config.ws_url:
             logger.error(f"[GlobalPool] 交易所 {exchange} 未配置ws_url")
             return
+        
+        # ✅ 添加订阅格式验证
+        logger.info(f"[GlobalPool] {exchange} 订阅格式验证:")
+        if symbols:
+            if exchange == "binance":
+                # 币安示例：BTCUSDT -> btcusdt@ticker
+                sample_symbol = symbols[0] if symbols else "BTCUSDT"
+                logger.info(f"  格式示例: {sample_symbol} -> 订阅: {sample_symbol.lower()}@ticker")
+            elif exchange == "okx":
+                # OKX示例：BTC-USDT-SWAP -> swap/ticker:BTC-USDT-SWAP
+                sample_symbol = symbols[0] if symbols else "BTC-USDT-SWAP"
+                logger.info(f"  格式示例: {sample_symbol} -> 订阅: swap/ticker:{sample_symbol}")
         
         # 创建连接池
         pool = ExchangePool(pool_config, self.data_callback)
