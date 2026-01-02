@@ -1,6 +1,6 @@
 """
 单个WebSocket连接实现 - 支持角色互换
-支持自动重连、数据解析、状态管理 - 修复订阅返回值BUG
+支持自动重连、数据解析、状态管理 - 修复状态同步BUG
 """
 import asyncio
 import json
@@ -113,6 +113,8 @@ class WebSocketConnection:
                     self.connected = False
                     return False
                 
+                # 🚨【关键】订阅成功后立即设置last_message_time
+                self.last_message_time = datetime.now()
                 self.is_active = True
                 logger.info(f"[{self.connection_id}] 主连接已激活并订阅")
             
@@ -655,15 +657,31 @@ class WebSocketConnection:
     
     @property
     def last_message_seconds_ago(self) -> float:
-        """返回距上次消息过去了多少秒（监控调度专用）"""
-        if self.last_message_time:
-            return (datetime.now() - self.last_message_time).total_seconds()
-        return 999  # 如果从未收到消息，返回999秒表示异常
+        """返回距上次消息过去了多少秒 - 修复边界情况"""
+        if self.last_message_time is None:
+            # 🚨如果从未收到消息但已连接，可能是订阅后立即检查
+            if self.connected and self.subscribed:
+                logger.warning(f"[{self.connection_id}] last_message_time未设置但已订阅，返回0")
+                return 0
+            return 999
+        
+        seconds = (datetime.now() - self.last_message_time).total_seconds()
+        
+        # 🚨如果connected=True但长时间无消息，状态可能不同步
+        if self.connected and seconds > self.ping_interval * 2:
+            logger.warning(f"[{self.connection_id}] connected=True但{seconds:.1f}秒无消息，状态不同步")
+        
+        return seconds
     
     async def check_health(self) -> Dict[str, Any]:
-        """检查连接健康状态"""
+        """检查连接健康状态 - 增加状态修复"""
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
+        
+        # 🚨修复：如果长时间无消息但标记为连接，强制同步状态
+        if self.connected and last_msg_seconds > self.ping_interval * 3:
+            logger.error(f"[{self.connection_id}] 健康检查：{last_msg_seconds:.1f}秒无消息，强制标记断开")
+            self.connected = False
         
         return {
             "connection_id": self.connection_id,
