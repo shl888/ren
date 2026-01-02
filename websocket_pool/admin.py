@@ -80,7 +80,7 @@ class WebSocketAdmin:
                 pool.monitor_scheduler_task = asyncio.create_task(
                     pool._monitor_scheduling_loop()
                 )
-                logger.info(f"[管理员] ✅ [{exchange_name}] 调度循环已强制启动")
+                logger.info(f"[{exchange_name}_monitor] 🚀 监控调度循环已强制启动")
             else:
                 logger.info(f"[管理员] ✅ [{exchange_name}] 监控调度器状态正常")
     

@@ -1,6 +1,6 @@
 """
 单个WebSocket连接实现 - 支持角色互换
-支持自动重连、数据解析、状态管理 - 修复监控误判BUG
+支持自动重连、数据解析、状态管理 - 完全修复版
 """
 import asyncio
 import json
@@ -683,7 +683,7 @@ class WebSocketConnection:
         return seconds
     
     async def check_health(self) -> Dict[str, Any]:
-        """检查连接健康状态 - 增加状态修复"""
+        """检查连接健康状态 - 强制状态同步"""
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
         
@@ -692,6 +692,11 @@ class WebSocketConnection:
         if self.connected and last_msg_seconds > ping_threshold:
             logger.error(f"[{self.connection_id}] 健康检查：{last_msg_seconds:.1f}秒无消息，强制标记断开")
             self.connected = False
+            self.subscribed = False  # 🚨同时取消订阅标记
+            self.is_active = False
+        
+        # 🚨【关键】确保symbols_count与实际一致
+        actual_symbols_count = len(self.symbols) if self.symbols else 0
         
         return {
             "connection_id": self.connection_id,
@@ -700,7 +705,7 @@ class WebSocketConnection:
             "connected": self.connected,
             "subscribed": self.subscribed,
             "is_active": self.is_active,
-            "symbols_count": len(self.symbols),
+            "symbols_count": actual_symbols_count,  # 🚨使用实际数量
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()

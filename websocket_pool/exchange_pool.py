@@ -40,7 +40,7 @@ class ExchangeWebSocketPool:
         self.monitor_connection = None
         
         # 状态
-        self.symbols = []
+        self.symbols = []  # 🚨确保初始化为空列表
         self.symbol_groups = []
         
         # 任务
@@ -73,7 +73,7 @@ class ExchangeWebSocketPool:
         
     async def initialize(self, symbols: List[str]):
         """🚀 并发初始化 + 修复OKX单连接过载"""
-        self.symbols = symbols
+        self.symbols = symbols  # 🚨明确传入的symbols
         
         # 🚨【关键修复】使用正确的配置名
         symbols_per_connection = self.config.get("symbols_per_connection", 300)
@@ -144,7 +144,6 @@ class ExchangeWebSocketPool:
             self.monitor_scheduler_task = asyncio.create_task(
                 self._monitor_scheduling_loop()
             )
-            # 🚨【已修复】f-string语法错误
             logger.info(f"[{self.exchange}_monitor] 🚀 监控调度循环已强制启动")
 
     def _balance_symbol_groups(self, target_groups: int):
@@ -508,7 +507,7 @@ class ExchangeWebSocketPool:
             return False
     
     async def _report_status_to_data_store(self):
-        """报告状态到共享存储"""
+        """报告状态到共享存储 - 强制同步"""
         try:
             status_report = {
                 "exchange": self.exchange,
@@ -519,13 +518,18 @@ class ExchangeWebSocketPool:
                 "pool_mode": "shared_pool"
             }
             
+            # 🚨【关键】先强制检查所有连接状态
             for conn in self.master_connections:
+                # 在检查前强制更新状态
+                await conn.check_health()
                 status_report["masters"].append(await conn.check_health())
             
             for conn in self.warm_standby_connections:
+                await conn.check_health()
                 status_report["warm_standbys"].append(await conn.check_health())
             
             if self.monitor_connection:
+                await self.monitor_connection.check_health()
                 status_report["monitor"] = await self.monitor_connection.check_health()
             
             await data_store.update_connection_status(
