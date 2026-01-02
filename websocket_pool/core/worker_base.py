@@ -50,7 +50,7 @@ class BaseWorker(ABC):
         import uuid
         conn_id = f"conn_{self.exchange}_{self.worker_type}_{uuid.uuid4().hex[:8]}"
         
-        from .connection import Connection
+        from websocket_pool.core.connection import Connection
         self._conn = Connection(
             conn_id=conn_id,
             exchange=self.exchange,
