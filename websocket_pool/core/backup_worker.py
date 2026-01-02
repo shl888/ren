@@ -4,7 +4,7 @@
 import json
 import time
 from typing import Set
-from .worker_base import BaseWorker
+from websocket_pool.core.worker_base import BaseWorker
 
 class BackupWorker(BaseWorker):
     """备份工作者 - 只保持心跳"""
