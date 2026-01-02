@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 大脑核心主控 - Render流式终极版（512MB内存优化）
+完整修复版：WebSocket启动参数修复
 """
 
 import asyncio
@@ -19,7 +20,8 @@ if BASE_DIR not in sys.path:
 from websocket_pool.admin import WebSocketAdmin
 from http_server.server import HTTPServer
 from shared_data.data_store import data_store
-from shared_data.pipeline_manager import PipelineManager  # ✅ 删除 PipelineConfig
+from shared_data.pipeline_manager import PipelineManager
+from websocket_pool.static_symbols import STATIC_SYMBOLS  # ✅ 新增导入
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +107,6 @@ class BrainCore:
             
             # 4. 初始化PipelineManager（流式版，无需配置）
             logger.info("【4️⃣】初始化PipelineManager（流式终极版）...")
-            # ✅ 删除 PipelineConfig，直接传回调
             self.pipeline_manager = PipelineManager(
                 brain_callback=self.receive_processed_data
             )
@@ -139,10 +140,46 @@ class BrainCore:
         await asyncio.sleep(10)
         try:
             logger.info("⏳ 延迟启动WebSocket...")
-            await self.ws_admin.start()
-            logger.info("✅ WebSocket初始化完成")
+            
+            # ✅ 修复：提供必需的合约列表参数
+            # 配置：币安 2主2备，欧意 1主1备
+            # 每个主连接最多300个合约
+            
+            all_symbols = {
+                "binance": STATIC_SYMBOLS["binance"][:600],  # 2个数据工作者 × 300
+                "okx": STATIC_SYMBOLS["okx"][:300]           # 1个数据工作者 × 300
+            }
+            
+            logger.info(f"📊 合约配置:")
+            logger.info(f"  币安: {len(all_symbols['binance'])} 个合约 (2个数据工作者)")
+            logger.info(f"  欧意: {len(all_symbols['okx'])} 个合约 (1个数据工作者)")
+            logger.info(f"  总计: {len(all_symbols['binance']) + len(all_symbols['okx'])} 个合约")
+            
+            # 启动WebSocket
+            success = await self.ws_admin.start(all_symbols)
+            
+            if success:
+                logger.info("✅ WebSocket连接池启动成功")
+                logger.info("  币安: 2个数据工作者 + 2个备份工作者")
+                logger.info("  欧意: 1个数据工作者 + 1个备份工作者")
+                logger.info("  监控: 1个全局监控中心")
+            else:
+                logger.error("❌ WebSocket连接池启动失败")
+                # 尝试用更少的合约重试
+                logger.info("🔄 尝试用少量合约启动...")
+                fallback_symbols = {
+                    "binance": ["BTCUSDT", "ETHUSDT"],
+                    "okx": ["BTC-USDT-SWAP"]
+                }
+                fallback_success = await self.ws_admin.start(fallback_symbols)
+                if fallback_success:
+                    logger.info("✅ WebSocket连接池（少量合约）启动成功")
+                else:
+                    logger.error("❌ WebSocket连接池完全启动失败")
+        
         except Exception as e:
             logger.error(f"WebSocket初始化失败: {e}")
+            logger.error(traceback.format_exc())
     
     async def start_http_server(self):
         """启动HTTP服务器"""
@@ -177,8 +214,24 @@ class BrainCore:
             logger.info("🛑 按 Ctrl+C 停止")
             logger.info("=" * 60)
             
+            # 启动保活服务（如果需要）
+            try:
+                start_keep_alive_background()
+            except:
+                pass
+            
+            # 主循环
             while self.running:
                 await asyncio.sleep(1)
+                
+                # 定期检查WebSocket状态（可选）
+                if hasattr(self, 'ws_admin') and self.ws_admin:
+                    try:
+                        status = await self.ws_admin.health_check()
+                        if not status['healthy']:
+                            logger.warning(f"WebSocket健康检查异常: {status.get('message', '未知错误')}")
+                    except:
+                        pass
         
         except KeyboardInterrupt:
             logger.info("收到键盘中断")
@@ -202,18 +255,31 @@ class BrainCore:
             # 停止PipelineManager
             if hasattr(self, 'pipeline_manager') and self.pipeline_manager:
                 await self.pipeline_manager.stop()
+                logger.info("✅ PipelineManager已停止")
             
             # 停止WebSocket
             if hasattr(self, 'ws_admin') and self.ws_admin:
                 await self.ws_admin.stop()
+                logger.info("✅ WebSocket连接池已停止")
             
             # 停止HTTP服务
             if hasattr(self, 'http_runner') and self.http_runner:
                 await self.http_runner.cleanup()
+                logger.info("✅ HTTP服务器已停止")
             
-            logger.info("✅ 大脑核心已关闭（流式终极版）")
+            # 停止资金费率管理器
+            if hasattr(self, 'funding_manager') and self.funding_manager:
+                try:
+                    await self.funding_manager.stop()
+                    logger.info("✅ 资金费率管理器已停止")
+                except:
+                    pass
+            
+            logger.info("✅ 大脑核心已完全关闭")
+            
         except Exception as e:
             logger.error(f"关闭出错: {e}")
+            logger.error(traceback.format_exc())
 
 def main():
     """主函数"""
