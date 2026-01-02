@@ -17,7 +17,7 @@ if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
 from shared_data.data_store import data_store
-from websocket_pool.pool_manager import WebSocketPoolManager
+from websocket_pool import WebSocketPoolManager
 from .routes import setup_routes
 
 logger = logging.getLogger(__name__)
