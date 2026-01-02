@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
-from .pools.global_pool import GlobalPoolManager
+from websocket_pool.pools.global_pool import GlobalPoolManager
 
 logger = logging.getLogger(__name__)
 
