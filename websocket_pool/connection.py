@@ -157,7 +157,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
-        """切换连接角色"""
+        """切换连接角色 - 同时更新连接ID"""
         try:
             old_role = self.connection_type
             
@@ -178,6 +178,12 @@ class WebSocketConnection:
                 
                 self.is_active = True
                 self.connection_type = new_role
+                
+                # 🚨 【关键修复】更新连接ID
+                if "_warm_" in self.connection_id:
+                    old_id = self.connection_id
+                    self.connection_id = self.connection_id.replace("_warm_", "_master_")
+                    logger.info(f"[{old_id}] -> [{self.connection_id}] 连接ID已更新")
                 
                 # 订阅新合约
                 if self.connected and self.symbols:
@@ -205,6 +211,12 @@ class WebSocketConnection:
                 
                 self.is_active = False
                 self.connection_type = new_role
+                
+                # 🚨 【关键修复】更新连接ID
+                if "_master_" in self.connection_id:
+                    old_id = self.connection_id
+                    self.connection_id = self.connection_id.replace("_master_", "_warm_")
+                    logger.info(f"[{old_id}] -> [{self.connection_id}] 连接ID已更新")
                 
                 # 订阅心跳合约
                 if self.connected and self.symbols:
@@ -262,7 +274,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送订阅批次 {i//batch_size+1}/{(len(streams)+batch_size-1)//batch_size}")
                 
                 if i + batch_size < len(streams):
-                    await asyncio.sleep(self.min_subscribe_interval)  # 🚨 使用配置的2.0秒
+                    await asyncio.sleep(self.min_subscribe_interval)
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
@@ -308,7 +320,7 @@ class WebSocketConnection:
                 logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches}")
                 
                 if batch_idx < total_batches - 1:
-                    await asyncio.sleep(self.min_subscribe_interval)  # 🚨 使用配置的2.0秒
+                    await asyncio.sleep(self.min_subscribe_interval)
             
             self.subscribed = True
             logger.info(f"[{self.connection_id}] 订阅完成，共 {len(self.symbols)} 个合约")
@@ -338,7 +350,7 @@ class WebSocketConnection:
             self.connected = False
             self.subscribed = False
             self.is_active = False
-            self.symbols = []  # 清空合约列表
+            self.symbols = []
             
             logger.info(f"[{self.connection_id}] 连接状态已重置")
             

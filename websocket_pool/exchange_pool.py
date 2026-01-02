@@ -261,20 +261,22 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环"""
+        """监控调度循环 - 🚨 修复：根据connection_type判断，不是连接ID"""
         logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
         
         while True:
             try:
                 # 1. 监控所有主连接状态
                 for i, master_conn in enumerate(self.master_connections):
-                    if not master_conn.connected:
+                    # 🚨 修复：根据实际角色判断
+                    if master_conn.connection_type == ConnectionType.MASTER and not master_conn.connected:
                         logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} ({master_conn.connection_id}) 断开")
                         await self._monitor_handle_master_failure(i, master_conn)
                 
                 # 2. 监控所有温备连接状态
                 for i, warm_conn in enumerate(self.warm_standby_connections):
-                    if not warm_conn.connected:
+                    # 🚨 修复：根据实际角色判断
+                    if warm_conn.connection_type == ConnectionType.WARM_STANDBY and not warm_conn.connected:
                         logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} ({warm_conn.connection_id}) 断开")
                         await warm_conn.connect()
                         if warm_conn.connected:
@@ -308,10 +310,11 @@ class ExchangeWebSocketPool:
             await failed_master.connect()
     
     async def _select_best_standby_from_pool(self):
-        """从共享池选择最佳温备"""
+        """从共享池选择最佳温备 - 🚨 修复：根据connection_type筛选"""
+        
         available_standbys = [
             conn for conn in self.warm_standby_connections 
-            if conn.connected and not conn.is_active
+            if conn.connected and conn.connection_type == ConnectionType.WARM_STANDBY  # 🚨 关键修复
         ]
         
         if not available_standbys:
@@ -331,11 +334,11 @@ class ExchangeWebSocketPool:
         return selected_standby
     
     async def _monitor_execute_failover(self, master_index: int, old_master, new_master):
-        """监控执行故障转移 - 简化版：直接断开换人"""
+        """监控执行故障转移"""
         logger.info(f"[监控调度] [{self.exchange}] 故障转移: {old_master.connection_id} -> {new_master.connection_id}")
         
         try:
-            # 🚨 步骤1：直接断开原主连接（交易所自动清理订阅）
+            # 🚨 步骤1：直接断开原主连接
             logger.info(f"[监控调度] [{self.exchange}] 步骤1: 直接断开原主连接")
             await old_master.disconnect()
             
