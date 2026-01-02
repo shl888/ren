@@ -8,7 +8,8 @@ import time
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass, field
 
-from ..core.worker import DataWorker, BackupWorker
+from ..core.data_worker import DataWorker
+from ..core.backup_worker import BackupWorker, BackupWorker
 
 logger = logging.getLogger(__name__)
 
