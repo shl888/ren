@@ -237,10 +237,11 @@ class MonitorCenter:
         """
         创建新的备份工作者
         """
-        from .worker import BackupWorker
+        from .data_worker import DataWorker
+        from .backup_worker import BackupWorker
         
         # 需要从配置获取ws_url
-        from ..config import EXCHANGE_CONFIGS
+        from websocket_pool.config import EXCHANGE_CONFIGS
         
         ws_url = EXCHANGE_CONFIGS.get(exchange, {}).get("ws_public_url")
         if not ws_url:
