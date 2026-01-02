@@ -3,16 +3,17 @@ WebSocket连接池模块 - 工业级稳定版本
 """
 
 # 核心组件
-from .admin import WebSocketAdmin
-from .pools.global_pool import GlobalPoolManager
-from .pools.exchange_pool import ExchangePool
-from .core.connection import Connection
-from .core.worker import DataWorker, BackupWorker
-from .core.monitor import MonitorCenter
+from websocket_pool.admin import WebSocketAdmin
+from websocket_pool.pools.global_pool import GlobalPoolManager
+from websocket_pool.pools.exchange_pool import ExchangePool
+from websocket_pool.core.connection import Connection
+from websocket_pool.core.data_worker import DataWorker
+from websocket_pool.core.backup_worker import BackupWorker
+from websocket_pool.core.monitor import MonitorCenter
 
 # 配置
-from .config import EXCHANGE_CONFIGS, SUBSCRIPTION_TYPES, SYMBOL_FILTERS
-from .static_symbols import STATIC_SYMBOLS
+from websocket_pool.config import EXCHANGE_CONFIGS, SUBSCRIPTION_TYPES, SYMBOL_FILTERS
+from websocket_pool.static_symbols import STATIC_SYMBOLS
 
 __all__ = [
     'WebSocketAdmin',           # ✅ 大脑只用这个
