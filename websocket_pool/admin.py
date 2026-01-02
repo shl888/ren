@@ -47,7 +47,7 @@ class WebSocketAdmin:
             logger.info("[管理员] 步骤2: 启动连接监控")
             await self._monitor.start_monitoring()
             
-            # 3. 🚨 新增：强制检查各交易所监控调度器
+            # 3. 🚨 新增：强制检查每个交易所的监控调度器
             logger.info("[管理员] 步骤3: 强制检查各交易所监控调度器")
             await self._enforce_all_monitor_schedulers()
             
@@ -80,7 +80,7 @@ class WebSocketAdmin:
                 pool.monitor_scheduler_task = asyncio.create_task(
                     pool._monitor_scheduling_loop()
                 )
-                logger.info(f"[{exchange_name}_monitor] 🚀 监控调度循环已强制启动")
+                logger.info(f"[管理员] ✅ [{exchange_name}] 调度循环已强制启动")
             else:
                 logger.info(f"[管理员] ✅ [{exchange_name}] 监控调度器状态正常")
     
@@ -108,11 +108,7 @@ class WebSocketAdmin:
             
             summary = {
                 "module": "websocket_pool",
-                "status": "healthy" if self._running and any(
-                    ex_status.get("masters", [{}])[0].get("connected", False) 
-                    for ex_status in internal_status.values() 
-                    if isinstance(ex_status, dict) and ex_status.get("masters")
-                ) else ("stopped" if not self._running else "warning"),
+                "status": "healthy" if self._running else "stopped",
                 "initialized": self._initialized,
                 "exchanges": {},
                 "timestamp": datetime.now().isoformat()
@@ -126,18 +122,11 @@ class WebSocketAdmin:
                     connected_masters = sum(1 for m in masters if isinstance(m, dict) and m.get("connected", False))
                     connected_warm = sum(1 for w in warm_standbys if isinstance(w, dict) and w.get("connected", False))
                     
-                    # 🚨从连接状态获取实际合约数
-                    total_symbols = 0
-                    for m in masters:
-                        if isinstance(m, dict):
-                            total_symbols += m.get("symbols_count", 0)
-                    
                     summary["exchanges"][exchange] = {
                         "masters_connected": connected_masters,
                         "masters_total": len(masters),
                         "standbys_connected": connected_warm,
                         "standbys_total": len(warm_standbys),
-                        "symbols_count": total_symbols,  # ✅添加实际合约数
                         "health": "good" if connected_masters == len(masters) else "warning"
                     }
             

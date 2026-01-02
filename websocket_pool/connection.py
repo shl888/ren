@@ -1,6 +1,6 @@
 """
 单个WebSocket连接实现 - 支持角色互换
-支持自动重连、数据解析、状态管理 - 完全修复版
+支持自动重连、数据解析、状态管理 - 修复订阅返回值BUG
 """
 import asyncio
 import json
@@ -51,7 +51,7 @@ class WebSocketConnection:
         # 连接状态
         self.ws = None
         self.connected = False
-        self.last_message_time = None  # 🚨关键：初始为None
+        self.last_message_time = None
         self.reconnect_count = 0
         self.subscribed = False
         self.is_active = False
@@ -61,7 +61,7 @@ class WebSocketConnection:
         self.receive_task = None
         self.delayed_subscribe_task = None
         
-        # 🚨 【关键】每个连接独立的计数器
+        # 🚨 【关键修复】每个连接独立的计数器
         self.ticker_count = 0          # 币安ticker计数
         self.okx_ticker_count = 0      # OKX ticker计数
         
@@ -80,14 +80,13 @@ class WebSocketConnection:
         self.min_subscribe_interval = 2.0
     
     async def connect(self):
-        """建立WebSocket连接 - 修复状态初始化"""
+        """建立WebSocket连接 - 修复：避免触发交易所限制"""
         try:
             logger.info(f"[{self.connection_id}] 正在连接 {self.ws_url}")
             
             # 🚨【关键】重置订阅状态
             self.subscribed = False
             self.is_active = False
-            self.last_message_time = None  # 重置为None
             
             # 🚨 增强：增加连接超时保护
             self.ws = await asyncio.wait_for(
@@ -101,12 +100,12 @@ class WebSocketConnection:
             )
             
             self.connected = True
-            self.last_message_time = datetime.now()  # 🚨连接成功时立即设置
+            self.last_message_time = datetime.now()
             self.reconnect_count = 0
             
             logger.info(f"[{self.connection_id}] 连接成功")
             
-            # 🚨 【关键】只有主连接立即订阅（保持原来逻辑）
+            # 🚨 【关键修复】只有主连接立即订阅（保持原来逻辑）
             if self.connection_type == ConnectionType.MASTER and self.symbols:
                 subscribe_success = await self._subscribe()
                 if not subscribe_success:
@@ -114,12 +113,10 @@ class WebSocketConnection:
                     self.connected = False
                     return False
                 
-                # 🚨订阅成功后立即更新消息时间
-                self.last_message_time = datetime.now()
                 self.is_active = True
                 logger.info(f"[{self.connection_id}] 主连接已激活并订阅")
             
-            # 🚨 【关键】温备连接延迟订阅（避免触发交易所限制）
+            # 🚨 【关键修复】温备连接延迟订阅（避免触发交易所限制）
             elif self.connection_type == ConnectionType.WARM_STANDBY and self.symbols:
                 # 根据连接ID决定延迟时间（错开订阅）
                 delay_seconds = self._get_delay_for_warm_standby()
@@ -169,8 +166,6 @@ class WebSocketConnection:
             if self.connected and not self.subscribed and self.symbols:
                 logger.info(f"[{self.connection_id}] 开始延迟订阅")
                 await self._subscribe()
-                # 🚨延迟订阅后也更新消息时间
-                self.last_message_time = datetime.now()
                 self.subscribed = True
                 logger.info(f"[{self.connection_id}] 延迟订阅完成")
             elif not self.connected:
@@ -209,8 +204,6 @@ class WebSocketConnection:
                 # 订阅新合约（主连接的合约）
                 if self.connected and self.symbols:
                     await self._subscribe()
-                    # 🚨切换角色后也更新消息时间
-                    self.last_message_time = datetime.now()
                     self.subscribed = True
                 
                 logger.info(f"[{self.connection_id}] 切换完成，订阅 {len(self.symbols)} 个合约")
@@ -241,8 +234,6 @@ class WebSocketConnection:
                 # 订阅心跳合约
                 if self.connected and self.symbols:
                     await self._subscribe()
-                    # 🚨切换角色后也更新消息时间
-                    self.last_message_time = datetime.now()
                     self.subscribed = True
                 
                 logger.info(f"[{self.connection_id}] 切换完成，订阅 {len(self.symbols)} 个心跳合约")
@@ -439,7 +430,6 @@ class WebSocketConnection:
         """接收消息 - 增强异常处理"""
         try:
             async for message in self.ws:
-                # 🚨【关键】每收到任何消息都更新时间
                 self.last_message_time = datetime.now()
                 
                 # 🚨【新增】检查消息是否为空（可能为心跳）
@@ -656,7 +646,6 @@ class WebSocketConnection:
                 
             self.subscribed = False
             self.is_active = False
-            self.last_message_time = None  # 🚨断开时重置
             
             logger.info(f"[{self.connection_id}] 连接已完全断开")
             
@@ -666,34 +655,15 @@ class WebSocketConnection:
     
     @property
     def last_message_seconds_ago(self) -> float:
-        """返回距上次消息过去了多少秒 - 修复边界情况"""
-        if self.last_message_time is None:
-            # 🚨如果从未收到消息但已连接，可能是订阅后立即检查
-            if self.connected and self.subscribed:
-                logger.warning(f"[{self.connection_id}] last_message_time未设置但已订阅，返回0")
-                return 0
-            return 999
-        
-        seconds = (datetime.now() - self.last_message_time).total_seconds()
-        
-        # 🚨如果connected=True但长时间无消息，状态可能不同步
-        if self.connected and seconds > self.ping_interval * 2:
-            logger.warning(f"[{self.connection_id}] connected=True但{seconds:.1f}秒无消息，状态不同步")
-        
-        return seconds
+        """返回距上次消息过去了多少秒（监控调度专用）"""
+        if self.last_message_time:
+            return (datetime.now() - self.last_message_time).total_seconds()
+        return 999  # 如果从未收到消息，返回999秒表示异常
     
     async def check_health(self) -> Dict[str, Any]:
-        """检查连接健康状态 - 修复强制断开逻辑"""
+        """检查连接健康状态"""
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
-        
-        # 🚨【关键】只有connected=True时才检查超时，不强制修改状态
-        if self.connected and last_msg_seconds > self.ping_interval * 4:  # 32秒（OKX）或60秒（币安）
-            logger.error(f"[{self.connection_id}] 健康检查：{last_msg_seconds:.1f}秒无消息且connected=True，可能是假死")
-            # 只打日志，不修改状态，让监控调度器决定
-        
-        # 🚨【关键】确保symbols_count与实际symbols列表一致，不受连接状态影响
-        actual_symbols_count = len(self.symbols) if self.symbols else 0
         
         return {
             "connection_id": self.connection_id,
@@ -702,7 +672,7 @@ class WebSocketConnection:
             "connected": self.connected,
             "subscribed": self.subscribed,
             "is_active": self.is_active,
-            "symbols_count": actual_symbols_count,  # ✅使用实际数量
+            "symbols_count": len(self.symbols),
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
