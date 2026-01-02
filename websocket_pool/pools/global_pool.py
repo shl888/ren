@@ -7,9 +7,9 @@ import logging
 import time
 from typing import Dict, Any, List, Optional
 
-from ..config import EXCHANGE_CONFIGS
-from .exchange_pool import ExchangePool, ExchangePoolConfig
-from ..core.monitor import MonitorCenter
+from websocket_pool.config import EXCHANGE_CONFIGS
+from websocket_pool.pools.exchange_pool import ExchangePool, ExchangePoolConfig
+from websocket_pool.core.monitor import MonitorCenter
 
 logger = logging.getLogger(__name__)
 
