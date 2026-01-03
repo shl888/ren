@@ -49,9 +49,9 @@ async def default_data_callback(data):
         # 现在data包含完整的raw_data字段和原始数据
         await data_store.update_market_data(exchange, symbol, data)
         
-        # 记录日志（每100条记录一次，避免日志过多）
+        # 记录日志（每10000条记录一次，避免日志过多）
         default_data_callback.counter = getattr(default_data_callback, 'counter', 0) + 1
-        if default_data_callback.counter % 100 == 0:
+        if default_data_callback.counter % 10000 == 0:
             logger.info(f"[数据回调] 已处理 {default_data_callback.counter} 条原始数据，最新: {exchange} {symbol}")
             
     except TypeError as e:

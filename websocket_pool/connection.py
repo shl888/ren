@@ -491,7 +491,7 @@ class WebSocketConnection:
             # 🚨【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
             
-            if self.ticker_count % 100 == 0:
+            if self.ticker_count % 10000 == 0:
                 logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个ticker消息")
             
             # 🚨【关键修复】完全保留所有原始数据，不进行过滤
@@ -536,6 +536,10 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
+        # 🚨 新增：资金费率计数器
+        if not hasattr(self, 'funding_rate_count'):
+            self.funding_rate_count = 0
+        
         # 🚨 打印所有事件消息用于诊断
         if data.get("event"):
             event_type = data.get("event")
@@ -571,10 +575,11 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨【关键修复】记录哪个连接收到的数据，但保留完整原始数据
-                    if "fundingRate" in funding_data:
-                        funding_rate = float(funding_data.get("fundingRate", 0))
-                        logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
+                    # 🚨【修改】计数器增加，每10000条打印一次
+                    self.funding_rate_count += 1
+                    
+                    if self.funding_rate_count % 10000 == 0:
+                        logger.info(f"[{self.connection_id}] 已处理 {self.funding_rate_count} 条资金费率数据")
                     
                     # 🚨【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -597,7 +602,7 @@ class WebSocketConnection:
                     self.okx_ticker_count += 1
                     
                     # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
-                    if self.okx_ticker_count % 50 == 0:
+                    if self.okx_ticker_count % 10000 == 0:
                         logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
