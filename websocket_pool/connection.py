@@ -389,7 +389,7 @@ class WebSocketConnection:
                     streams.append(f"{symbol_lower}@ticker")
                     streams.append(f"{symbol_lower}@markPrice")
                 
-                batch_size = 50
+                batch_size = 100
                 for i in range(0, len(streams), batch_size):
                     batch = streams[i:i+batch_size]
                     unsubscribe_msg = {
@@ -401,7 +401,7 @@ class WebSocketConnection:
                     await asyncio.sleep(1)
                 
             elif self.exchange == "okx":
-                batch_size = 10
+                batch_size = 100
                 for i in range(0, len(self.symbols), batch_size):
                     batch = self.symbols[i:i+batch_size]
                     args = []
@@ -491,7 +491,7 @@ class WebSocketConnection:
             # 🚨【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
             
-            if self.ticker_count % 100 == 0:
+            if self.ticker_count % 1000 == 0:
                 logger.info(f"[{self.connection_id}] 已收到 {self.ticker_count} 个ticker消息")
             
             # 🚨【关键修复】完全保留所有原始数据，不进行过滤
@@ -512,10 +512,10 @@ class WebSocketConnection:
         elif event_type == "markPriceUpdate":
             symbol = data.get("s", "").upper()
             
-            # 🚨【新增】币安标记价格计数器 - 使用≥100里程碑逻辑
+            # 🚨【新增】币安标记价格计数器 - 使用≥1000里程碑逻辑
             if not hasattr(self, 'binance_markprice_count'):
                 self.binance_markprice_count = 0
-                self._binance_markprice_next_milestone = 100  # 🚨 100的里程碑
+                self._binance_markprice_next_milestone = 1000  # 🚨 1000的里程碑
             
             # 🚨 币安是单条消息，每次+1
             self.binance_markprice_count += 1
@@ -524,8 +524,8 @@ class WebSocketConnection:
             if self.binance_markprice_count >= self._binance_markprice_next_milestone:
                 logger.info(f"[{self.connection_id}] 已收到 {self.binance_markprice_count} 个标记价格数据")
                 
-                # 更新阈值：下一个100的倍数
-                self._binance_markprice_next_milestone = ((self.binance_markprice_count // 100) + 1) * 100
+                # 更新阈值：下一个1000的倍数
+                self._binance_markprice_next_milestone = ((self.binance_markprice_count // 1000) + 1) * 1000
             
             # 🚨 新增：收集币安合约名
             if SYMBOL_COLLECTOR_AVAILABLE:
@@ -641,7 +641,7 @@ class WebSocketConnection:
                     self.okx_ticker_count += 1
                     
                     # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
-                    if self.okx_ticker_count % 100 == 0:
+                    if self.okx_ticker_count % 1000 == 0:
                         logger.info(f"[{self.connection_id}] 已收到 {self.okx_ticker_count} 个OKX ticker")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
