@@ -26,15 +26,12 @@ class ExchangeWebSocketPool:
     
     def __init__(self, exchange: str, data_callback=None):
         self.exchange = exchange
-        
-        # 🚨【关键修复】强制使用传入的回调
+        # 使用传入的回调，如果没有则创建默认回调
         if data_callback:
             self.data_callback = data_callback
-            logger.info(f"[{self.exchange}] 使用外部数据回调: {data_callback.__name__}")
         else:
-            logger.error(f"[{self.exchange}] ⚠️ 未提供数据回调！将无法处理数据")
-            self.data_callback = None
-        
+            self.data_callback = self._create_default_callback()
+            
         self.config = EXCHANGE_CONFIGS.get(exchange, {})
         
         # 连接池
@@ -51,14 +48,28 @@ class ExchangeWebSocketPool:
         self.monitor_scheduler_task = None
         
         logger.info(f"[{self.exchange}] ExchangeWebSocketPool 初始化完成")
+
+    def _create_default_callback(self):
+        """创建默认回调函数，直接对接共享数据模块"""
+        async def default_callback(data):
+            try:
+                if "exchange" not in data or "symbol" not in data:
+                    logger.warning(f"[{self.exchange}] 数据缺少必要字段: {data}")
+                    return
+                    
+                await data_store.update_market_data(
+                    data["exchange"],
+                    data["symbol"],
+                    data
+                )
+                    
+            except Exception as e:
+                logger.error(f"[{self.exchange}] 数据存储失败: {e}")
+        
+        return default_callback
         
     async def initialize(self, symbols: List[str]):
         """🚀 并发初始化 + 修复OKX单连接过载"""
-        # 🚨【检查】确保有数据回调
-        if not self.data_callback:
-            logger.error(f"[{self.exchange}] 错误：没有数据回调，无法初始化连接池")
-            return False
-            
         self.symbols = symbols
         
         # 🚨【关键修复】使用正确的配置名
@@ -116,7 +127,6 @@ class ExchangeWebSocketPool:
         logger.info(f"[{self.exchange}] 健康检查已启动")
         
         logger.info(f"[{self.exchange}] 连接池初始化全部完成！")
-        return True
 
     async def _enforce_monitor_scheduler(self):
         """强制确保监控调度器运行"""

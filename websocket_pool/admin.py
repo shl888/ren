@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, Callable
 from datetime import datetime
 
 # 模块内部导入
-from .pool_manager import WebSocketPoolManager
+from .pool_manager import WebSocketPoolManager, default_data_callback
 from .monitor import ConnectionMonitor
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,21 @@ class WebSocketAdmin:
     """WebSocket模块管理员"""
     
     def __init__(self, data_callback: Optional[Callable] = None):
-        self._pool_manager = WebSocketPoolManager(data_callback)
+        """
+        初始化WebSocket管理员
+        
+        Args:
+            data_callback: 如果为None，使用pool_manager.default_data_callback
+        """
+        # 🚨 关键：使用pool_manager的默认回调
+        if data_callback is None:
+            self.data_callback = default_data_callback
+            logger.info("WebSocketAdmin 使用 pool_manager.default_data_callback")
+        else:
+            self.data_callback = data_callback
+            logger.info(f"WebSocketAdmin 使用自定义回调: {data_callback.__name__}")
+        
+        self._pool_manager = WebSocketPoolManager(self.data_callback)  # 🚨 传递正确的回调
         self._monitor = ConnectionMonitor(self._pool_manager)
         
         self._running = False

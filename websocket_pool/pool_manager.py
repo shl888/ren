@@ -24,43 +24,56 @@ logger = logging.getLogger(__name__)
 
 # ============ 【修复：默认数据回调函数 - 支持原始数据】============
 async def default_data_callback(data):
-    """
-    默认数据回调函数 - 将WebSocket接收的原始数据直接存入共享存储
-    这是数据流的关键节点：WebSocket → 此函数 → data_store
-    现在data包含完整的raw_data字段
-    """
+    """默认数据回调函数 - 原始数据直接进入data_store"""
     try:
-        # 验证数据有效性
         if not data:
+            logger.debug("[数据回调] 收到空数据")
             return
             
         exchange = data.get("exchange", "")
         symbol = data.get("symbol", "")
+        data_type = data.get("data_type", "unknown")
         
         if not exchange:
-            logger.error(f"数据缺少exchange字段: {data}")
+            logger.warning(f"[数据回调] 数据缺少exchange字段: {data}")
             return
         if not symbol:
-            logger.error(f"数据缺少symbol字段: {data}")
+            logger.warning(f"[数据回调] 数据缺少symbol字段: {data}")
             return
         
-        # ✅【关键修复】直接调用 data_store.update_market_data
-        # 传递三个参数：exchange, symbol, data
-        # 现在data包含完整的raw_data字段和原始数据
+        # 🚨 计数器
+        default_data_callback.counter = getattr(default_data_callback, 'counter', 0) + 1
+        
+        # 🚨 调整日志频率：每100条记录一次
+        if default_data_callback.counter % 100 == 0:
+            logger.info(
+                f"📥 [原始数据#{default_data_callback.counter}] "
+                f"{exchange} {symbol} ({data_type})"
+            )
+        
+        # 🚨 第一条数据特别记录
+        if default_data_callback.counter == 1:
+            logger.info(f"🎉 第一条原始数据进入data_store: {exchange} {symbol}")
+            logger.info(f"📋 数据格式: {list(data.keys())[:5]}...")  # 只显示前5个键
+        
+        # 🚨 关键：直接存储到data_store（不过大脑）
         await data_store.update_market_data(exchange, symbol, data)
         
-        # 记录日志（每10条记录一次，避免日志过多）
-        default_data_callback.counter = getattr(default_data_callback, 'counter', 0) + 1
-        if default_data_callback.counter % 10 == 0:
-            logger.info(f"[数据回调] 已收到 {default_data_callback.counter} 条原始数据，最新: {exchange} {symbol}")
+        # 🚨 调试：每500条显示一次数据样例
+        if default_data_callback.counter % 500 == 0:
+            logger.debug(f"[数据回调] 数据样例 #{default_data_callback.counter}:")
+            logger.debug(f"  exchange: {exchange}")
+            logger.debug(f"  symbol: {symbol}")
+            logger.debug(f"  data_type: {data_type}")
+            if "raw_data" in data:
+                logger.debug(f"  包含raw_data字段")
             
     except TypeError as e:
-        # 如果参数错误，记录详细错误信息
-        logger.error(f"回调参数错误: {e}，数据格式可能不正确")
-        logger.error(f"数据内容: exchange={data.get('exchange')}, symbol={data.get('symbol')}")
-        logger.error(f"数据keys: {list(data.keys())}")
+        logger.error(f"[数据回调] 参数错误: {e}")
+        logger.error(f"数据内容: {data}")
     except Exception as e:
-        logger.error(f"数据回调函数错误: {e}，数据: {data}")
+        logger.error(f"[数据回调] 存储失败: {e}")
+        logger.error(f"失败数据: exchange={exchange}, symbol={symbol}")
 
 # ============ 【WebSocket连接池管理器类】============
 class WebSocketPoolManager:
