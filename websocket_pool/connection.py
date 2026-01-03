@@ -1,15 +1,16 @@
 """
 单个WebSocket连接实现 - 支持角色互换
 支持自动重连、数据解析、状态管理 - 修复心跳&阻塞BUG
+计时日志版（每分钟记录一次状态）
 """
 import asyncio
 import json
 import logging
+import time  # 🚨 新增导入
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import websockets
 import aiohttp
-import time
 
 # 🚨 新增导入 - 合约收集器
 try:
@@ -61,9 +62,9 @@ class WebSocketConnection:
         self.receive_task = None
         self.delayed_subscribe_task = None
         
-        # 🚨 【关键修复】每个连接独立的计数器
-        self.ticker_count = 0          # 币安ticker计数
-        self.okx_ticker_count = 0      # OKX ticker计数
+        # 🚨【修改】移除计数器，改为计时器
+        self.last_status_log_time = time.time()  # 上次记录状态的时间
+        self.status_log_interval = 60  # 状态日志间隔（秒），改为60秒
         
         # 连接配置
         # 🚨【致命修复】OKX必须3秒心跳，否则5秒就被服务器踢
@@ -476,7 +477,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 处理消息错误: {e}")
     
     async def _process_binance_message(self, data):
-        """处理币安消息 - 完全保留原始数据，不做任何过滤"""
+        """处理币安消息 - 计时日志版"""
         # 订阅响应
         if "result" in data or "id" in data:
             return
@@ -488,11 +489,14 @@ class WebSocketConnection:
             if not symbol:
                 return
             
-            # 🚨【关键修复】使用每个连接独立的计数器
-            self.ticker_count += 1
-            
-            if self.ticker_count % 5000 == 0:
-                logger.info(f"[{self.connection_id}] 已收到 {self.ticker_count} 个ticker消息")
+            # 🚨【关键】计时检查 - 每分钟记录一次状态
+            current_time = time.time()
+            if current_time - self.last_status_log_time >= self.status_log_interval:
+                logger.info(f"[{self.connection_id}] {self.connection_type}连接运行中，"
+                          f"订阅 {len(self.symbols)} 个合约，"
+                          f"当前处理: {symbol}，"
+                          f"连接状态: connected={self.connected}, subscribed={self.subscribed}")
+                self.last_status_log_time = current_time
             
             # 🚨【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -535,11 +539,7 @@ class WebSocketConnection:
                 logger.error(f"[{self.connection_id}] 数据回调失败: {e}")
     
     async def _process_okx_message(self, data):
-        """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
-        # 🚨 新增：资金费率计数器
-        if not hasattr(self, 'funding_rate_count'):
-            self.funding_rate_count = 0
-        
+        """处理欧意消息 - 计时日志版"""
         # 🚨 打印所有事件消息用于诊断
         if data.get("event"):
             event_type = data.get("event")
@@ -563,6 +563,16 @@ class WebSocketConnection:
         symbol = arg.get("instId", "")
         
         try:
+            # 🚨【关键】计时检查 - 每分钟记录一次状态
+            current_time = time.time()
+            if current_time - self.last_status_log_time >= self.status_log_interval:
+                logger.info(f"[{self.connection_id}] {self.connection_type}连接运行中，"
+                          f"订阅 {len(self.symbols)} 个合约，"
+                          f"当前频道: {channel}，"
+                          f"当前处理: {symbol}，"
+                          f"连接状态: connected={self.connected}, subscribed={self.subscribed}")
+                self.last_status_log_time = current_time
+            
             if channel == "funding-rate":
                 if data.get("data") and len(data["data"]) > 0:
                     funding_data = data["data"][0]
@@ -574,12 +584,6 @@ class WebSocketConnection:
                             add_symbol_from_websocket("okx", processed_symbol)
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
-                    
-                    # 🚨【修改】计数器增加，每500条打印一次
-                    self.funding_rate_count += 1
-                    
-                    if self.funding_rate_count % 500 == 0:
-                        logger.info(f"[{self.connection_id}] 已收到 {self.funding_rate_count} 条资金费率数据")
                     
                     # 🚨【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -598,13 +602,6 @@ class WebSocketConnection:
                     
             elif channel == "tickers":
                 if data.get("data") and len(data["data"]) > 0:
-                    # 🚨【关键修复】每个连接独立的计数器
-                    self.okx_ticker_count += 1
-                    
-                    # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
-                    if self.okx_ticker_count % 5000 == 0:
-                        logger.info(f"[{self.connection_id}] 已收到 {self.okx_ticker_count} 个OKX ticker")
-                    
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
                     # 🚨【关键修复】完全保留原始ticker数据
