@@ -283,7 +283,7 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环 - 🚨【关键修复】软健康检查防误报"""
+        """监控调度循环 - 🚨【关键修复】软健康检查 + 订阅状态感知"""
         logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
         
         # 跟踪重连次数用于退避
@@ -324,19 +324,31 @@ class ExchangeWebSocketPool:
                         # 🚨【关键】健康时重置计数
                         reconnect_attempts[master_conn.connection_id] = 0
                 
-                # 2. 监控温备连接（带软健康检查 + 指数退避）
+                # 2. 监控温备连接（带订阅状态感知 + 软健康检查）
                 for i, warm_conn in enumerate(self.warm_standby_connections):
-                    # 🚨【关键修复】结合 last_message_seconds_ago 判断，避免误报
+                    # 🚨【关键修复】如果温备还在延迟订阅等待期，跳过消息活跃度检查
+                    if not warm_conn.subscribed:
+                        # 还没订阅，只检查连接状态
+                        if not warm_conn.connected:
+                            logger.warning(
+                                f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}) "
+                                f"已断开，但还在订阅等待期，立即重连"
+                            )
+                            await warm_conn.connect()
+                        # 🚨【关键】跳过下面的消息超时检查
+                        continue
+                    
+                    # 🚨【原有的软健康检查】只对已订阅的连接生效
                     is_healthy = (
                         warm_conn.connected and 
-                        warm_conn.last_message_seconds_ago < 10  # 10秒内收到过消息就认为是健康的
+                        warm_conn.last_message_seconds_ago < 10  # 10秒内收到过消息
                     )
                     
                     if not is_healthy:
                         attempts = reconnect_attempts[warm_conn.connection_id]
                         wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
                         
-                        # 🚨【增强日志】显示详细信息，方便排查
+                        # 🚨【增强日志】显示详细信息
                         logger.warning(
                             f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}, "
                             f"当前角色: {warm_conn.connection_type}) 健康检查失败，"
