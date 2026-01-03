@@ -492,7 +492,7 @@ class WebSocketConnection:
             self.ticker_count += 1
             
             if self.ticker_count % 10000 == 0:
-                logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个ticker消息")
+                logger.info(f"[{self.connection_id}] 已收到 {self.ticker_count} 个ticker消息")
             
             # 🚨【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -579,7 +579,7 @@ class WebSocketConnection:
                     self.funding_rate_count += 1
                     
                     if self.funding_rate_count % 10000 == 0:
-                        logger.info(f"[{self.connection_id}] 已处理 {self.funding_rate_count} 条资金费率数据")
+                        logger.info(f"[{self.connection_id}] 已收到 {self.funding_rate_count} 条资金费率数据")
                     
                     # 🚨【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -603,7 +603,7 @@ class WebSocketConnection:
                     
                     # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
                     if self.okx_ticker_count % 10000 == 0:
-                        logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
+                        logger.info(f"[{self.connection_id}] 已收到 {self.okx_ticker_count} 个OKX ticker")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
