@@ -24,10 +24,13 @@ logger = logging.getLogger(__name__)
 
 # ============ 【固定数据回调函数】============
 async def default_data_callback(data):
-    """默认数据回调函数 - 原始数据直接进入data_store"""
+    """默认数据回调函数 - 原始数据直接进入data_store - 增强日志版"""
     try:
+        # 🚨【关键修复】强制在最开始记录，确保在任何配置下都能看到
+        logger.critical(f"🔔【数据回调开始】 exchange={data.get('exchange', 'unknown')}, symbol={data.get('symbol', 'unknown')}")
+        
         if not data:
-            logger.debug("[数据回调] 收到空数据")
+            logger.error("[数据回调] 收到空数据")
             return
             
         exchange = data.get("exchange", "")
@@ -35,38 +38,45 @@ async def default_data_callback(data):
         data_type = data.get("data_type", "unknown")
         
         if not exchange:
-            logger.warning(f"[数据回调] 数据缺少exchange字段: {data}")
+            logger.error(f"[数据回调] 数据缺少exchange字段: {data}")
             return
         if not symbol:
-            logger.warning(f"[数据回调] 数据缺少symbol字段: {data}")
+            logger.error(f"[数据回调] 数据缺少symbol字段: {data}")
             return
         
         # 🚨 计数器
-        default_data_callback.counter = getattr(default_data_callback, 'counter', 0) + 1
+        if not hasattr(default_data_callback, 'counter'):
+            default_data_callback.counter = 0
+            logger.critical(f"🎯【数据回调初始化】计数器创建，初始值: 0")
         
-        # 🚨 调整日志频率：每100条记录一次
-        if default_data_callback.counter % 100 == 0:
-            logger.info(
-                f"📥 [原始数据#{default_data_callback.counter}] "
-                f"{exchange} {symbol} ({data_type})"
+        default_data_callback.counter += 1
+        
+        # 🚨【关键修复】第一条数据使用CRITICAL级别
+        if default_data_callback.counter == 1:
+            logger.critical(f"🎉🎉🎉【第一条数据】进入data_store: {exchange} {symbol} ({data_type})")
+            logger.critical(f"📋 数据格式: {list(data.keys())[:5]}...")
+        
+        # 🚨【关键修复】每50条数据使用ERROR级别记录
+        if default_data_callback.counter % 50 == 0:
+            logger.error(
+                f"📥 [数据回调#{default_data_callback.counter}] "
+                f"{exchange} {symbol} ({data_type}) - 已进入data_store"
             )
         
-        # 🚨 第一条数据特别记录
-        if default_data_callback.counter == 1:
-            logger.info(f"🎉 第一条原始数据进入data_store: {exchange} {symbol}")
-            logger.info(f"📋 数据格式: {list(data.keys())[:5]}...")  # 只显示前5个键
+        # 🚨【关键修复】每200条显示一次汇总统计
+        if default_data_callback.counter % 200 == 0:
+            logger.error(f"📊【数据统计】已处理 {default_data_callback.counter} 条数据")
         
         # 🚨 关键：直接存储到data_store（不过大脑）
-        await data_store.update_market_data(exchange, symbol, data)
+        store_result = await data_store.update_market_data(exchange, symbol, data)
         
-        # 🚨 调试：每500条显示一次数据样例
-        if default_data_callback.counter % 500 == 0:
-            logger.debug(f"[数据回调] 数据样例 #{default_data_callback.counter}:")
-            logger.debug(f"  exchange: {exchange}")
-            logger.debug(f"  symbol: {symbol}")
-            logger.debug(f"  data_type: {data_type}")
-            if "raw_data" in data:
-                logger.debug(f"  包含raw_data字段")
+        # 🚨【新增】存储结果确认日志
+        if default_data_callback.counter % 100 == 0:
+            logger.error(f"💾【存储确认】第{default_data_callback.counter}条数据已存入data_store")
+        
+        # 🚨【新增】每1000条重置计数器显示（防止数字过大）
+        if default_data_callback.counter % 1000 == 0:
+            logger.critical(f"🏆【里程碑】已成功处理 {default_data_callback.counter} 条WebSocket数据")
             
     except TypeError as e:
         logger.error(f"[数据回调] 参数错误: {e}")
