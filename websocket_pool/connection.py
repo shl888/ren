@@ -63,10 +63,6 @@ class WebSocketConnection:
         self.delayed_subscribe_task = None
         self.status_log_task = None  # 🚨 新增：状态日志任务
         
-        # 🚨【完全移除】计时器变量
-        # self.last_status_log_time = time.time()
-        # self.status_log_interval = 60
-        
         # 连接配置
         # 🚨【致命修复】OKX必须3秒心跳，否则5秒就被服务器踢
         if exchange == "okx":
@@ -150,7 +146,7 @@ class WebSocketConnection:
             return False
     
     async def _periodic_status_log(self):
-        """🚨【新增】独立状态日志任务 - 每分钟记录一次"""
+        """🚨【新增】独立状态日志任务 - 每分钟记录一次（合并为单行日志）"""
         logger.debug(f"[{self.connection_id}] 状态日志任务启动")
         
         while self.connected:
@@ -161,13 +157,18 @@ class WebSocketConnection:
                     # 准备状态信息
                     last_msg_ago = self.last_message_seconds_ago
                     
-                    logger.info(f"[{self.connection_id}] {self.connection_type}连接状态:")
-                    logger.info(f"  - 订阅合约: {len(self.symbols)} 个")
-                    logger.info(f"  - 连接状态: connected={self.connected}")
-                    logger.info(f"  - 订阅状态: subscribed={self.subscribed}")
-                    logger.info(f"  - 活跃状态: is_active={self.is_active}")
-                    logger.info(f"  - 上次消息: {last_msg_ago:.1f} 秒前")
-                    logger.info(f"  - 重连次数: {self.reconnect_count}")
+                    # 🚨【关键修复】合并为单行日志，避免交错
+                    status_message = (
+                        f"[{self.connection_id}] {self.connection_type}连接状态: "
+                        f"订阅{len(self.symbols)}个合约, "
+                        f"连接={self.connected}, "
+                        f"订阅={self.subscribed}, "
+                        f"活跃={self.is_active}, "
+                        f"上次消息={last_msg_ago:.1f}秒前, "
+                        f"重连={self.reconnect_count}次"
+                    )
+                    
+                    logger.info(status_message)
                     
             except asyncio.CancelledError:
                 logger.debug(f"[{self.connection_id}] 状态日志任务被取消")

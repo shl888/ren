@@ -23,9 +23,9 @@ from .static_symbols import STATIC_SYMBOLS  # 导入静态合约
 
 logger = logging.getLogger(__name__)
 
-# 🚨【新增】独立的状态日志任务函数
+# ============ 【修复：默认数据回调函数 - 支持原始数据 - 计时日志版】============
 async def _data_callback_status_logger():
-    """独立的数据回调状态日志任务"""
+    """🚨【新增】独立的数据回调状态日志任务（合并为单行日志）"""
     logger.info("[数据回调] 状态日志任务启动")
     
     while True:
@@ -37,10 +37,14 @@ async def _data_callback_status_logger():
                 interval_count = default_data_callback._interval_count
                 total_count = getattr(default_data_callback, '_total_count', 0)
                 
-                if interval_count > 0:  # 只在有数据时记录
-                    logger.info(f"[数据回调] 状态报告:")
-                    logger.info(f"  - 1分钟内处理: {interval_count} 条数据")
-                    logger.info(f"  - 累计处理: {total_count} 条数据")
+                # 🚨【关键修复】合并为单行日志
+                status_message = (
+                    f"[数据回调] 状态报告: "
+                    f"1分钟处理={interval_count}条, "
+                    f"累计处理={total_count}条"
+                )
+                
+                logger.info(status_message)
                 
                 # 重置间隔计数器
                 default_data_callback._interval_count = 0
@@ -49,7 +53,6 @@ async def _data_callback_status_logger():
             logger.error(f"[数据回调] 状态日志错误: {e}")
             await asyncio.sleep(10)
 
-# ============ 【修复：默认数据回调函数 - 支持原始数据 - 计时日志版】============
 async def default_data_callback(data):
     """
     默认数据回调函数 - 将WebSocket接收的原始数据直接存入共享存储
