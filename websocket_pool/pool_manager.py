@@ -58,7 +58,7 @@ async def default_data_callback(data):
         
         # 3. 每50000条里程碑 - 长期运行监控
         if default_data_callback.counter % 50000 == 0:
-            logger.info(f"🏆【数据回调里程碑】已成功接收 {default_data_callback.counter} 条数据")
+            logger.info(f"🏆【数据回调里程碑】{default_data_callback.counter} 条数据,已存储到data_store")
         
         # 🚨 关键：直接存储到data_store（不过大脑）
         await data_store.update_market_data(exchange, symbol, data)
