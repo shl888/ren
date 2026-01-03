@@ -22,7 +22,7 @@ from .static_symbols import STATIC_SYMBOLS  # 导入静态合约
 
 logger = logging.getLogger(__name__)
 
-# ============ 【修复：默认数据回调函数 - 支持原始数据】============
+# ============ 【固定数据回调函数】============
 async def default_data_callback(data):
     """默认数据回调函数 - 原始数据直接进入data_store"""
     try:
@@ -79,26 +79,18 @@ async def default_data_callback(data):
 class WebSocketPoolManager:
     """WebSocket连接池管理器"""
     
-    def __init__(self, data_callback=None):  # ✅ 修改：参数改为可选
-        """
-        初始化连接池管理器
-        
-        参数:
-            data_callback: 数据回调函数，如果为None则使用默认回调
-        """
-        # ✅【关键修改】优先使用传入的回调，如果没有则使用默认回调
-        if data_callback:
-            self.data_callback = data_callback
-            logger.info(f"WebSocketPoolManager 使用自定义数据回调")
-        else:
-            # 使用我们修复的默认回调（支持原始数据）
-            self.data_callback = default_data_callback
-            logger.info(f"WebSocketPoolManager 使用默认数据回调（直接对接共享数据模块，支持原始数据）")
+    def __init__(self):  # 🚨 移除回调参数
+        """初始化连接池管理器 - 固定使用default_data_callback"""
+        # 🚨 永远使用内部默认回调
+        self.data_callback = default_data_callback
         
         self.exchange_pools = {}  # exchange_name -> ExchangeWebSocketPool
         self.initialized = False
-        self._initializing = False  # ✅ 新增：初始化状态跟踪
-        self._shutting_down = False  # ✅ 新增：关闭状态跟踪
+        self._initializing = False
+        self._shutting_down = False
+        
+        logger.info("✅ WebSocketPoolManager 初始化完成")
+        logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
         
     async def initialize(self):
         """初始化所有交易所连接池 - 防重入版"""
@@ -155,7 +147,7 @@ class WebSocketPoolManager:
             
             # 3. 初始化连接池
             logger.info(f"[{exchange_name}] 初始化连接池...")
-            pool = ExchangeWebSocketPool(exchange_name, self.data_callback)  # ✅ 这里使用正确的回调
+            pool = ExchangeWebSocketPool(exchange_name, self.data_callback)  # 使用内部回调
             await pool.initialize(symbols)
             self.exchange_pools[exchange_name] = pool
             

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import sys
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 from datetime import datetime
 
 # 设置导入路径
@@ -24,13 +24,10 @@ logger = logging.getLogger(__name__)
 class ExchangeWebSocketPool:
     """单个交易所的WebSocket连接池 - 监控调度版"""
     
-    def __init__(self, exchange: str, data_callback=None):
+    def __init__(self, exchange: str, data_callback):
         self.exchange = exchange
-        # 使用传入的回调，如果没有则创建默认回调
-        if data_callback:
-            self.data_callback = data_callback
-        else:
-            self.data_callback = self._create_default_callback()
+        # 🚨 直接使用传入的回调（从pool_manager传入的default_data_callback）
+        self.data_callback = data_callback
             
         self.config = EXCHANGE_CONFIGS.get(exchange, {})
         
@@ -49,25 +46,6 @@ class ExchangeWebSocketPool:
         
         logger.info(f"[{self.exchange}] ExchangeWebSocketPool 初始化完成")
 
-    def _create_default_callback(self):
-        """创建默认回调函数，直接对接共享数据模块"""
-        async def default_callback(data):
-            try:
-                if "exchange" not in data or "symbol" not in data:
-                    logger.warning(f"[{self.exchange}] 数据缺少必要字段: {data}")
-                    return
-                    
-                await data_store.update_market_data(
-                    data["exchange"],
-                    data["symbol"],
-                    data
-                )
-                    
-            except Exception as e:
-                logger.error(f"[{self.exchange}] 数据存储失败: {e}")
-        
-        return default_callback
-        
     async def initialize(self, symbols: List[str]):
         """🚀 并发初始化 + 修复OKX单连接过载"""
         self.symbols = symbols
@@ -171,7 +149,7 @@ class ExchangeWebSocketPool:
                 ws_url=ws_url,
                 connection_id=conn_id,
                 connection_type=ConnectionType.MASTER,
-                data_callback=self.data_callback,
+                data_callback=self.data_callback,  # 🚨 使用内部回调
                 symbols=symbol_group
             )
             
@@ -204,7 +182,7 @@ class ExchangeWebSocketPool:
                 ws_url=ws_url,
                 connection_id=conn_id,
                 connection_type=ConnectionType.WARM_STANDBY,
-                data_callback=self.data_callback,
+                data_callback=self.data_callback,  # 🚨 使用内部回调
                 symbols=heartbeat_symbols
             )
             
@@ -256,7 +234,7 @@ class ExchangeWebSocketPool:
                     ws_url=ws_url,
                     connection_id=conn_id,
                     connection_type=ConnectionType.MONITOR,
-                    data_callback=self.data_callback,
+                    data_callback=self.data_callback,  # 🚨 使用内部回调
                     symbols=[]
                 )
                 
@@ -398,7 +376,7 @@ class ExchangeWebSocketPool:
             ws_url=ws_url,
             connection_id=f"{self.exchange}_master_{master_index}",  # 保持相同ID
             connection_type=ConnectionType.MASTER,
-            data_callback=self.data_callback,
+            data_callback=self.data_callback,  # 🚨 使用内部回调
             symbols=symbols
         )
         
