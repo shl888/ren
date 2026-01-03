@@ -44,27 +44,27 @@ async def default_data_callback(data):
         # 🚨 计数器
         if not hasattr(default_data_callback, 'counter'):
             default_data_callback.counter = 0
-            logger.info(f"🎯【数据回调初始化】计数器创建")
+            logger.info(f"💫【数据回调初始化】计数器创建")
         
         default_data_callback.counter += 1
         
         # 1. 第一条数据（重要） - 确认系统启动
         if default_data_callback.counter == 1:
-            logger.info(f"🎉【第一条数据】{exchange} {symbol} ({data_type})")
+            logger.info(f"🎉【数据回调第一条数据】{exchange} {symbol} ({data_type})")
         
         # 2. 每5000条记录一次数据流动 - 监控数据持续流动
         if default_data_callback.counter % 5000 == 0:
-            logger.info(f"📥 已处理{default_data_callback.counter}条数据 - 最新: {exchange} {symbol}")
+            logger.info(f"✅【数据回调已接收】{default_data_callback.counter}条数据 - 最新: {exchange} {symbol}")
         
         # 3. 每50000条里程碑 - 长期运行监控
         if default_data_callback.counter % 50000 == 0:
-            logger.info(f"🏆【里程碑】已成功处理 {default_data_callback.counter} 条数据")
+            logger.info(f"🏆【数据回调里程碑】已成功接收 {default_data_callback.counter} 条数据")
         
         # 🚨 关键：直接存储到data_store（不过大脑）
         await data_store.update_market_data(exchange, symbol, data)
             
     except Exception as e:
-        logger.error(f"[数据回调] 存储失败: {e}")
+        logger.error(f"⚠️[数据回调] 存储失败: {e}")
         logger.error(f"失败数据: exchange={exchange}, symbol={symbol}")
 
 # ============ 【WebSocket连接池管理器类】============
