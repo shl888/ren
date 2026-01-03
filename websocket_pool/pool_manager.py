@@ -23,6 +23,32 @@ from .static_symbols import STATIC_SYMBOLS  # 导入静态合约
 
 logger = logging.getLogger(__name__)
 
+# 🚨【新增】独立的状态日志任务函数
+async def _data_callback_status_logger():
+    """独立的数据回调状态日志任务"""
+    logger.info("[数据回调] 状态日志任务启动")
+    
+    while True:
+        try:
+            await asyncio.sleep(60)  # 每分钟记录一次
+            
+            # 检查是否有数据统计
+            if hasattr(default_data_callback, '_interval_count'):
+                interval_count = default_data_callback._interval_count
+                total_count = getattr(default_data_callback, '_total_count', 0)
+                
+                if interval_count > 0:  # 只在有数据时记录
+                    logger.info(f"[数据回调] 状态报告:")
+                    logger.info(f"  - 1分钟内处理: {interval_count} 条数据")
+                    logger.info(f"  - 累计处理: {total_count} 条数据")
+                
+                # 重置间隔计数器
+                default_data_callback._interval_count = 0
+                
+        except Exception as e:
+            logger.error(f"[数据回调] 状态日志错误: {e}")
+            await asyncio.sleep(10)
+
 # ============ 【修复：默认数据回调函数 - 支持原始数据 - 计时日志版】============
 async def default_data_callback(data):
     """
@@ -47,29 +73,18 @@ async def default_data_callback(data):
         # ✅【关键修复】直接调用 data_store.update_market_data
         await data_store.update_market_data(exchange, symbol, data)
         
-        # 🚨【计时日志方式】每分钟记录一次状态
-        current_time = time.time()
-        
-        # 初始化计时器
-        if not hasattr(default_data_callback, '_last_log_time'):
-            default_data_callback._last_log_time = current_time
+        # 🚨【简化的计数器】只计数，不检查时间
+        if not hasattr(default_data_callback, '_initialized'):
+            # 第一次调用时初始化
+            default_data_callback._interval_count = 0
             default_data_callback._total_count = 0
-            default_data_callback._interval_count = 0
+            default_data_callback._initialized = True
+            # 启动独立的状态日志任务
+            asyncio.create_task(_data_callback_status_logger())
         
-        default_data_callback._total_count += 1
+        # 更新计数器
         default_data_callback._interval_count += 1
-        
-        # 每分钟记录一次（60秒）
-        if current_time - default_data_callback._last_log_time >= 60:
-            logger.info(f"[数据回调] 状态报告:")
-            logger.info(f"  - 1分钟内处理: {default_data_callback._interval_count} 条数据")
-            logger.info(f"  - 累计处理: {default_data_callback._total_count} 条数据")
-            logger.info(f"  - 最新数据: {exchange} {symbol}")
-            logger.info(f"  - 数据来源: {data.get('data_type', 'unknown')}")
-            
-            # 重置间隔计数器
-            default_data_callback._last_log_time = current_time
-            default_data_callback._interval_count = 0
+        default_data_callback._total_count += 1
             
     except TypeError as e:
         # 如果参数错误，记录详细错误信息

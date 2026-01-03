@@ -1,12 +1,12 @@
 """
 单个WebSocket连接实现 - 支持角色互换
 支持自动重连、数据解析、状态管理 - 修复心跳&阻塞BUG
-计时日志版（每分钟记录一次状态）
+独立计时日志版（每分钟记录一次状态）
 """
 import asyncio
 import json
 import logging
-import time  # 🚨 新增导入
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 import websockets
@@ -61,10 +61,11 @@ class WebSocketConnection:
         self.keepalive_task = None
         self.receive_task = None
         self.delayed_subscribe_task = None
+        self.status_log_task = None  # 🚨 新增：状态日志任务
         
-        # 🚨【修改】移除计数器，改为计时器
-        self.last_status_log_time = time.time()  # 上次记录状态的时间
-        self.status_log_interval = 60  # 状态日志间隔（秒），改为60秒
+        # 🚨【完全移除】计时器变量
+        # self.last_status_log_time = time.time()
+        # self.status_log_interval = 60
         
         # 连接配置
         # 🚨【致命修复】OKX必须3秒心跳，否则5秒就被服务器踢
@@ -105,6 +106,9 @@ class WebSocketConnection:
             # 🚨【关键】启动持续保活任务（一直运行，不取消）
             self.keepalive_task = asyncio.create_task(self._periodic_ping())
             
+            # 🚨【关键新增】启动独立状态日志任务
+            self.status_log_task = asyncio.create_task(self._periodic_status_log())
+            
             # 🚨【关键修复】只有主连接立即订阅（保持原来逻辑）
             if self.connection_type == ConnectionType.MASTER and self.symbols:
                 subscribe_success = await self._subscribe()
@@ -144,6 +148,33 @@ class WebSocketConnection:
             self.connected = False
             self.subscribed = False
             return False
+    
+    async def _periodic_status_log(self):
+        """🚨【新增】独立状态日志任务 - 每分钟记录一次"""
+        logger.debug(f"[{self.connection_id}] 状态日志任务启动")
+        
+        while self.connected:
+            try:
+                await asyncio.sleep(60)  # 每分钟记录一次
+                
+                if self.connected:
+                    # 准备状态信息
+                    last_msg_ago = self.last_message_seconds_ago
+                    
+                    logger.info(f"[{self.connection_id}] {self.connection_type}连接状态:")
+                    logger.info(f"  - 订阅合约: {len(self.symbols)} 个")
+                    logger.info(f"  - 连接状态: connected={self.connected}")
+                    logger.info(f"  - 订阅状态: subscribed={self.subscribed}")
+                    logger.info(f"  - 活跃状态: is_active={self.is_active}")
+                    logger.info(f"  - 上次消息: {last_msg_ago:.1f} 秒前")
+                    logger.info(f"  - 重连次数: {self.reconnect_count}")
+                    
+            except asyncio.CancelledError:
+                logger.debug(f"[{self.connection_id}] 状态日志任务被取消")
+                break
+            except Exception as e:
+                logger.error(f"[{self.connection_id}] 状态日志错误: {e}")
+                await asyncio.sleep(10)
     
     def _get_delay_for_warm_standby(self):
         """根据连接ID获取延迟时间，错开订阅"""
@@ -477,7 +508,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 处理消息错误: {e}")
     
     async def _process_binance_message(self, data):
-        """处理币安消息 - 计时日志版"""
+        """处理币安消息 - 移除计时检查"""
         # 订阅响应
         if "result" in data or "id" in data:
             return
@@ -489,14 +520,8 @@ class WebSocketConnection:
             if not symbol:
                 return
             
-            # 🚨【关键】计时检查 - 每分钟记录一次状态
-            current_time = time.time()
-            if current_time - self.last_status_log_time >= self.status_log_interval:
-                logger.info(f"[{self.connection_id}] {self.connection_type}连接运行中，"
-                          f"订阅 {len(self.symbols)} 个合约，"
-                          f"当前处理: {symbol}，"
-                          f"连接状态: connected={self.connected}, subscribed={self.subscribed}")
-                self.last_status_log_time = current_time
+            # 🚨【完全移除】原来的计时检查代码
+            # 现在由独立的 _periodic_status_log 任务处理
             
             # 🚨【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
@@ -539,7 +564,7 @@ class WebSocketConnection:
                 logger.error(f"[{self.connection_id}] 数据回调失败: {e}")
     
     async def _process_okx_message(self, data):
-        """处理欧意消息 - 计时日志版"""
+        """处理欧意消息 - 移除计时检查"""
         # 🚨 打印所有事件消息用于诊断
         if data.get("event"):
             event_type = data.get("event")
@@ -563,15 +588,8 @@ class WebSocketConnection:
         symbol = arg.get("instId", "")
         
         try:
-            # 🚨【关键】计时检查 - 每分钟记录一次状态
-            current_time = time.time()
-            if current_time - self.last_status_log_time >= self.status_log_interval:
-                logger.info(f"[{self.connection_id}] {self.connection_type}连接运行中，"
-                          f"订阅 {len(self.symbols)} 个合约，"
-                          f"当前频道: {channel}，"
-                          f"当前处理: {symbol}，"
-                          f"连接状态: connected={self.connected}, subscribed={self.subscribed}")
-                self.last_status_log_time = current_time
+            # 🚨【完全移除】原来的计时检查代码
+            # 现在由独立的 _periodic_status_log 任务处理
             
             if channel == "funding-rate":
                 if data.get("data") and len(data["data"]) > 0:
@@ -625,6 +643,12 @@ class WebSocketConnection:
     async def disconnect(self):
         """断开连接"""
         try:
+            # 🚨【新增】取消状态日志任务
+            if self.status_log_task:
+                self.status_log_task.cancel()
+                self.status_log_task = None
+                logger.debug(f"[{self.connection_id}] 状态日志任务已取消")
+            
             # 🚨 修复：取消延迟订阅任务
             if self.delayed_subscribe_task:
                 self.delayed_subscribe_task.cancel()
@@ -652,7 +676,6 @@ class WebSocketConnection:
             logger.info(f"[{self.connection_id}] 连接已完全断开")
             
         except Exception as e:
-            # 🚨 修复：SyntaxError - 确保字符串正确闭合
             logger.error(f"[{self.connection_id}] 断开连接时发生错误: {e}")
     
     @property
