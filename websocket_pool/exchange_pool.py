@@ -1,6 +1,6 @@
 """
 单个交易所的连接池管理 - 监控调度版
-修复：并发初始化 + 强制后置检查 + 完整日志恢复 + 退避重连
+修复：并发初始化 + 强制后置检查 + 完整日志恢复 + 退避重连 + 软健康检查
 """
 import asyncio
 import logging
@@ -127,7 +127,7 @@ class ExchangeWebSocketPool:
         logger.info(f"[{self.exchange}] 健康检查已启动")
         
         logger.info(f"[{self.exchange}] 连接池初始化全部完成！")
-    
+
     async def _enforce_monitor_scheduler(self):
         """强制确保监控调度器运行"""
         # 检查监控连接是否存在且正常
@@ -283,7 +283,7 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环 - 限流版"""
+        """监控调度循环 - 🚨【关键修复】软健康检查防误报"""
         logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
         
         # 跟踪重连次数用于退避
@@ -292,13 +292,26 @@ class ExchangeWebSocketPool:
         
         while True:
             try:
-                # 1. 监控主连接（带指数退避）
+                # 1. 监控主连接（带软健康检查 + 指数退避）
                 for i, master_conn in enumerate(self.master_connections):
-                    if not master_conn.connected or not master_conn.subscribed:
+                    # 🚨【关键修复】综合判断健康状况，避免误报
+                    is_healthy = (
+                        master_conn.connected and 
+                        master_conn.subscribed and  # 主连接还要检查是否已订阅
+                        master_conn.last_message_seconds_ago < 10  # 10秒内收到过消息
+                    )
+                    
+                    if not is_healthy:
+                        # 🚨【增强日志】显示详细信息
                         if not master_conn.connected:
                             logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} (ID: {master_conn.connection_id}) 断开")
-                        else:
+                        elif not master_conn.subscribed:
                             logger.warning(f"[监控调度] [{self.exchange}] 主连接{i}未订阅成功")
+                        else:
+                            logger.warning(
+                                f"[监控调度] [{self.exchange}] 主连接{i}消息超时 "
+                                f"({master_conn.last_message_seconds_ago:.1f}s)"
+                            )
                         
                         attempts = reconnect_attempts[master_conn.connection_id]
                         wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
@@ -306,20 +319,32 @@ class ExchangeWebSocketPool:
                         await asyncio.sleep(wait_time)
                         reconnect_attempts[master_conn.connection_id] += 1
                         
-                        # 彻底重启连接
                         await self._restart_master_connection(i)
                     else:
-                        # 重置计数
+                        # 🚨【关键】健康时重置计数
                         reconnect_attempts[master_conn.connection_id] = 0
                 
-                # 2. 监控温备连接（带指数退避）
+                # 2. 监控温备连接（带软健康检查 + 指数退避）
                 for i, warm_conn in enumerate(self.warm_standby_connections):
-                    if not warm_conn.connected:
+                    # 🚨【关键修复】结合 last_message_seconds_ago 判断，避免误报
+                    is_healthy = (
+                        warm_conn.connected and 
+                        warm_conn.last_message_seconds_ago < 10  # 10秒内收到过消息就认为是健康的
+                    )
+                    
+                    if not is_healthy:
                         attempts = reconnect_attempts[warm_conn.connection_id]
                         wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
                         
-                        # 🚨【关键修复】显示当前实际角色，而非连接ID中的角色
-                        logger.warning(f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}, 当前角色: {warm_conn.connection_type}) 断开，{wait_time}秒后重试")
+                        # 🚨【增强日志】显示详细信息，方便排查
+                        logger.warning(
+                            f"[监控调度] [{self.exchange}] 温备连接{i} (ID: {warm_conn.connection_id}, "
+                            f"当前角色: {warm_conn.connection_type}) 健康检查失败，"
+                            f"connected={warm_conn.connected}, "
+                            f"last_message_seconds_ago={warm_conn.last_message_seconds_ago:.1f}s, "
+                            f"{wait_time}秒后重试"
+                        )
+                        
                         await asyncio.sleep(wait_time)
                         reconnect_attempts[warm_conn.connection_id] += 1
                         
@@ -328,12 +353,13 @@ class ExchangeWebSocketPool:
                         
                         await warm_conn.connect()
                     else:
+                        # 🚨【关键】健康时重置计数器
                         reconnect_attempts[warm_conn.connection_id] = 0
                 
                 # 3. 定期报告状态
                 await self._report_status_to_data_store()
                 
-                await asyncio.sleep(3)  # 延长检查间隔
+                await asyncio.sleep(3)  # 3秒检查一次
                 
             except Exception as e:
                 logger.error(f"[监控调度] [{self.exchange}] 调度循环错误: {e}")
