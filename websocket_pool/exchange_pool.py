@@ -284,7 +284,7 @@ class ExchangeWebSocketPool:
     
     async def _monitor_scheduling_loop(self):
         """监控调度循环 - 限流版"""
-        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每8秒检查一次")
+        logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
         
         # 跟踪重连次数用于退避
         reconnect_attempts = {conn.connection_id: 0 for conn in 
@@ -333,7 +333,7 @@ class ExchangeWebSocketPool:
                 # 3. 定期报告状态
                 await self._report_status_to_data_store()
                 
-                await asyncio.sleep(8)  # 延长检查间隔
+                await asyncio.sleep(3)  # 延长检查间隔
                 
             except Exception as e:
                 logger.error(f"[监控调度] [{self.exchange}] 调度循环错误: {e}")

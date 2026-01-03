@@ -1,6 +1,6 @@
 """
 单个WebSocket连接实现 - 支持角色互换
-支持自动重连、数据解析、状态管理 - 修复订阅返回值BUG
+支持自动重连、数据解析、状态管理 - 修复心跳&阻塞BUG
 """
 import asyncio
 import json
@@ -66,17 +66,13 @@ class WebSocketConnection:
         self.okx_ticker_count = 0      # OKX ticker计数
         
         # 连接配置
-        self.ping_interval = 15
-        self.reconnect_interval = 3
-        
-        # 🚨【关键】OKX需要更短的心跳间隔
+        # 🚨【致命修复】OKX必须3秒心跳，否则5秒就被服务器踢
         if exchange == "okx":
-            self.ping_interval = 8  # OKX订阅完成后8秒心跳
+            self.ping_interval = 3   # ← 改成3秒！必须小于5秒
         else:
-            self.ping_interval = 15  # 币安15秒
+            self.ping_interval = 10  # 币安可以10秒
         
-        # 频率控制
-        self.last_subscribe_time = 0
+        self.reconnect_interval = 3
         self.min_subscribe_interval = 2.0
     
     async def connect(self):
@@ -92,8 +88,8 @@ class WebSocketConnection:
             self.ws = await asyncio.wait_for(
                 websockets.connect(
                     self.ws_url,
-                    ping_interval=self.ping_interval,
-                    ping_timeout=self.ping_interval + 5,
+                    ping_interval=None,  # 🚨 禁用库自带ping，用自己的保活任务
+                    ping_timeout=None,
                     close_timeout=1
                 ),
                 timeout=30  # 30秒超时
@@ -105,7 +101,10 @@ class WebSocketConnection:
             
             logger.info(f"[{self.connection_id}] 连接成功")
             
-            # 🚨 【关键修复】只有主连接立即订阅（保持原来逻辑）
+            # 🚨【关键】启动持续保活任务（一直运行，不取消）
+            self.keepalive_task = asyncio.create_task(self._periodic_ping())
+            
+            # 🚨【关键修复】只有主连接立即订阅（保持原来逻辑）
             if self.connection_type == ConnectionType.MASTER and self.symbols:
                 subscribe_success = await self._subscribe()
                 if not subscribe_success:
@@ -116,7 +115,7 @@ class WebSocketConnection:
                 self.is_active = True
                 logger.info(f"[{self.connection_id}] 主连接已激活并订阅")
             
-            # 🚨 【关键修复】温备连接延迟订阅（避免触发交易所限制）
+            # 🚨【关键修复】温备连接延迟订阅（避免触发交易所限制）
             elif self.connection_type == ConnectionType.WARM_STANDBY and self.symbols:
                 # 根据连接ID决定延迟时间（错开订阅）
                 delay_seconds = self._get_delay_for_warm_standby()
@@ -319,14 +318,13 @@ class WebSocketConnection:
             
             total_batches = (len(all_subscriptions) + batch_size - 1) // batch_size
             
-            # 🚨启动ping保活任务
-            keepalive_task = asyncio.create_task(self._subscribe_keepalive_ping())
+            # 🚨【移除】不再需要临时保活，因为有持续运行的_keepalive_task
+            # keepalive_task = asyncio.create_task(self._subscribe_keepalive_ping())
             
             for batch_idx in range(total_batches):
                 # 发送前检查连接健康
                 if not self.connected:
                     logger.error(f"[{self.connection_id}] 连接在订阅过程中丢失，批次{batch_idx+1}/{total_batches}取消")
-                    keepalive_task.cancel()
                     return False
                 
                 start_idx = batch_idx * batch_size
@@ -340,16 +338,12 @@ class WebSocketConnection:
                     await asyncio.wait_for(self.ws.send(json.dumps(subscribe_msg)), timeout=10)
                 except asyncio.TimeoutError:
                     logger.error(f"[{self.connection_id}] 发送订阅批次超时")
-                    keepalive_task.cancel()
                     return False
                 
                 logger.info(f"[{self.connection_id}] 发送批次 {batch_idx+1}/{total_batches} ({len(batch_args)}个频道)")
                 
                 if batch_idx < total_batches - 1:
                     await asyncio.sleep(inter_batch_delay)
-            
-            # 订阅完成，取消保活任务
-            keepalive_task.cancel()
             
             logger.info(f"[{self.connection_id}] 所有批次发送完成，等待2秒确认...")
             await asyncio.sleep(2)
@@ -366,19 +360,19 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 订阅异常: {e}")
             return False  # ✅ 明确返回False
     
-    async def _subscribe_keepalive_ping(self):
-        """订阅期间定期ping保活"""
-        while True:
+    async def _periodic_ping(self):
+        """🚨【新增】持续ping保活任务，一直运行直到断开"""
+        while self.connected:
             try:
-                await asyncio.sleep(3)  # 每3秒ping一次，确保活跃
-                if self.connected and self.ws:
-                    logger.debug(f"[{self.connection_id}] 订阅期间ping保活")
+                await asyncio.sleep(self.ping_interval)
+                if self.ws and self.connected:
                     await self.ws.ping()
+                    logger.debug(f"[{self.connection_id}] ping保活")
             except asyncio.CancelledError:
-                logger.debug(f"[{self.connection_id}] 保活任务结束")
+                logger.debug(f"[{self.connection_id}] 保活任务取消")
                 break
             except Exception as e:
-                logger.error(f"[{self.connection_id}] 保活ping失败: {e}")
+                logger.error(f"[{self.connection_id}] ping失败: {e}")
                 self.connected = False
                 break
     
@@ -427,7 +421,7 @@ class WebSocketConnection:
             logger.error(f"[{self.connection_id}] 取消订阅失败: {e}")
     
     async def _receive_messages(self):
-        """接收消息 - 增强异常处理"""
+        """接收消息 - 🚨【关键修复】不阻塞心跳"""
         try:
             async for message in self.ws:
                 self.last_message_time = datetime.now()
@@ -437,7 +431,8 @@ class WebSocketConnection:
                     logger.debug(f"[{self.connection_id}] 收到空消息（心跳）")
                     continue
                 
-                await self._process_message(message)
+                # 🚨【关键修复】丢到后台处理，不阻塞接收循环
+                asyncio.create_task(self._process_message(message))
                 
         except websockets.exceptions.ConnectionClosed as e:
             logger.error(f"[{self.connection_id}] 连接关闭 - 代码: {e.code}, 原因: {e.reason}")
@@ -493,13 +488,13 @@ class WebSocketConnection:
             if not symbol:
                 return
             
-            # 🚨 【关键修复】使用每个连接独立的计数器
+            # 🚨【关键修复】使用每个连接独立的计数器
             self.ticker_count += 1
             
             if self.ticker_count % 100 == 0:
                 logger.info(f"[{self.connection_id}] 已处理 {self.ticker_count} 个ticker消息")
             
-            # 🚨 【关键修复】完全保留所有原始数据，不进行过滤
+            # 🚨【关键修复】完全保留所有原始数据，不进行过滤
             processed = {
                 "exchange": "binance",
                 "symbol": symbol,
@@ -524,7 +519,7 @@ class WebSocketConnection:
                 except Exception as e:
                     logger.debug(f"收集币安合约失败 {symbol}: {e}")
             
-            # 🚨 【关键修复】完全保留原始标记价格数据
+            # 🚨【关键修复】完全保留原始标记价格数据
             processed = {
                 "exchange": "binance",
                 "symbol": symbol,
@@ -576,12 +571,12 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨 【关键修复】记录哪个连接收到的数据，但保留完整原始数据
+                    # 🚨【关键修复】记录哪个连接收到的数据，但保留完整原始数据
                     if "fundingRate" in funding_data:
                         funding_rate = float(funding_data.get("fundingRate", 0))
                         logger.info(f"[{self.connection_id}] 收到资金费率: {processed_symbol}={funding_rate:.6f}")
                     
-                    # 🚨 【关键修复】完全保留原始资金费率数据
+                    # 🚨【关键修复】完全保留原始资金费率数据
                     processed = {
                         "exchange": "okx",
                         "symbol": processed_symbol,
@@ -598,16 +593,16 @@ class WebSocketConnection:
                     
             elif channel == "tickers":
                 if data.get("data") and len(data["data"]) > 0:
-                    # 🚨 【关键修复】每个连接独立的计数器
+                    # 🚨【关键修复】每个连接独立的计数器
                     self.okx_ticker_count += 1
                     
-                    # 🚨 【关键修复】每处理一定数量就打印一次，包含真实连接ID
+                    # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
                     if self.okx_ticker_count % 50 == 0:
                         logger.info(f"[{self.connection_id}] 已处理 {self.okx_ticker_count} 个OKX ticker")
                     
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
-                    # 🚨 【关键修复】完全保留原始ticker数据
+                    # 🚨【关键修复】完全保留原始ticker数据
                     processed = {
                         "exchange": "okx",
                         "symbol": processed_symbol,
@@ -632,6 +627,11 @@ class WebSocketConnection:
             if self.delayed_subscribe_task:
                 self.delayed_subscribe_task.cancel()
                 logger.debug(f"[{self.connection_id}] 延迟订阅任务已取消")
+            
+            # 🚨【关键】取消持续保活任务
+            if self.keepalive_task:
+                self.keepalive_task.cancel()
+                logger.debug(f"[{self.connection_id}] 保活任务已取消")
             
             # 🚨 修复：关闭WebSocket连接
             if self.ws and self.connected:
