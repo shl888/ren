@@ -9,7 +9,6 @@ import signal
 import sys
 import os
 import traceback
-import time
 from datetime import datetime
 
 # 设置路径
@@ -44,58 +43,8 @@ def start_keep_alive_background():
 
 class BrainCore:
     def __init__(self):
-        async def direct_to_datastore(data: dict):
-            """WebSocket回调，直接对接data_store - 添加完整日志"""
-            try:
-                # 🚨 验证数据
-                if not data:
-                    logger.warning("[direct_to_datastore] 收到空数据")
-                    return
-                    
-                exchange = data.get("exchange", "")
-                symbol = data.get("symbol", "")
-                data_type = data.get("data_type", "unknown")
-                
-                if not exchange:
-                    logger.error(f"[direct_to_datastore] 数据缺少exchange字段: {data}")
-                    return
-                if not symbol:
-                    logger.error(f"[direct_to_datastore] 数据缺少symbol字段: {data}")
-                    return
-                
-                # 🚨 添加计数器
-                direct_to_datastore.counter = getattr(direct_to_datastore, 'counter', 0) + 1
-                
-                # 🚨 每10条记录一次（更容易看到）
-                if direct_to_datastore.counter % 10 == 0:
-                    logger.info(
-                        f"📥 [direct_to_datastore#{direct_to_datastore.counter}] "
-                        f"{exchange} {symbol} ({data_type})"
-                    )
-                
-                # 🚨 第一条数据特别记录
-                if direct_to_datastore.counter == 1:
-                    logger.info(f"🎉 [direct_to_datastore] 第一条数据: {exchange} {symbol}")
-                    logger.info(f"📋 数据键: {list(data.keys())[:10]}")  # 显示前10个键
-                
-                # 🚨 调试信息：显示数据大小
-                if "raw_data" in data:
-                    raw_data_size = len(str(data.get('raw_data', {})))
-                    logger.debug(f"[direct_to_datastore] 数据包含raw_data字段，大小: {raw_data_size} 字符")
-                
-                # 🚨 调用 data_store
-                logger.debug(f"[direct_to_datastore] 存储数据: {exchange} {symbol}")
-                await data_store.update_market_data(exchange, symbol, data)
-                logger.debug(f"[direct_to_datastore] 存储完成: {exchange} {symbol}")
-                    
-            except TypeError as e:
-                logger.error(f"[direct_to_datastore] 参数错误: {e}")
-                logger.error(f"[direct_to_datastore] 数据内容: exchange={data.get('exchange')}, symbol={data.get('symbol')}")
-            except Exception as e:
-                logger.error(f"[direct_to_datastore] 存储失败: {e}")
-                logger.error(f"[direct_to_datastore] 失败数据: {data}")
-        
-        self.ws_admin = WebSocketAdmin(direct_to_datastore)
+        # ✅ 不传递任何回调，让WebSocketAdmin使用pool_manager的默认回调
+        self.ws_admin = WebSocketAdmin()
         self.http_server = None
         self.http_runner = None
         self.running = False
@@ -108,17 +57,22 @@ class BrainCore:
         signal.signal(signal.SIGTERM, self.handle_signal)
     
     async def receive_processed_data(self, processed_data):
-        """接收流水线处理后的成品数据"""
+        """🚨 大脑只接收data_store过滤后的成品数据"""
         try:
             data_type = processed_data.get('data_type', 'unknown')
             exchange = processed_data.get('exchange', 'unknown')
             symbol = processed_data.get('symbol', 'unknown')
             
             if data_type.startswith('account_') or data_type in ['order', 'trade']:
-                logger.info(f"💰 账户/订单数据: {exchange}.{symbol} ({data_type})")
+                logger.info(f"💰 账户/订单成品数据: {exchange}.{symbol} ({data_type})")
             else:
-                logger.info(f"📊 市场套利数据: {exchange}.{symbol} ({data_type})")
-                
+                # 🚨 只记录重要数据，避免日志过多
+                if data_type in ['套利信号', '资金费率套利']:  # 只记录关键成品数据
+                    logger.info(f"🎯 关键套利成品数据: {exchange}.{symbol} ({data_type})")
+                else:
+                    # 普通市场数据不记录，避免日志过多
+                    logger.debug(f"📊 市场数据: {exchange}.{symbol} ({data_type})")
+                    
         except Exception as e:
             logger.error(f"接收数据错误: {e}")
     
