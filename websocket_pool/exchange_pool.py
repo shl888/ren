@@ -283,7 +283,7 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环 - 修复判断逻辑"""
+        """监控调度循环 - 限流版"""
         logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每8秒检查一次")
         
         # 跟踪重连次数用于退避
@@ -294,71 +294,23 @@ class ExchangeWebSocketPool:
             try:
                 # 1. 监控主连接（带指数退避）
                 for i, master_conn in enumerate(self.master_connections):
-                    # 🚨【核心修复】先检查是否有数据流动 - 这是最重要的指标
-                    has_recent_data = master_conn.last_message_time and \
-                                    (datetime.now() - master_conn.last_message_time).total_seconds() < 30
-                    
-                    # 🚨【修复】如果有数据流动，无论订阅状态如何，都认为连接正常
-                    if has_recent_data:
-                        # 有数据流动，说明连接和订阅都正常
-                        # 重置重连计数
-                        reconnect_attempts[master_conn.connection_id] = 0
-                        
-                        # 如果订阅状态为False但有数据，记录一下（但不修改状态）
-                        if not master_conn.subscribed:
-                            logger.info(f"[监控调度] [{self.exchange}] 主连接{i}有数据但订阅状态为False（可能状态同步延迟）")
-                            # 🚨 不修改订阅状态，因为数据正常说明订阅实际成功了
-                            continue  # 继续下一个连接
-                    
-                    # 🚨【修复】如果没有数据流动，再检查连接和订阅状态
-                    else:
-                        # 检查连接状态
+                    if not master_conn.connected or not master_conn.subscribed:
                         if not master_conn.connected:
                             logger.warning(f"[监控调度] [{self.exchange}] 主连接{i} (ID: {master_conn.connection_id}) 断开")
-                            
-                            attempts = reconnect_attempts[master_conn.connection_id]
-                            wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
-                            
-                            await asyncio.sleep(wait_time)
-                            reconnect_attempts[master_conn.connection_id] += 1
-                            
-                            # 彻底重启连接
-                            await self._restart_master_connection(i)
-                            
-                        # 连接正常但无数据，检查订阅状态
-                        elif not master_conn.subscribed:
-                            # 🚨【修复】区分两种情况：
-                            # 1. 订阅失败（需要重启）
-                            # 2. 订阅中（等待）
-                            
-                            # 检查是否正在连接过程中
-                            if master_conn.last_message_seconds_ago < 60:  # 60秒内有消息
-                                logger.info(f"[监控调度] [{self.exchange}] 主连接{i}连接正常但订阅状态为False，等待订阅完成")
-                                # 等待订阅完成，不重启
-                                await asyncio.sleep(10)
-                                reconnect_attempts[master_conn.connection_id] = 0
-                            else:
-                                # 长时间无数据且未订阅，需要重启
-                                logger.warning(f"[监控调度] [{self.exchange}] 主连接{i}未订阅成功且无数据")
-                                
-                                attempts = reconnect_attempts[master_conn.connection_id]
-                                wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
-                                
-                                await asyncio.sleep(wait_time)
-                                reconnect_attempts[master_conn.connection_id] += 1
-                                
-                                # 彻底重启连接
-                                await self._restart_master_connection(i)
                         else:
-                            # 连接正常，订阅正常，但无数据 - 可能是交易所问题
-                            if master_conn.last_message_seconds_ago > 120:  # 2分钟无数据
-                                logger.warning(f"[监控调度] [{self.exchange}] 主连接{i}已订阅但长时间无数据({master_conn.last_message_seconds_ago:.0f}秒)")
-                                # 尝试重新订阅而不是重启
-                                if master_conn.connected:
-                                    logger.info(f"[监控调度] [{self.exchange}] 尝试重新订阅主连接{i}")
-                                    await master_conn._subscribe()
-                                    await asyncio.sleep(10)
-                                reconnect_attempts[master_conn.connection_id] = 0
+                            logger.warning(f"[监控调度] [{self.exchange}] 主连接{i}未订阅成功")
+                        
+                        attempts = reconnect_attempts[master_conn.connection_id]
+                        wait_time = min(2 ** (attempts + 3), 60) if self.exchange == "okx" else min(2 ** attempts, 30)
+                        
+                        await asyncio.sleep(wait_time)
+                        reconnect_attempts[master_conn.connection_id] += 1
+                        
+                        # 彻底重启连接
+                        await self._restart_master_connection(i)
+                    else:
+                        # 重置计数
+                        reconnect_attempts[master_conn.connection_id] = 0
                 
                 # 2. 监控温备连接（带指数退避）
                 for i, warm_conn in enumerate(self.warm_standby_connections):
