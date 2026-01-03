@@ -89,13 +89,8 @@ class WebSocketPoolManager:
         self._initializing = False
         self._shutting_down = False
         
-        # ✅ 优化日志输出，使其更清晰
-        logger.info(f"{'='*60}")
         logger.info("✅ WebSocketPoolManager 初始化完成")
         logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
-        logger.info(f"📁 默认回调函数: {default_data_callback.__name__}")
-        logger.info(f"📈 支持交易所: {list(EXCHANGE_CONFIGS.keys())}")
-        logger.info(f"{'='*60}")
         
     async def initialize(self):
         """初始化所有交易所连接池 - 防重入版"""
