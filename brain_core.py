@@ -9,6 +9,7 @@ import signal
 import sys
 import os
 import traceback
+import time
 from datetime import datetime
 
 # 设置路径
@@ -44,14 +45,55 @@ def start_keep_alive_background():
 class BrainCore:
     def __init__(self):
         async def direct_to_datastore(data: dict):
-            """WebSocket回调，直接对接data_store"""
+            """WebSocket回调，直接对接data_store - 添加完整日志"""
             try:
-                exchange = data.get("exchange")
-                symbol = data.get("symbol")
-                if exchange and symbol:
-                    await data_store.update_market_data(exchange, symbol, data)
+                # 🚨 验证数据
+                if not data:
+                    logger.warning("[direct_to_datastore] 收到空数据")
+                    return
+                    
+                exchange = data.get("exchange", "")
+                symbol = data.get("symbol", "")
+                data_type = data.get("data_type", "unknown")
+                
+                if not exchange:
+                    logger.error(f"[direct_to_datastore] 数据缺少exchange字段: {data}")
+                    return
+                if not symbol:
+                    logger.error(f"[direct_to_datastore] 数据缺少symbol字段: {data}")
+                    return
+                
+                # 🚨 添加计数器
+                direct_to_datastore.counter = getattr(direct_to_datastore, 'counter', 0) + 1
+                
+                # 🚨 每10条记录一次（更容易看到）
+                if direct_to_datastore.counter % 10 == 0:
+                    logger.info(
+                        f"📥 [direct_to_datastore#{direct_to_datastore.counter}] "
+                        f"{exchange} {symbol} ({data_type})"
+                    )
+                
+                # 🚨 第一条数据特别记录
+                if direct_to_datastore.counter == 1:
+                    logger.info(f"🎉 [direct_to_datastore] 第一条数据: {exchange} {symbol}")
+                    logger.info(f"📋 数据键: {list(data.keys())[:10]}")  # 显示前10个键
+                
+                # 🚨 调试信息：显示数据大小
+                if "raw_data" in data:
+                    raw_data_size = len(str(data.get('raw_data', {})))
+                    logger.debug(f"[direct_to_datastore] 数据包含raw_data字段，大小: {raw_data_size} 字符")
+                
+                # 🚨 调用 data_store
+                logger.debug(f"[direct_to_datastore] 存储数据: {exchange} {symbol}")
+                await data_store.update_market_data(exchange, symbol, data)
+                logger.debug(f"[direct_to_datastore] 存储完成: {exchange} {symbol}")
+                    
+            except TypeError as e:
+                logger.error(f"[direct_to_datastore] 参数错误: {e}")
+                logger.error(f"[direct_to_datastore] 数据内容: exchange={data.get('exchange')}, symbol={data.get('symbol')}")
             except Exception as e:
-                logger.error(f"回调错误: {e}")
+                logger.error(f"[direct_to_datastore] 存储失败: {e}")
+                logger.error(f"[direct_to_datastore] 失败数据: {data}")
         
         self.ws_admin = WebSocketAdmin(direct_to_datastore)
         self.http_server = None
