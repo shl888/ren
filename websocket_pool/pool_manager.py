@@ -1,6 +1,5 @@
 """
 WebSocket连接池总管理器 - 角色互换版 + 增强诊断
-计时日志版（每分钟记录一次状态）
 """
 import asyncio
 import logging
@@ -23,40 +22,12 @@ from .static_symbols import STATIC_SYMBOLS  # 导入静态合约
 
 logger = logging.getLogger(__name__)
 
-# ============ 【修复：默认数据回调函数 - 支持原始数据 - 计时日志版】============
-async def _data_callback_status_logger():
-    """🚨【新增】独立的数据回调状态日志任务（合并为单行日志）"""
-    logger.info("[数据回调] 状态日志任务启动")
-    
-    while True:
-        try:
-            await asyncio.sleep(60)  # 每分钟记录一次
-            
-            # 检查是否有数据统计
-            if hasattr(default_data_callback, '_interval_count'):
-                interval_count = default_data_callback._interval_count
-                total_count = getattr(default_data_callback, '_total_count', 0)
-                
-                # 🚨【关键修复】合并为单行日志
-                status_message = (
-                    f"[数据回调] 状态报告: "
-                    f"1分钟处理={interval_count}条, "
-                    f"累计处理={total_count}条"
-                )
-                
-                logger.info(status_message)
-                
-                # 重置间隔计数器
-                default_data_callback._interval_count = 0
-                
-        except Exception as e:
-            logger.error(f"[数据回调] 状态日志错误: {e}")
-            await asyncio.sleep(10)
-
+# ============ 【修复：默认数据回调函数 - 支持原始数据】============
 async def default_data_callback(data):
     """
     默认数据回调函数 - 将WebSocket接收的原始数据直接存入共享存储
-    计时日志版（每分钟记录一次状态）
+    这是数据流的关键节点：WebSocket → 此函数 → data_store
+    现在data包含完整的raw_data字段
     """
     try:
         # 验证数据有效性
@@ -74,20 +45,14 @@ async def default_data_callback(data):
             return
         
         # ✅【关键修复】直接调用 data_store.update_market_data
+        # 传递三个参数：exchange, symbol, data
+        # 现在data包含完整的raw_data字段和原始数据
         await data_store.update_market_data(exchange, symbol, data)
         
-        # 🚨【简化的计数器】只计数，不检查时间
-        if not hasattr(default_data_callback, '_initialized'):
-            # 第一次调用时初始化
-            default_data_callback._interval_count = 0
-            default_data_callback._total_count = 0
-            default_data_callback._initialized = True
-            # 启动独立的状态日志任务
-            asyncio.create_task(_data_callback_status_logger())
-        
-        # 更新计数器
-        default_data_callback._interval_count += 1
-        default_data_callback._total_count += 1
+        # 记录日志（每100条记录一次，避免日志过多）
+        default_data_callback.counter = getattr(default_data_callback, 'counter', 0) + 1
+        if default_data_callback.counter % 100 == 0:
+            logger.info(f"[数据回调] 已收到 {default_data_callback.counter} 条原始数据，最新: {exchange} {symbol}")
             
     except TypeError as e:
         # 如果参数错误，记录详细错误信息
@@ -101,7 +66,7 @@ async def default_data_callback(data):
 class WebSocketPoolManager:
     """WebSocket连接池管理器"""
     
-    def __init__(self, data_callback=None):
+    def __init__(self, data_callback=None):  # ✅ 修改：参数改为可选
         """
         初始化连接池管理器
         
@@ -113,9 +78,9 @@ class WebSocketPoolManager:
             self.data_callback = data_callback
             logger.info(f"WebSocketPoolManager 使用自定义数据回调")
         else:
-            # 使用我们修复的默认回调（计时日志版）
+            # 使用我们修复的默认回调（支持原始数据）
             self.data_callback = default_data_callback
-            logger.info(f"WebSocketPoolManager 使用默认数据回调（计时日志版，每分钟报告）")
+            logger.info(f"WebSocketPoolManager 使用默认数据回调（直接对接共享数据模块，支持原始数据）")
         
         self.exchange_pools = {}  # exchange_name -> ExchangeWebSocketPool
         self.initialized = False
