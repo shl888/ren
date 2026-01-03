@@ -512,6 +512,20 @@ class WebSocketConnection:
         elif event_type == "markPriceUpdate":
             symbol = data.get("s", "").upper()
             
+            # 🚨【新增】币安标记价格计数器 - 使用≥100里程碑逻辑
+            if not hasattr(self, 'binance_markprice_count'):
+                self.binance_markprice_count = 0
+                self._binance_markprice_next_milestone = 100  # 🚨 100的里程碑
+            
+            self.binance_markprice_count += 1
+            
+            # 🚨【核心修复】累计接收量 ≥ 阈值时记录
+            if self.binance_markprice_count >= self._binance_markprice_next_milestone:
+                logger.info(f"[{self.connection_id}] 已收到 {self.binance_markprice_count} 个标记价格数据")
+                
+                # 更新阈值：下一个100的倍数
+                self._binance_markprice_next_milestone = ((self.binance_markprice_count // 100) + 1) * 100
+            
             # 🚨 新增：收集币安合约名
             if SYMBOL_COLLECTOR_AVAILABLE:
                 try:
@@ -536,9 +550,10 @@ class WebSocketConnection:
     
     async def _process_okx_message(self, data):
         """处理欧意消息 - 完全保留原始数据，不做任何过滤"""
-        # 🚨 新增：资金费率计数器
+        # 🚨【修改】OKX资金费率计数器 - 使用≥100里程碑逻辑
         if not hasattr(self, 'funding_rate_count'):
             self.funding_rate_count = 0
+            self._funding_next_milestone = 100  # 🚨 改为100的里程碑
         
         # 🚨 打印所有事件消息用于诊断
         if data.get("event"):
@@ -575,11 +590,15 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨【修改】计数器增加，每50条打印一次
+                    # 🚨【修复】累计接收量每增加≥100条就记录
                     self.funding_rate_count += 1
                     
-                    if self.funding_rate_count % 50 == 0:
+                    # 🚨【核心修复】累计接收量 ≥ 阈值时记录
+                    if self.funding_rate_count >= self._funding_next_milestone:
                         logger.info(f"[{self.connection_id}] 已收到 {self.funding_rate_count} 条资金费率数据")
+                        
+                        # 更新阈值：下一个100的倍数
+                        self._funding_next_milestone = ((self.funding_rate_count // 100) + 1) * 100
                     
                     # 🚨【关键修复】完全保留原始资金费率数据
                     processed = {
@@ -601,7 +620,7 @@ class WebSocketConnection:
                     # 🚨【关键修复】每个连接独立的计数器
                     self.okx_ticker_count += 1
                     
-                    # 🚨【关键修复】每处理一定数量就打印一次，包含真实连接ID
+                    # 🚨【关键修复】保持原样：100的倍数才显示
                     if self.okx_ticker_count % 100 == 0:
                         logger.info(f"[{self.connection_id}] 已收到 {self.okx_ticker_count} 个OKX ticker")
                     
