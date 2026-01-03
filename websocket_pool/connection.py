@@ -575,10 +575,10 @@ class WebSocketConnection:
                         except Exception as e:
                             logger.debug(f"收集OKX合约失败 {processed_symbol}: {e}")
                     
-                    # 🚨【修改】计数器增加，每10000条打印一次
+                    # 🚨【修改】计数器增加，每1500条打印一次
                     self.funding_rate_count += 1
                     
-                    if self.funding_rate_count % 10000 == 0:
+                    if self.funding_rate_count % 1500 == 0:
                         logger.info(f"[{self.connection_id}] 已收到 {self.funding_rate_count} 条资金费率数据")
                     
                     # 🚨【关键修复】完全保留原始资金费率数据
