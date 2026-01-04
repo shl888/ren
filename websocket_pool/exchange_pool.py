@@ -1,6 +1,7 @@
 """
 单个交易所的连接池管理 - 监控调度版
 修复：并发初始化 + 强制后置检查 + 完整日志恢复 + 退避重连 + 软健康检查
+新增：接管逻辑7层安全防护
 """
 import asyncio
 import logging
@@ -325,25 +326,58 @@ class ExchangeWebSocketPool:
                 await asyncio.sleep(5)
 
     async def _simple_takeover(self, master_index: int):
-        """🚨【关键修复】简单接管：温备变主连接，主连接变温备"""
+        """🚨【关键修复】简单接管：温备变主连接，主连接变温备 - 安全加固版"""
         logger.critical(f"[接管] [{self.exchange}] 开始接管主连接{master_index}")
         
-        # 1. 检查温备池是否为空
-        if not self.warm_standby_connections:
-            logger.error(f"[接管] [{self.exchange}] 温备池为空，无法接管")
-            return False
-        
-        old_master = self.master_connections[master_index]
-        
-        # 🚨 显示原主连接的当前角色
-        old_master.log_with_role("warning", "检测到故障，即将被接管")
-        
-        # 2. 从温备池取第一个温备
-        new_master = self.warm_standby_connections.pop(0)
-        
         try:
-            # 🚨 显示温备的当前角色
-            new_master.log_with_role("info", f"被选中接管主连接{master_index}")
+            # 🚨【安全加固1】参数类型验证
+            if not isinstance(master_index, int):
+                logger.error(f"[接管] [{self.exchange}] 无效的主连接索引类型: {type(master_index)}")
+                return False
+                
+            # 1. 检查温备池是否为空（双重检查）
+            if not self.warm_standby_connections:
+                logger.error(f"[接管] [{self.exchange}] 温备池为空，无法接管")
+                return False
+            
+            # 🚨【安全加固2】检查主连接索引有效性
+            if master_index < 0 or master_index >= len(self.master_connections):
+                logger.error(f"[接管] [{self.exchange}] 无效的主连接索引: {master_index} (有效范围: 0-{len(self.master_connections)-1})")
+                return False
+            
+            old_master = self.master_connections[master_index]
+            
+            # 🚨【安全加固3】验证原主连接
+            if old_master is None:
+                logger.critical(f"[接管] [{self.exchange}] ❌ 原主连接为空")
+                return False
+                
+            # 显示原主连接的当前角色
+            old_master.log_with_role("warning", "检测到故障，即将被接管")
+            
+            # 2. 从温备池取第一个温备（带异常捕获）
+            try:
+                # 🚨【关键修复】安全获取温备连接
+                new_master = self.warm_standby_connections.pop(0)
+            except IndexError as e:
+                logger.critical(f"[接管] [{self.exchange}] ❌ 温备池弹出失败: {e}")
+                logger.critical(f"[接管] [{self.exchange}] 当前温备池大小: {len(self.warm_standby_connections)}")
+                return False
+            
+            # 🚨【安全加固4】验证获取的连接是否有效
+            if new_master is None:
+                logger.critical(f"[接管] [{self.exchange}] ❌ 获取到空的温备连接")
+                return False
+            
+            # 🚨【安全加固5】记录当前池状态（用于故障恢复）
+            pool_state_before = {
+                "master_count": len(self.master_connections),
+                "warm_count": len(self.warm_standby_connections),
+                "old_master_id": old_master.connection_id,
+                "new_master_id": new_master.connection_id
+            }
+            
+            logger.info(f"[接管] [{self.exchange}] 接管前池状态: {pool_state_before}")
             
             # 3. 温备升级为主连接
             # 先取消温备的心跳订阅（如果有）
@@ -360,7 +394,9 @@ class ExchangeWebSocketPool:
             
             if not success:
                 new_master.log_with_role("error", "升级失败，放回温备池")
+                # 🚨【安全加固6】失败时恢复原状
                 self.warm_standby_connections.insert(0, new_master)
+                logger.warning(f"[接管] [{self.exchange}] 升级失败，已恢复温备池")
                 return False
             
             # 4. 原主连接降级为温备
@@ -381,16 +417,21 @@ class ExchangeWebSocketPool:
             self.warm_standby_connections.append(old_master)  # 放到尾部
             
             # 🚨 关键日志：显示池子状态
-            logger.info(f"[接管] [{self.exchange}] 温备池当前状态:")
+            logger.info(f"[接管] [{self.exchange}] 接管后温备池状态:")
             for i, conn in enumerate(self.warm_standby_connections):
-                role_char = conn.role_display.get(conn.connection_type, "?")
-                position = "头" if i == 0 else "尾" if i == len(self.warm_standby_connections)-1 else "中"
-                logger.info(f"  位置{i}({position}): {conn.connection_id}({role_char})")
+                if conn is not None:
+                    role_char = conn.role_display.get(conn.connection_type, "?")
+                    position = "头" if i == 0 else "尾" if i == len(self.warm_standby_connections)-1 else "中"
+                    logger.info(f"  位置{i}({position}): {conn.connection_id}({role_char})")
+                else:
+                    logger.warning(f"  位置{i}: ❌ 空连接!")
             
             # 6. 原主连接重新连接（作为温备）
             if not old_master.connected:
                 old_master.log_with_role("info", "重新连接为温备")
-                await old_master.connect()
+                reconnect_success = await old_master.connect()
+                if not reconnect_success:
+                    old_master.log_with_role("warning", "温备重连失败，但仍在池中")
             
             # 🚨 最终状态汇总
             logger.critical(f"[接管] [{self.exchange}] ✅ 接管成功！")
@@ -403,12 +444,20 @@ class ExchangeWebSocketPool:
             return True
             
         except Exception as e:
-            logger.error(f"[接管] [{self.exchange}] 接管异常: {e}")
+            logger.critical(f"[接管] [{self.exchange}] ❌ 接管过程未知异常: {e}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.critical(traceback.format_exc())
             
-            # 发生异常，恢复原状
-            self.warm_standby_connections.insert(0, new_master)
+            # 🚨【安全加固7】发生异常时，尽可能恢复原状
+            try:
+                # 如果已经取了new_master但后续失败，尝试放回
+                if 'new_master' in locals() and new_master is not None:
+                    if new_master not in self.warm_standby_connections:
+                        self.warm_standby_connections.insert(0, new_master)
+                        logger.warning(f"[接管] [{self.exchange}] 异常恢复: 已将{new_master.connection_id}放回温备池")
+            except:
+                pass
+                
             return False
 
     async def _restart_master_connection(self, master_index: int):
