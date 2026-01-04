@@ -7,8 +7,8 @@ import logging
 import sys
 import os
 import time
-from typing import Dict, Any, List
 from datetime import datetime
+from typing import Dict, Any, List
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -107,11 +107,11 @@ class ExchangeWebSocketPool:
     async def _enforce_monitor_scheduler(self):
         """强制确保监控调度器运行"""
         if not self.monitor_connection or not self.monitor_connection.connected:
-            logger.warning(f"[{self.exchange}] ⚠️ 监控连接异常，尝试紧急恢复...")
+            logger.warning(f"[{self.exchange}] ⚠️【监控调度】 监控连接异常，尝试紧急恢复...")
             await self._initialize_monitor_scheduler()
         
         if not self.monitor_scheduler_task or self.monitor_scheduler_task.done():
-            logger.warning(f"[{self.exchange}] ⚠️ 调度循环未运行，强制启动...")
+            logger.warning(f"[{self.exchange}] ⚠️【监控调度】 调度循环未运行，强制启动...")
             self.monitor_scheduler_task = asyncio.create_task(
                 self._monitor_scheduling_loop()
             )
@@ -221,7 +221,7 @@ class ExchangeWebSocketPool:
         
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(f"[{conn_id}] 正在建立监控连接（第{attempt}次）")
+                logger.info(f"[{conn_id}] 【监控调度】正在建立监控连接（第{attempt}次）")
                 
                 self.monitor_connection = WebSocketConnection(
                     exchange=self.exchange,
@@ -243,9 +243,9 @@ class ExchangeWebSocketPool:
                     return True
                     
             except asyncio.TimeoutError:
-                logger.error(f"[{conn_id}] 监控连接超时（{attempt}/{max_retries}）")
+                logger.error(f"[{conn_id}] 【监控调度】监控连接超时（{attempt}/{max_retries}）")
             except Exception as e:
-                logger.error(f"[{conn_id}] 监控连接异常（{attempt}/{max_retries}）: {e}")
+                logger.error(f"[{conn_id}] 【监控调度】监控连接异常（{attempt}/{max_retries}）: {e}")
             
             if attempt < max_retries:
                 await asyncio.sleep(2 ** attempt)
@@ -278,18 +278,19 @@ class ExchangeWebSocketPool:
                         timeout=2.5
                     )
                 except asyncio.TimeoutError:
-                    logger.warning(f"[{self.exchange}_monitor] ⚠️ 监控周期超时2.5秒！")
+                    logger.warning(f"[{self.exchange}_monitor] ⚠️【监控调度】 监控周期超时2.5秒！")
                     self.monitor_slow_loops += 1
                 
                 current_time = time.time()
                 if current_time - last_report_time >= report_interval:
-                    logger.info(f"[{self.exchange}_monitor] 📊 监控运行中，持续检查连接状态...")
+                    logger.info(f"[{self.exchange}_monitor] 👀 【监控调度】监控运行中，未发现异常，持续检查连接状态...")
                     last_report_time = current_time
                 
+                # 🚨【新增】使用性能统计数据
                 if current_time - last_perf_report >= 60:
                     elapsed = current_time - last_perf_report
                     loop_rate = loop_count / elapsed if elapsed > 0 else 0
-                    logger.info(f"[{self.exchange}_monitor] 📈 性能: {loop_count}次循环, "
+                    logger.info(f"[{self.exchange}_monitor] 📈 【监控调度】性能: {loop_count}次循环, "
                                f"速率: {loop_rate:.1f}次/秒, "
                                f"慢循环: {self.monitor_slow_loops}次")
                     loop_count = 0
@@ -300,15 +301,18 @@ class ExchangeWebSocketPool:
                 if loop_duration < 3:
                     await asyncio.sleep(3 - loop_duration)
                 else:
-                    logger.warning(f"[{self.exchange}_monitor] ⏱️ 循环耗时过长: {loop_duration:.2f}秒")
+                    logger.warning(f"[{self.exchange}_monitor] ⏱️ 【监控调度】循环耗时过长: {loop_duration:.2f}秒")
                     
             except Exception as e:
                 logger.error(f"[监控调度] [{self.exchange}] 调度循环错误: {e}")
                 await asyncio.sleep(5)
     
     async def _execute_monitor_cycle(self, master_failures):
-        """执行一个监控周期"""
+        """执行一个监控周期 - 🚨【适配新的性能监控方法】"""
         for i, master_conn in enumerate(self.master_connections):
+            # 🚨【新增】获取完整的健康状态（包含性能指标）
+            health_status = await master_conn.check_health()
+            
             is_healthy = (
                 master_conn.connected and 
                 master_conn.subscribed and
@@ -320,25 +324,44 @@ class ExchangeWebSocketPool:
                 current_failures = master_failures.get(conn_id, 0) + 1
                 master_failures[conn_id] = current_failures
                 
-                logger.warning(f"[{self.exchange}_monitor] ❌ 主连接{i}健康检查失败 "
+                # 🚨【新增】显示性能指标
+                message_rate = health_status.get("message_rate", 0.0)
+                total_messages = health_status.get("total_messages", 0)
+                uptime_seconds = health_status.get("uptime_seconds", 0.0)
+                
+                logger.warning(f"[{self.exchange}_monitor] ❌ 【监控调度】主连接{i}健康检查失败 "
                               f"(连接: {master_conn.connected}, "
                               f"订阅: {master_conn.subscribed}, "
-                              f"最后消息: {master_conn.last_message_seconds_ago:.1f}秒前) "
+                              f"最后消息: {master_conn.last_message_seconds_ago:.1f}秒前, "
+                              f"速率: {message_rate:.1f}消息/秒, "
+                              f"总消息: {total_messages}, "
+                              f"运行: {uptime_seconds:.0f}秒) "
                               f"第{current_failures}次失败")
                 
                 if current_failures >= 3:
-                    logger.critical(f"[{self.exchange}_monitor] 🔥 主连接{i}连续3次失败，触发接管!")
+                    logger.critical(f"[{self.exchange}_monitor] 🔥 【监控调度】主连接{i}连续3次失败，触发接管!")
                     master_conn.log_with_role("critical", f"连续3次失败，触发接管!")
                     
                     # 🚨 异步执行接管，记录结果但不阻塞
                     takeover_task = asyncio.create_task(self._simple_takeover(i))
                     takeover_task.add_done_callback(
-                        lambda task: logger.debug(f"[{self.exchange}_monitor] 接管任务完成: {task.result()}")
+                        lambda task: logger.debug(f"[{self.exchange}_monitor] 【监控调度】接管任务完成: {task.result()}")
                     )
                     
                     master_failures[conn_id] = 0
             else:
                 master_failures[master_conn.connection_id] = 0
+                
+                # 🚨【新增】即使健康也定期报告性能（每5次循环报告一次）
+                if i == 0 and self.monitor_loop_count % 5 == 0:
+                    message_rate = health_status.get("message_rate", 0.0)
+                    total_messages = health_status.get("total_messages", 0)
+                    uptime_seconds = health_status.get("uptime_seconds", 0.0)
+                    
+                    logger.debug(f"[{self.exchange}_monitor] 📊 【监控调度】主连接{i}性能: "
+                                 f"速率{message_rate:.1f}消息/秒, "
+                                 f"总消息{total_messages}, "
+                                 f"运行{uptime_seconds:.0f}秒")
         
         for i, warm_conn in enumerate(self.warm_standby_connections):
             if not warm_conn.connected:
@@ -355,36 +378,36 @@ class ExchangeWebSocketPool:
                 timeout=2.0
             )
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.exchange}_monitor] ⏱️ 状态报告超时2秒")
+            logger.warning(f"[{self.exchange}_monitor] ⏱️ 【监控调度】状态报告超时2秒")
         except Exception as e:
-            logger.error(f"[{self.exchange}_monitor] ❌ 状态报告失败: {e}")
+            logger.error(f"[{self.exchange}_monitor] ❌ 【监控调度】状态报告失败: {e}")
 
     async def _simple_takeover(self, master_index: int):
         """🚨【完整7层防护】简单接管：温备变主连接，主连接变温备"""
         takeover_start = time.time()
         
         # 🚨【第0层】醒目开始标记
-        logger.critical("🔥" * 50)
-        logger.critical(f"🔥 [{self.exchange}] 检测到故障，开始接管主连接{master_index}!")
-        logger.critical(f"🔥 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.critical("🔥" * 50)
+        logger.critical(f"【监控调度】 {'🔥' * 50}")
+        logger.critical(f"🔥 [{self.exchange}] 【监控调度】检测到故障，开始接管主连接{master_index}!")
+        logger.critical(f"🔥 【监控调度】时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.critical(f"【监控调度】 {'🔥' * 50}")
         
         try:
             # 🚨【第1层】参数类型验证
             if not isinstance(master_index, int):
-                logger.error(f"[接管] [{self.exchange}] 无效的主连接索引类型: {type(master_index)}")
+                logger.error(f"【监控调度】[接管] [{self.exchange}] 无效的主连接索引类型: {type(master_index)}")
                 return False
             
             # 🚨【第2层】检查温备池是否为空（双重检查）
             if not self.warm_standby_connections:
-                logger.error(f"[接管] [{self.exchange}] 温备池为空，无法接管")
+                logger.error(f"【监控调度】[接管] [{self.exchange}] 温备池为空，无法接管")
                 # 记录失败
                 self._record_takeover_failure("温备池为空")
                 return False
             
             # 🚨【第3层】检查主连接索引有效性
             if master_index < 0 or master_index >= len(self.master_connections):
-                logger.error(f"[接管] [{self.exchange}] 无效的主连接索引: {master_index} (有效范围: 0-{len(self.master_connections)-1})")
+                logger.error(f"【监控调度】[接管] [{self.exchange}] 无效的主连接索引: {master_index} (有效范围: 0-{len(self.master_connections)-1})")
                 self._record_takeover_failure(f"无效索引: {master_index}")
                 return False
             
@@ -392,7 +415,7 @@ class ExchangeWebSocketPool:
             
             # 🚨【第4层】验证原主连接
             if old_master is None:
-                logger.critical(f"[接管] [{self.exchange}] ❌ 原主连接为空")
+                logger.critical(f"【监控调度】[接管] [{self.exchange}] ❌ 原主连接为空")
                 self._record_takeover_failure("原主连接为空")
                 return False
             
@@ -402,14 +425,14 @@ class ExchangeWebSocketPool:
             try:
                 new_master = self.warm_standby_connections.pop(0)
             except IndexError as e:
-                logger.critical(f"[接管] [{self.exchange}] ❌ 温备池弹出失败: {e}")
-                logger.critical(f"[接管] [{self.exchange}] 当前温备池大小: {len(self.warm_standby_connections)}")
+                logger.critical(f"【监控调度】[接管] [{self.exchange}] ❌ 温备池弹出失败: {e}")
+                logger.critical(f"【监控调度】[接管] [{self.exchange}] 当前温备池大小: {len(self.warm_standby_connections)}")
                 self._record_takeover_failure(f"温备池弹出失败: {e}")
                 return False
             
             # 🚨【第6层】验证获取的连接是否有效
             if new_master is None:
-                logger.critical(f"[接管] [{self.exchange}] ❌ 获取到空的温备连接")
+                logger.critical(f"【监控调度】[接管] [{self.exchange}] ❌ 获取到空的温备连接")
                 self._record_takeover_failure("获取到空的温备连接")
                 # 尝试放回原温备
                 if old_master not in self.warm_standby_connections:
@@ -425,7 +448,7 @@ class ExchangeWebSocketPool:
                 "timestamp": datetime.now().isoformat()
             }
             
-            logger.info(f"[接管] [{self.exchange}] 接管前池状态: {pool_state_before}")
+            logger.info(f"【监控调度】[接管] [{self.exchange}] 接管前池状态: {pool_state_before}")
             
             # 3. 温备升级为主连接
             # 先取消温备的心跳订阅（如果有）
@@ -435,7 +458,7 @@ class ExchangeWebSocketPool:
                     await asyncio.wait_for(new_master._unsubscribe(), timeout=5)
                     await asyncio.sleep(1)
                 except asyncio.TimeoutError:
-                    logger.warning(f"[接管] [{self.exchange}] 取消订阅超时，继续执行")
+                    logger.warning(f"【监控调度】[接管] [{self.exchange}] 取消订阅超时，继续执行")
             
             # 温备订阅主连接的合约
             master_symbols = self.symbol_groups[master_index] if master_index < len(self.symbol_groups) else old_master.symbols
@@ -447,14 +470,14 @@ class ExchangeWebSocketPool:
                     timeout=30
                 )
             except asyncio.TimeoutError:
-                logger.error(f"[接管] [{self.exchange}] 切换角色超时30秒")
+                logger.error(f"【监控调度】[接管] [{self.exchange}] 切换角色超时30秒")
                 success = False
             
             if not success:
                 new_master.log_with_role("error", "升级失败，放回温备池")
                 # 🚨【安全回退】失败时恢复原状
                 self.warm_standby_connections.insert(0, new_master)
-                logger.warning(f"[接管] [{self.exchange}] 升级失败，已恢复温备池")
+                logger.warning(f"【监控调度】[接管] [{self.exchange}] 升级失败，已恢复温备池")
                 self._record_takeover_failure("升级失败")
                 return False
             
@@ -468,7 +491,7 @@ class ExchangeWebSocketPool:
                     await asyncio.wait_for(old_master._unsubscribe(), timeout=5)
                     await asyncio.sleep(1)
                 except asyncio.TimeoutError:
-                    logger.warning(f"[接管] [{self.exchange}] 原主连接取消订阅超时")
+                    logger.warning(f"【监控调度】[接管] [{self.exchange}] 原主连接取消订阅超时")
             
             old_master.connection_type = ConnectionType.WARM_STANDBY
             old_master.symbols = self._get_heartbeat_symbols()
@@ -478,14 +501,14 @@ class ExchangeWebSocketPool:
             self.warm_standby_connections.append(old_master)  # 放到尾部
             
             # 🚨 关键日志：显示池子状态
-            logger.info(f"[接管] [{self.exchange}] 接管后温备池状态:")
+            logger.info(f"【监控调度】[接管] [{self.exchange}] 接管后温备池状态:")
             for i, conn in enumerate(self.warm_standby_connections):
                 if conn is not None:
                     role_char = conn.role_display.get(conn.connection_type, "?")
                     position = "头" if i == 0 else "尾" if i == len(self.warm_standby_connections)-1 else "中"
-                    logger.info(f"  位置{i}({position}): {conn.connection_id}({role_char})")
+                    logger.info(f"  【监控调度】位置{i}({position}): {conn.connection_id}({role_char})")
                 else:
-                    logger.warning(f"  位置{i}: ❌ 空连接!")
+                    logger.warning(f"  【监控调度】位置{i}: ❌ 空连接!")
             
             # 6. 原主连接重新连接（作为温备）
             if not old_master.connected:
@@ -499,7 +522,7 @@ class ExchangeWebSocketPool:
             
             # 🚨 最终状态汇总
             takeover_duration = time.time() - takeover_start
-            logger.critical(f"[接管] [{self.exchange}] ✅ 接管成功！耗时: {takeover_duration:.2f}秒")
+            logger.critical(f"【监控调度】[接管] [{self.exchange}] ✅ 接管成功！耗时: {takeover_duration:.2f}秒")
             new_master.log_with_role("info", "现在担任主连接")
             old_master.log_with_role("info", f"现在担任温备，在池尾位置{len(self.warm_standby_connections)-1}")
             
@@ -512,7 +535,7 @@ class ExchangeWebSocketPool:
             return True
             
         except Exception as e:
-            logger.critical(f"[接管] [{self.exchange}] ❌ 接管过程未知异常: {e}")
+            logger.critical(f"【监控调度】[接管] [{self.exchange}] ❌ 接管过程未知异常: {e}")
             import traceback
             logger.critical(traceback.format_exc())
             
@@ -524,7 +547,7 @@ class ExchangeWebSocketPool:
                 if 'new_master' in locals() and new_master is not None:
                     if new_master not in self.warm_standby_connections:
                         self.warm_standby_connections.insert(0, new_master)
-                        logger.warning(f"[接管] [{self.exchange}] 异常恢复: 已将{new_master.connection_id}放回温备池")
+                        logger.warning(f"【监控调度】[接管] [{self.exchange}] 异常恢复: 已将{new_master.connection_id}放回温备池")
                 
                 # 确保原主连接还在主连接列表中
                 if 'old_master' in locals() and old_master is not None:
@@ -533,13 +556,13 @@ class ExchangeWebSocketPool:
                         if master_index < len(self.master_connections):
                             if self.master_connections[master_index] is None:
                                 self.master_connections[master_index] = old_master
-                                logger.warning(f"[接管] [{self.exchange}] 异常恢复: 已恢复原主连接到位置{master_index}")
+                                logger.warning(f"【监控调度】[接管] [{self.exchange}] 异常恢复: 已恢复原主连接到位置{master_index}")
             except Exception as recovery_error:
-                logger.error(f"[接管] [{self.exchange}] 异常恢复失败: {recovery_error}")
+                logger.error(f"【监控调度】[接管] [{self.exchange}] 异常恢复失败: {recovery_error}")
             
             # 🚨【检查失败次数过多】
             if len(self.takeover_failures) >= self.max_takeover_failures:
-                logger.critical(f"[接管] [{self.exchange}] ⚠️⚠️⚠️ 接管失败次数过多({len(self.takeover_failures)}次)，建议人工干预!")
+                logger.critical(f"【监控调度】[接管] [{self.exchange}] ⚠️⚠️⚠️ 接管失败次数过多({len(self.takeover_failures)}次)，建议人工干预!")
                 
             return False
     
@@ -558,10 +581,10 @@ class ExchangeWebSocketPool:
         if len(self.takeover_failures) > self.max_takeover_failures:
             self.takeover_failures = self.takeover_failures[-self.max_takeover_failures:]
         
-        logger.warning(f"[接管] [{self.exchange}] 接管失败记录: {reason} (总失败: {len(self.takeover_failures)}次)")
+        logger.warning(f"【监控调度】[接管] [{self.exchange}] 接管失败记录: {reason} (总失败: {len(self.takeover_failures)}次)")
 
     async def _report_status_to_data_store(self):
-        """报告状态到共享存储 - 包含接管失败记录"""
+        """报告状态到共享存储 - 包含接管失败记录和性能指标"""
         try:
             status_report = {
                 "exchange": self.exchange,
@@ -582,11 +605,46 @@ class ExchangeWebSocketPool:
                 }
             }
             
-            for conn in self.master_connections:
-                status_report["masters"].append(await conn.check_health())
+            # 🚨【新增】收集性能统计汇总
+            performance_summary = {
+                "total_messages": 0,
+                "avg_message_rate": 0.0,
+                "min_message_rate": float('inf'),
+                "max_message_rate": 0.0,
+                "connected_count": 0
+            }
             
+            # 主连接状态
+            for conn in self.master_connections:
+                health_data = await conn.check_health()
+                status_report["masters"].append(health_data)
+                
+                # 🚨【新增】汇总性能指标
+                message_rate = health_data.get("message_rate", 0.0)
+                total_messages = health_data.get("total_messages", 0)
+                
+                if conn.connected:
+                    performance_summary["connected_count"] += 1
+                    performance_summary["total_messages"] += total_messages
+                    performance_summary["avg_message_rate"] += message_rate
+                    performance_summary["min_message_rate"] = min(performance_summary["min_message_rate"], message_rate)
+                    performance_summary["max_message_rate"] = max(performance_summary["max_message_rate"], message_rate)
+            
+            # 温备连接状态
             for conn in self.warm_standby_connections:
-                status_report["warm_standbys"].append(await conn.check_health())
+                health_data = await conn.check_health()
+                status_report["warm_standbys"].append(health_data)
+            
+            # 计算平均消息速率
+            if performance_summary["connected_count"] > 0:
+                performance_summary["avg_message_rate"] = (
+                    performance_summary["avg_message_rate"] / performance_summary["connected_count"]
+                )
+            else:
+                performance_summary["min_message_rate"] = 0.0
+            
+            # 🚨【新增】添加性能汇总到状态报告
+            status_report["performance_summary"] = performance_summary
             
             if self.monitor_connection:
                 status_report["monitor"] = await self.monitor_connection.check_health()
@@ -597,8 +655,18 @@ class ExchangeWebSocketPool:
                 status_report
             )
             
+            # 🚨【新增】在控制台也显示性能摘要（每隔一段时间）
+            current_time = time.time()
+            if current_time - getattr(self, '_last_perf_display', 0) > 30:
+                logger.info(f"[{self.exchange}] 📊 【监控调度】性能摘要: "
+                           f"连接{performance_summary['connected_count']}/{len(self.master_connections)}, "
+                           f"消息速率{performance_summary['avg_message_rate']:.1f}/秒, "
+                           f"范围[{performance_summary['min_message_rate']:.1f}-{performance_summary['max_message_rate']:.1f}], "
+                           f"总消息{performance_summary['total_messages']}")
+                self._last_perf_display = current_time
+            
         except Exception as e:
-            logger.error(f"[{self.exchange}] 报告状态失败: {e}")
+            logger.error(f"[{self.exchange}] 【监控调度】报告状态失败: {e}")
     
     async def _report_failover_to_data_store(self, master_index: int, old_master_id: str, new_master_id: str):
         """报告故障转移到共享存储"""
@@ -626,24 +694,34 @@ class ExchangeWebSocketPool:
             logger.error(f"[监控调度] [{self.exchange}] 保存故障转移记录失败: {e}")
     
     async def _health_check_loop(self):
-        """健康检查循环"""
+        """健康检查循环 - 🚨【适配性能监控】"""
         while True:
             try:
                 for i, master in enumerate(self.master_connections):
+                    health_status = await master.check_health()
                     role_char = master.role_display.get(master.connection_type, "?")
                     status = "✅" if master.connected else "❌"
-                    logger.debug(f"[健康检查] 主连接{i}: {master.connection_id}({role_char}) {status}")
+                    message_rate = health_status.get("message_rate", 0.0)
+                    total_messages = health_status.get("total_messages", 0)
+                    
+                    logger.debug(f"【监控调度】[健康检查] 主连接{i}: {master.connection_id}({role_char}) {status} "
+                                f"速率{message_rate:.1f}消息/秒 总消息{total_messages}")
                 
                 for i, warm in enumerate(self.warm_standby_connections):
+                    health_status = await warm.check_health()
                     role_char = warm.role_display.get(warm.connection_type, "?")
                     status = "✅" if warm.connected else "❌"
                     pos = "头" if i == 0 else "中" if i < len(self.warm_standby_connections)-1 else "尾"
-                    logger.debug(f"[健康检查] 温备{i}({pos}): {warm.connection_id}({role_char}) {status}")
+                    message_rate = health_status.get("message_rate", 0.0)
+                    total_messages = health_status.get("total_messages", 0)
+                    
+                    logger.debug(f"【监控调度】[健康检查] 温备{i}({pos}): {warm.connection_id}({role_char}) {status} "
+                                f"速率{message_rate:.1f}消息/秒 总消息{total_messages}")
                 
                 await asyncio.sleep(30)
                 
             except Exception as e:
-                logger.error(f"[健康检查] [{self.exchange}] 错误: {e}")
+                logger.error(f"【监控调度】[健康检查] [{self.exchange}] 错误: {e}")
                 await asyncio.sleep(30)
     
     async def get_status(self) -> Dict[str, Any]:
