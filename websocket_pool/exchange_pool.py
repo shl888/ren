@@ -237,11 +237,11 @@ class ExchangeWebSocketPool:
         
         if not self.config.get("monitor_enabled", True):
             logger.warning(f"[{self.exchange}] ⚠️ 监控调度器被配置禁用")
-            return
+            return False
         
         if not ws_url:
             logger.error(f"[{self.exchange}] ❌ 【监控调度】WebSocket URL配置缺失")
-            return
+            return False
         
         conn_id = f"{self.exchange}_monitor"
         max_retries = 3
@@ -264,12 +264,23 @@ class ExchangeWebSocketPool:
                 success = await asyncio.wait_for(self.monitor_connection.connect(), timeout=30)
                 
                 if success:
+                    # 🚨 强制打印监控连接成功
+                    print(f"\n✅✅✅【强制打印】监控连接成功建立: {self.exchange}")
+                    print(f"✅✅✅ 监控连接ID: {conn_id}")
+                    print(f"✅✅✅ 连接状态: {self.monitor_connection.connected}\n")
+                    
                     self.monitor_connection.log_with_role("success", "监控连接建立成功")
                     logger.info(f"[{self.exchange}] ✅【监控调度】 监控连接建立成功")
                     
                     self.monitor_scheduler_task = asyncio.create_task(
                         self._monitor_scheduling_loop()
                     )
+                    
+                    # 🚨 强制确认调度任务已启动
+                    print(f"\n🚀🚀🚀【强制打印】监控调度循环已启动: {self.exchange}")
+                    print(f"🚀🚀🚀 调度任务: {self.monitor_scheduler_task}")
+                    print(f"🚀🚀🚀 任务状态: {'运行中' if not self.monitor_scheduler_task.done() else '已完成'}\n")
+                    
                     logger.info(f"[{self.exchange}] ✅ 监控调度循环已启动")
                     return True
                 else:
