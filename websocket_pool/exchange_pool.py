@@ -2,6 +2,7 @@
 单个交易所的连接池管理 - 监控调度版
 修复：并发初始化 + 强制后置检查 + 完整日志恢复 + 退避重连 + 软健康检查
 新增：接管逻辑7层安全防护
+修复：监控调度循环添加30秒状态报告
 """
 import asyncio
 import logging
@@ -273,14 +274,25 @@ class ExchangeWebSocketPool:
         return False
     
     async def _monitor_scheduling_loop(self):
-        """监控调度循环 - 🚨【关键修复】简化接管触发逻辑"""
+        """监控调度循环 - 🚨【关键修复】添加30秒状态报告"""
         logger.info(f"[{self.exchange}_monitor] 开始监控调度循环，每3秒检查一次")
+        
+        # 🚨【新增】跟踪上次报告时间
+        last_report_time = time.time()
+        report_interval = 30  # 30秒报告一次
         
         # 跟踪每个主连接的连续失败次数
         master_failures = {}
         
         while True:
             try:
+                current_time = time.time()
+                
+                # 🚨【新增】每30秒报告一次监控状态
+                if current_time - last_report_time >= report_interval:
+                    logger.info(f"[{self.exchange}_monitor] 📊 监控运行中，持续检查连接状态...")
+                    last_report_time = current_time
+                
                 # 1. 监控主连接（简化健康检查）
                 for i, master_conn in enumerate(self.master_connections):
                     # 🚨【简化健康检查】30秒内收到消息就算健康
@@ -291,7 +303,7 @@ class ExchangeWebSocketPool:
                     )
                     
                     if not is_healthy:
-                        # 记录失败次数
+                        # 🚨 记录失败次数
                         conn_id = master_conn.connection_id
                         current_failures = master_failures.get(conn_id, 0) + 1
                         master_failures[conn_id] = current_failures
@@ -327,7 +339,11 @@ class ExchangeWebSocketPool:
 
     async def _simple_takeover(self, master_index: int):
         """🚨【关键修复】简单接管：温备变主连接，主连接变温备 - 安全加固版"""
-        logger.critical(f"[接管] [{self.exchange}] 开始接管主连接{master_index}")
+        # 🚨【新增】醒目开始标记
+        logger.critical("🔥" * 50)
+        logger.critical(f"🔥 [{self.exchange}] 检测到故障，开始接管主连接{master_index}!")
+        logger.critical(f"🔥 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.critical("🔥" * 50)
         
         try:
             # 🚨【安全加固1】参数类型验证
