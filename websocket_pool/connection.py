@@ -65,6 +65,13 @@ class WebSocketConnection:
         self.ticker_count = 0          # 币安ticker计数
         self.okx_ticker_count = 0      # OKX ticker计数
         
+        # 🚨【新增】性能监控属性
+        self.message_count = 0  # 短期消息计数（用于计算速率）
+        self.last_rate_check_time = time.time()  # 上次计算速率的时间
+        self.message_rate = 0.0  # 当前消息速率（消息/秒）
+        self.connection_start_time = time.time()  # 连接开始时间
+        self.total_messages_received = 0  # 总消息接收数
+        
         # 🚨【新增】角色显示映射
         self.role_display = {
             ConnectionType.MASTER: "主",
@@ -108,6 +115,12 @@ class WebSocketConnection:
             # 🚨【关键】重置订阅状态
             self.subscribed = False
             self.is_active = False
+            
+            # 🚨 重置性能监控状态
+            self.connection_start_time = time.time()
+            self.total_messages_received = 0
+            self.message_count = 0
+            self.message_rate = 0.0
             
             # 🚨 增强：增加连接超时保护
             self.ws = await asyncio.wait_for(
@@ -477,8 +490,28 @@ class WebSocketConnection:
             self.is_active = False
     
     async def _process_message(self, message):
-        """处理接收到的消息"""
+        """处理接收到的消息 - 🚨【新增性能监控】"""
         try:
+            # 🚨【新增】更新性能监控计数
+            self.message_count += 1
+            self.total_messages_received += 1
+            
+            current_time = time.time()
+            time_diff = current_time - self.last_rate_check_time
+            
+            # 每10秒计算一次消息速率
+            if time_diff >= 10:
+                self.message_rate = self.message_count / time_diff
+                self.message_count = 0
+                self.last_rate_check_time = current_time
+                
+                # 如果主连接消息速率过低，记录警告
+                if (self.connection_type == ConnectionType.MASTER and 
+                    self.message_rate < 1.0 and 
+                    self.subscribed and 
+                    self.symbols):
+                    self.log_with_role("warning", f"消息速率过低: {self.message_rate:.2f} 消息/秒")
+            
             data = json.loads(message)
             
             if self.exchange == "binance" and "id" in data:
@@ -690,9 +723,12 @@ class WebSocketConnection:
         return 999
     
     async def check_health(self) -> Dict[str, Any]:
-        """检查连接健康状态"""
+        """检查连接健康状态 - 🚨【新增性能指标】"""
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
+        
+        # 计算运行时间
+        uptime_seconds = time.time() - self.connection_start_time
         
         return {
             "connection_id": self.connection_id,
@@ -704,5 +740,8 @@ class WebSocketConnection:
             "symbols_count": len(self.symbols),
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
+            "message_rate": round(self.message_rate, 2),  # 🚨 新增：消息速率
+            "total_messages": self.total_messages_received,  # 🚨 新增：总消息数
+            "uptime_seconds": round(uptime_seconds, 1),  # 🚨 新增：运行时间
             "timestamp": now.isoformat()
         }
