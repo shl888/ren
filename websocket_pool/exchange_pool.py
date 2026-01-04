@@ -154,18 +154,21 @@ class ExchangeWebSocketPool:
                 symbols=symbol_group
             )
             
-            # 🚨 恢复原始日志：显示每个主连接的合约数
-            logger.info(f"[{conn_id}] 主连接启动，订阅 {len(symbol_group)} 个合约")
+            # 🚨【修复】使用连接的 log_with_role 方法
+            connection.log_with_role("info", f"主连接启动，订阅 {len(symbol_group)} 个合约")
             
             try:
                 success = await asyncio.wait_for(connection.connect(), timeout=30)
                 if success:
                     self.master_connections.append(connection)
-                    logger.info(f"[{conn_id}] 主连接启动成功")
+                    # 🚨【修复】使用连接的 log_with_role 方法
+                    connection.log_with_role("info", "主连接启动成功")
                 else:
-                    logger.error(f"[{conn_id}] 主连接启动失败")
+                    # 🚨【修复】使用连接的 log_with_role 方法
+                    connection.log_with_role("error", "主连接启动失败")
             except Exception as e:
-                logger.error(f"[{conn_id}] 主连接异常: {e}")
+                # 🚨【修复】使用连接的 log_with_role 方法
+                connection.log_with_role("error", f"主连接异常: {e}")
         
         logger.info(f"[{self.exchange}] 主连接初始化完成: {len(self.master_connections)} 个")
     
@@ -187,20 +190,26 @@ class ExchangeWebSocketPool:
                 symbols=heartbeat_symbols
             )
             
-            logger.info(f"[{conn_id}] 温备连接启动（将延迟订阅心跳）")
+            # 🚨【修复】使用连接的 log_with_role 方法
+            connection.log_with_role("info", "温备连接启动（将延迟订阅心跳）")
             
             try:
                 success = await asyncio.wait_for(connection.connect(), timeout=30)
                 if success:
                     self.warm_standby_connections.append(connection)
-                    logger.info(f"[{conn_id}] 温备连接启动成功")
+                    # 🚨【修复】使用连接的 log_with_role 方法
+                    connection.log_with_role("info", "温备连接启动成功")
                 else:
-                    logger.error(f"[{conn_id}] 温备连接启动失败")
+                    # 🚨【修复】使用连接的 log_with_role 方法
+                    connection.log_with_role("error", "温备连接启动失败")
             except asyncio.TimeoutError:
-                logger.error(f"[{conn_id}] 温备连接超时30秒，强制跳过")
+                # 🚨【修复】使用连接的 log_with_role 方法
+                connection.log_with_role("error", "温备连接超时30秒，强制跳过")
             except Exception as e:
-                logger.error(f"[{conn_id}] 温备连接异常: {e}")
+                # 🚨【修复】使用连接的 log_with_role 方法
+                connection.log_with_role("error", f"温备连接异常: {e}")
         
+        # 🚨【修复】保留原来的汇总日志，但添加角色信息
         logger.info(f"[{self.exchange}] 温备连接初始化完成: {len(self.warm_standby_connections)} 个")
     
     def _get_heartbeat_symbols(self):
@@ -242,7 +251,8 @@ class ExchangeWebSocketPool:
                 success = await asyncio.wait_for(self.monitor_connection.connect(), timeout=30)
                 
                 if success:
-                    logger.info(f"[{conn_id}] 监控连接建立成功")
+                    # 🚨【修复】使用连接的 log_with_role 方法
+                    self.monitor_connection.log_with_role("info", "监控连接建立成功")
                     
                     self.monitor_scheduler_task = asyncio.create_task(
                         self._monitor_scheduling_loop()
