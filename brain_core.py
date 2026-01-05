@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 大脑核心主控 - Render流式终极版（512MB内存优化）
 """
@@ -81,6 +80,9 @@ class BrainCore:
         logger.info("=" * 60)
         logger.info("大脑核心启动中（流式终极版，512MB优化）...")
         logger.info("=" * 60)
+        
+        # 🚨【临时关闭shared_data日志】- 要恢复日志请注释掉这一行
+        logging.getLogger('shared_data').setLevel(logging.ERROR)
         
         try:
             # 1. 创建HTTP服务器
