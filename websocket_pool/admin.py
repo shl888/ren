@@ -47,11 +47,10 @@ class WebSocketAdmin:
             logger.info("[管理员] 步骤1: 初始化WebSocket连接池")
             await self._pool_manager.initialize()
             
-            # 2. 🚨 不再启动假监控，连接池内置监控已激活
-            logger.info("[管理员] 步骤2: 连接池内置监控已激活（自管理）")
-            
-            # 3. 启动重启请求等待循环（纯被动）
-            asyncio.create_task(self._check_restart_requests_loop())
+            # 2. 启动重启请求等待循环（纯被动）
+            logger.info("[管理员] 步骤2: 启动重启请求等待循环（纯被动模式）")
+            restart_task = asyncio.create_task(self._check_restart_requests_loop())
+            logger.info(f"[管理员] ✅ 重启请求循环任务已启动")
             
             self._running = True
             self._initialized = True
