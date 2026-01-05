@@ -116,4 +116,3 @@ class ConnectionMonitor:
                 "status": "error",
                 "error": str(e)
             }
-[file content end]

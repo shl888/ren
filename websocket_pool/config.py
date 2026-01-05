@@ -62,4 +62,3 @@ SYMBOL_FILTERS = {
         "quote": "USDT",
     }
 }
-[file content end]

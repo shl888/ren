@@ -556,4 +556,3 @@ class WebSocketConnection:
             "reconnect_count": self.reconnect_count,
             "timestamp": now.isoformat()
         }
-[file content end]
