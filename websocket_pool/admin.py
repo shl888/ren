@@ -1,47 +1,47 @@
-# websocket_pool/admin.py
 """
-WebSocket连接池管理员 - 生产级实现 + 后置检查 + 冷却时间
+WebSocket连接池管理员 - 修复版
+支持被动接收重启请求
 """
 
 import asyncio
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
 
-# 模块内部导入
 from .pool_manager import WebSocketPoolManager
 from .monitor import ConnectionMonitor
+from .exchange_pool import ExchangeWebSocketPool
 
 logger = logging.getLogger(__name__)
 
 class WebSocketAdmin:
-    """WebSocket模块管理员"""
+    """WebSocket模块管理员 - 修复版"""
     
-    def __init__(self):  # 🚨 移除回调参数
-        """初始化WebSocket管理员 - 简化版"""
-        logger.info("WebSocketAdmin: 启动（使用pool_manager内部回调）")
+    def __init__(self):
+        """初始化"""
+        logger.info("WebSocketAdmin: 启动（被动接收模式）")
         
-        # 🚨 直接创建pool_manager，不传递任何回调
-        self._pool_manager = WebSocketPoolManager()
+        # ✅ 创建pool_manager时传入self引用
+        self._pool_manager = WebSocketPoolManager(admin_instance=self)
         self._monitor = ConnectionMonitor(self._pool_manager)
         
         self._running = False
         self._initialized = False
+        self._restart_requests = {}  # 存储重启请求
+        self._processing_restart = set()  # ✅ 新增：正在处理的重启集合
         
         logger.info("✅ WebSocketAdmin 初始化完成")
     
-    # ========== 对外接口（大脑核心只调用这些方法）==========
-    
     async def start(self):
-        """启动整个WebSocket模块 - 增强版"""
+        """启动整个WebSocket模块"""
         if self._running:
             logger.warning("WebSocket模块已在运行中")
             return True
         
         try:
-            logger.info(f"{'=' * 60}")
+            logger.info("=" * 60)
             logger.info("WebSocketAdmin 正在启动模块...")
-            logger.info(f"{'=' * 60}")
+            logger.info("=" * 60)
             
             # 1. 初始化连接池
             logger.info("[管理员] 步骤1: 初始化WebSocket连接池")
@@ -51,15 +51,16 @@ class WebSocketAdmin:
             logger.info("[管理员] 步骤2: 启动连接监控")
             await self._monitor.start_monitoring()
             
-            # 3. 🚨 新增：强制检查每个交易所的监控调度器
-            logger.info("[管理员] 步骤3: 强制检查各交易所监控调度器")
-            await self._enforce_all_monitor_schedulers()
+            # 3. 启动重启请求检查
+            asyncio.create_task(self._check_restart_requests_loop())
             
             self._running = True
             self._initialized = True
             
             logger.info("✅ WebSocketAdmin 模块启动成功")
-            logger.info(f"{'=' * 60}")
+            logger.info("=" * 60)
+            logger.info("💡 模式: 被动接收重启请求（直接调用）")
+            logger.info("=" * 60)
             return True
             
         except Exception as e:
@@ -67,26 +68,116 @@ class WebSocketAdmin:
             await self.stop()
             return False
     
-    async def _enforce_all_monitor_schedulers(self):
-        """🚨 强制检查所有交易所的监控调度器 - 增强版"""
-        for exchange_name, pool in self._pool_manager.exchange_pools.items():
-            logger.info(f"[管理员] 检查 [{exchange_name}] 监控调度器状态...")
+    async def _check_restart_requests_loop(self):
+        """检查重启请求循环"""
+        logger.info("[管理员] 开始检查重启请求循环")
+        
+        while self._running:
+            try:
+                # ✅ 直接检查连接池状态，不需要通过data_store
+                restart_needed = await self._check_pool_restart_needs()
+                if restart_needed:
+                    for exchange in restart_needed:
+                        # ✅ 检查是否已经在处理中
+                        if exchange not in self._processing_restart:
+                            logger.critical(f"[管理员] 🆘 检测到 {exchange} 需要重启")
+                            await self._handle_restart_request(exchange, "健康检查检测")
+                
+                await asyncio.sleep(10)  # 10秒检查一次
+                
+            except Exception as e:
+                logger.error(f"检查重启请求错误: {e}")
+                await asyncio.sleep(10)
+    
+    async def handle_restart_request(self, exchange: str, reason: str):
+        """✅ 新增：处理连接池直接发来的重启请求"""
+        logger.critical(f"[管理员] 🆘 收到直接重启请求: {exchange} - {reason}")
+        
+        if exchange not in self._restart_requests:
+            self._restart_requests[exchange] = {
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+                "handled": False,
+                "source": "direct_request"  # 标记为直接请求
+            }
+        
+        # ✅ 检查是否已经在处理中，防止双重调用
+        if (exchange in self._restart_requests and 
+            not self._restart_requests[exchange]["handled"] and
+            exchange not in self._processing_restart):
             
-            # 🚨【关键修复】检查监控连接是否存活
-            if not pool.monitor_connection or not pool.monitor_connection.connected:
-                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 监控连接异常，30秒后重试")
-                await asyncio.sleep(30)  # 给交易所冷却时间
-                await pool._initialize_monitor_scheduler()
+            await self._handle_restart_request(exchange, reason)
+    
+    async def _check_pool_restart_needs(self) -> List[str]:
+        """检查连接池是否需要重启"""
+        restart_needed = []
+        
+        try:
+            status = await self._pool_manager.get_all_status()
             
-            # 检查调度循环
-            if not pool.monitor_scheduler_task or pool.monitor_scheduler_task.done():
-                logger.warning(f"[管理员] ⚠️ [{exchange_name}] 调度循环未运行，强制启动")
-                pool.monitor_scheduler_task = asyncio.create_task(
-                    pool._monitor_scheduling_loop()
-                )
-                logger.info(f"[管理员] ✅ [{exchange_name}] 调度循环已强制启动")
-            else:
-                logger.info(f"[管理员] ✅ [{exchange_name}] 监控调度器状态正常")
+            for exchange, ex_status in status.items():
+                if isinstance(ex_status, dict):
+                    need_restart = ex_status.get("need_restart", False)
+                    takeover_attempts = ex_status.get("takeover_attempts", 0)
+                    failed_count = ex_status.get("failed_connections_count", 0)
+                    
+                    # 条件1：连接池明确要求重启
+                    if need_restart:
+                        restart_needed.append(exchange)
+                    
+                    # 条件2：接管尝试过多
+                    elif takeover_attempts > 10:
+                        logger.warning(f"[管理员] {exchange} 接管尝试过多: {takeover_attempts}")
+                        restart_needed.append(exchange)
+                    
+                    # 条件3：失败连接过多
+                    total_connections = len(ex_status.get("masters", [])) + len(ex_status.get("warm_standbys", []))
+                    if failed_count >= total_connections and total_connections > 0:
+                        logger.warning(f"[管理员] {exchange} 所有连接都失败过")
+                        restart_needed.append(exchange)
+        
+        except Exception as e:
+            logger.error(f"检查连接池重启需求失败: {e}")
+        
+        return restart_needed
+    
+    async def _handle_restart_request(self, exchange: str, reason: str):
+        """处理重启请求"""
+        # ✅ 添加到处理集合，防止重复处理
+        self._processing_restart.add(exchange)
+        
+        try:
+            if exchange not in self._pool_manager.exchange_pools:
+                logger.error(f"[管理员] 交易所不存在: {exchange}")
+                return
+            
+            logger.critical(f"[管理员] 🔄 正在重启 {exchange} 连接池，原因: {reason}")
+            
+            pool = self._pool_manager.exchange_pools[exchange]
+            symbols = pool.symbols
+            
+            # 1. 关闭旧池
+            await pool.shutdown()
+            await asyncio.sleep(3)
+            
+            # 2. 创建新池（传入管理员引用）
+            new_pool = ExchangeWebSocketPool(exchange, self._pool_manager.data_callback, self)
+            await new_pool.initialize(symbols)
+            
+            # 3. 替换池
+            self._pool_manager.exchange_pools[exchange] = new_pool
+            
+            # 4. 标记为已处理
+            if exchange in self._restart_requests:
+                self._restart_requests[exchange]["handled"] = True
+            
+            logger.critical(f"[管理员] ✅ {exchange} 连接池重启完成")
+            
+        except Exception as e:
+            logger.error(f"[管理员] ❌ {exchange} 重启失败: {e}")
+        finally:
+            # ✅ 从处理集合中移除
+            self._processing_restart.discard(exchange)
     
     async def stop(self):
         """停止整个WebSocket模块"""
@@ -106,7 +197,7 @@ class WebSocketAdmin:
         logger.info("✅ WebSocketAdmin 模块已停止")
     
     async def get_status(self) -> Dict[str, Any]:
-        """获取模块状态摘要（精简信息）"""
+        """获取模块状态"""
         try:
             internal_status = await self._pool_manager.get_all_status()
             
@@ -114,6 +205,9 @@ class WebSocketAdmin:
                 "module": "websocket_pool",
                 "status": "healthy" if self._running else "stopped",
                 "initialized": self._initialized,
+                "mode": "self_managed",
+                "restart_requests": self._restart_requests,
+                "processing_restart": list(self._processing_restart),
                 "exchanges": {},
                 "timestamp": datetime.now().isoformat()
             }
@@ -131,7 +225,9 @@ class WebSocketAdmin:
                         "masters_total": len(masters),
                         "standbys_connected": connected_warm,
                         "standbys_total": len(warm_standbys),
-                        "health": "good" if connected_masters == len(masters) else "warning"
+                        "need_restart": ex_status.get("need_restart", False),
+                        "takeover_attempts": ex_status.get("takeover_attempts", 0),
+                        "failed_connections": ex_status.get("failed_connections_count", 0)
                     }
             
             return summary
@@ -146,7 +242,7 @@ class WebSocketAdmin:
             }
     
     async def health_check(self) -> Dict[str, Any]:
-        """健康检查（快速检查）"""
+        """健康检查"""
         if not self._running:
             return {
                 "healthy": False,
@@ -156,17 +252,25 @@ class WebSocketAdmin:
         try:
             status = await self.get_status()
             
-            # 检查是否有严重问题
-            for exchange_info in status.get("exchanges", {}).values():
+            # 检查主连接
+            issues = []
+            for exchange, exchange_info in status.get("exchanges", {}).items():
                 masters_connected = exchange_info.get("masters_connected", 0)
                 masters_total = exchange_info.get("masters_total", 0)
                 
                 if masters_connected == 0 and masters_total > 0:
-                    return {
-                        "healthy": False,
-                        "message": f"交易所主连接全部断开",
-                        "details": status
-                    }
+                    issues.append(f"{exchange}: 主连接全部断开")
+                
+                if exchange_info.get("need_restart", False):
+                    issues.append(f"{exchange}: 需要重启")
+            
+            if issues:
+                return {
+                    "healthy": False,
+                    "message": f"发现问题: {', '.join(issues)}",
+                    "details": status,
+                    "action": "check_restart_needs"
+                }
             
             return {
                 "healthy": True,
@@ -179,8 +283,6 @@ class WebSocketAdmin:
                 "healthy": False,
                 "message": f"健康检查异常: {e}"
             }
-    
-    # ========== 扩展接口（可选）==========
     
     async def reconnect_exchange(self, exchange_name: str):
         """重连指定交易所"""

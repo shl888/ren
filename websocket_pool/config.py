@@ -1,5 +1,7 @@
+[file name]: config.py
+[file content begin]
 """
-WebSocket连接池配置 - 角色互换版
+WebSocket连接池配置 - 自管理模式
 """
 from typing import Dict, Any
 
@@ -10,51 +12,47 @@ EXCHANGE_CONFIGS = {
         "ws_private_url": "wss://fstream.binance.com/ws",
         "rest_url": "https://fapi.binance.com",
         
-        # 角色互换配置
-        "active_connections": 3,        # 活跃连接数（原主连接）
-        "total_connections": 6,         # 总连接数（活跃+备用）
+        # 连接配置
+        "active_connections": 2,        # 主连接数
+        "total_connections": 5,         # 总连接数（主+备）
         "symbols_per_connection": 300,  # 每个连接负责的合约数
         
-        # 兼容性配置（可选）
-        "masters_count": 3,              # 兼容旧代码
-        "warm_standbys_count": 3,        # 兼容旧代码
-        "symbols_per_master": 300,       # 兼容旧代码
+        # 兼容性配置
+        "masters_count": 2,
+        "warm_standbys_count": 3,
+        "symbols_per_master": 300,
         
         # 其他配置
-        "rotation_interval": 1800,      # 轮转间隔(秒) - 30分钟
-        "monitor_enabled": True,        # 启用监控
-        "reconnect_interval": 3,        # 重连间隔(秒)
-        "ping_interval": 30,            # 心跳间隔(秒)
+        "reconnect_interval": 3,
+        "ping_interval": 10,
     },
     "okx": {
         "ws_public_url": "wss://ws.okx.com:8443/ws/v5/public",
         "ws_private_url": "wss://ws.okx.com:8443/ws/v5/private",
         "rest_url": "https://www.okx.com",
         
-        # 角色互换配置
-        "active_connections": 2,
-        "total_connections": 4,
+        # 连接配置
+        "active_connections": 1,
+        "total_connections": 3,
         "symbols_per_connection": 300,
         
-        # 兼容性配置（可选）
-        "masters_count": 2,
+        # 兼容性配置
+        "masters_count": 1,
         "warm_standbys_count": 2,
         "symbols_per_master": 300,
         
         # 其他配置
-        "rotation_interval": 1800,
-        "monitor_enabled": True,
         "reconnect_interval": 3,
-        "ping_interval": 30,
+        "ping_interval": 3,  # OKX必须3秒
     }
 }
 
 # 订阅的数据类型
 SUBSCRIPTION_TYPES = {
-    "funding_rate": True,      # 资金费率
-    "mark_price": True,        # 标记价格
-    "orderbook": "books5",     # 5档深度(只取第一档)
-    "ticker": True,            # 24小时涨跌幅和成交量
+    "funding_rate": True,
+    "mark_price": True,
+    "orderbook": "books5",
+    "ticker": True,
 }
 
 # 合约筛选
@@ -66,3 +64,4 @@ SYMBOL_FILTERS = {
         "quote": "USDT",
     }
 }
+[file content end]

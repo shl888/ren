@@ -71,10 +71,11 @@ async def default_data_callback(data):
 class WebSocketPoolManager:
     """WebSocket连接池管理器"""
     
-    def __init__(self):  # 🚨 移除回调参数
+    def __init__(self, admin_instance=None):  # ✅ 新增admin_instance参数
         """初始化连接池管理器 - 固定使用default_data_callback"""
         # 🚨 永远使用内部默认回调
         self.data_callback = default_data_callback
+        self.admin_instance = admin_instance  # ✅ 保存管理员引用
         
         self.exchange_pools = {}  # exchange_name -> ExchangeWebSocketPool
         self.initialized = False
@@ -83,6 +84,8 @@ class WebSocketPoolManager:
         
         logger.info("✅ WebSocketPoolManager 初始化完成")
         logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
+        if admin_instance:
+            logger.info("📞 已设置管理员引用，支持直接重启请求")
         
     async def initialize(self):
         """初始化所有交易所连接池 - 防重入版"""
@@ -139,7 +142,8 @@ class WebSocketPoolManager:
             
             # 3. 初始化连接池
             logger.info(f"[{exchange_name}] 初始化连接池...")
-            pool = ExchangeWebSocketPool(exchange_name, self.data_callback)  # 使用内部回调
+            # ✅ 创建连接池时传入管理员引用
+            pool = ExchangeWebSocketPool(exchange_name, self.data_callback, self.admin_instance)
             await pool.initialize(symbols)
             self.exchange_pools[exchange_name] = pool
             
