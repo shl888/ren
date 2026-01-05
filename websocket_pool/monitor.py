@@ -1,5 +1,3 @@
-[file name]: monitor.py
-[file content begin]
 """
 连接池健康监控 - 只读模式
 仅监控外部状态，不干预内部运行

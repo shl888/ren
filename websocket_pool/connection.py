@@ -1,5 +1,3 @@
-[file name]: connection.py
-[file content begin]
 """
 单个WebSocket连接实现 - 简洁版
 支持主备切换，明确状态管理

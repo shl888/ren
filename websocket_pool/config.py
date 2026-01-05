@@ -1,5 +1,3 @@
-[file name]: config.py
-[file content begin]
 """
 WebSocket连接池配置 - 自管理模式
 """
