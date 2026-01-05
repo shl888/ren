@@ -27,7 +27,7 @@ class ExchangeWebSocketPool:
     def __init__(self, exchange: str, data_callback, admin_instance=None):
         self.exchange = exchange
         self.data_callback = data_callback
-        self.admin_instance = admin_instance  # ✅ 新增：直接引用管理员实例
+        self.admin_instance = admin_instance  # 🚨 新增：直接引用管理员实例
         self.config = EXCHANGE_CONFIGS.get(exchange, {})
         
         # 连接池
@@ -206,6 +206,20 @@ class ExchangeWebSocketPool:
                     if not warm_conn.connected:
                         warm_conn.log_with_role("warning", "连接断开，尝试重连")
                         await warm_conn.connect()
+                    
+                    # 🚨【新增修复】检查温备连接是否缺少心跳合约
+                    elif (warm_conn.connected and 
+                          warm_conn.connection_type == ConnectionType.WARM_STANDBY and
+                          not warm_conn.symbols):
+                        warm_conn.log_with_role("warning", "温备缺少心跳合约，正在修复...")
+                        warm_conn.symbols = self._get_heartbeat_symbols()
+                        if warm_conn.delayed_subscribe_task:
+                            warm_conn.delayed_subscribe_task.cancel()
+                        delay = warm_conn._get_delay_for_warm_standby()
+                        warm_conn.delayed_subscribe_task = asyncio.create_task(
+                            warm_conn._delayed_subscribe(delay)
+                        )
+                        warm_conn.log_with_role("info", f"将在{delay}秒后订阅心跳")
                 
                 # 状态报告
                 await self._report_status_to_data_store()
@@ -297,14 +311,23 @@ class ExchangeWebSocketPool:
             a_master.symbols = []
             a_master.subscribed = False
             
-            # A变温备
-            a_master.connection_type = ConnectionType.WARM_STANDBY
-            a_master.is_active = False
-            a_master.log_with_role("info", "角色变更: 主 → 备")
+            # 🚨【关键修复】在放入温备池前，调用switch_role方法设置心跳合约和订阅！
+            a_master.log_with_role("info", "正在切换为温备角色...")
+            
+            # ✅ 调用switch_role方法（设置心跳合约+启动延迟订阅）
+            success = await a_master.switch_role(ConnectionType.WARM_STANDBY)
+            
+            if not success:
+                a_master.log_with_role("error", "切换为温备失败，降级处理")
+                # 降级：至少设置type和心跳合约
+                a_master.connection_type = ConnectionType.WARM_STANDBY
+                a_master.is_active = False
+                a_master.symbols = self._get_heartbeat_symbols()
+                a_master.log_with_role("info", "已手动设置心跳合约")
             
             # 🚨【修复5】A进温备池尾部，但不立即重连！
             self.warm_standby_connections.append(a_master)
-            a_master.log_with_role("info", f"已进入温备池，位置{len(self.warm_standby_connections)-1}")
+            a_master.log_with_role("info", f"已进入温备池，位置{len(self.warm_standby_connections)-1}（已设置心跳合约）")
             
             # 🚨 重要：A不立即重连！由温备池的正常机制处理
             
