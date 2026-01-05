@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # ============ 【固定数据回调函数】============
 async def default_data_callback(data):
-    """默认数据回调函数 - 精简日志版"""
+    """默认数据回调函数 - 带阈值清零版"""
     try:
         if not data:
             logger.debug("[数据回调] 收到空数据")
@@ -41,24 +41,32 @@ async def default_data_callback(data):
             logger.warning(f"[数据回调] 数据缺少symbol字段")
             return
         
-        # 🚨 计数器
+        # 🚨 计数器初始化
         if not hasattr(default_data_callback, 'counter'):
             default_data_callback.counter = 0
             logger.info(f"💫【数据回调初始化】计数器创建")
         
+        # 🎯 关键：先增加计数
         default_data_callback.counter += 1
+        current_count = default_data_callback.counter
+        
+        # 🎯 等于或超过100万就清零
+        if current_count >= 1000000:
+            default_data_callback.counter = 0
+            current_count = 0
+            logger.info(f"🔄【数据回调阈值重置】达到100万条，计数器清零重新开始")
         
         # 1. 第一条数据（重要） - 确认系统启动
-        if default_data_callback.counter == 1:
+        if current_count == 1:
             logger.info(f"🎉【数据回调第一条数据】{exchange} {symbol} ({data_type})")
         
-        # 2. 每5000条记录一次数据流动 - 监控数据持续流动
-        if default_data_callback.counter % 5000 == 0:
-            logger.info(f"✅【数据回调已接收】{default_data_callback.counter}条数据 - 最新: {exchange} {symbol}")
+        # 2. 每5000条记录一次数据流动
+        if current_count % 5000 == 0:
+            logger.info(f"✅【数据回调已接收】{current_count:,}条数据 - 最新: {exchange} {symbol}")
         
-        # 3. 每50000条里程碑 - 长期运行监控
-        if default_data_callback.counter % 50000 == 0:
-            logger.info(f"🏆【数据回调里程碑】{default_data_callback.counter} 条数据,已存储到data_store")
+        # 3. 每50000条里程碑
+        if current_count % 50000 == 0:
+            logger.info(f"🏆【数据回调里程碑】{current_count:,} 条数据,已存储到data_store")
         
         # 🚨 关键：直接存储到data_store（不过大脑）
         await data_store.update_market_data(exchange, symbol, data)

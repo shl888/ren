@@ -1,5 +1,5 @@
 """
-单个交易所的连接池管理 - 修复版
+单个交易所的连接池管理 - 修复版 + 详细日志
 增加安全防护和重启条件
 """
 import asyncio
@@ -22,7 +22,7 @@ from .config import EXCHANGE_CONFIGS
 logger = logging.getLogger(__name__)
 
 class ExchangeWebSocketPool:
-    """单个交易所的WebSocket连接池 - 修复版"""
+    """单个交易所的WebSocket连接池 - 修复版 + 详细日志"""
     
     def __init__(self, exchange: str, data_callback, admin_instance=None):
         self.exchange = exchange
@@ -47,6 +47,7 @@ class ExchangeWebSocketPool:
         self.need_restart = False
         self.failed_connections_track = set()  # 记录失败过的连接ID
         self.takeover_attempts = 0  # 接管尝试次数
+        self.takeover_success_count = 0  # 接管成功次数
         
         logger.info(f"[{self.exchange}] ExchangeWebSocketPool 初始化完成")
 
@@ -162,13 +163,19 @@ class ExchangeWebSocketPool:
         return []
 
     async def _internal_monitoring_loop(self):
-        """内部监控循环"""
-        logger.info(f"[{self.exchange}] 开始内部监控循环")
+        """内部监控循环 - 详细日志版"""
+        logger.info(f"[{self.exchange}] 🚀 启动内部监控（每3秒检查）")
         
         master_failures = {}  # 主连接失败计数
+        loop_count = 0
         
         while True:
+            loop_count += 1
             try:
+                # 🎯 每10次循环（30秒）记录一次状态
+                if loop_count % 10 == 0:
+                    logger.info(f"[{self.exchange}] 🔄 监控运行中，已检查{loop_count}次")
+                
                 # 检查所有主连接
                 for i, master_conn in enumerate(self.master_connections):
                     # 🚨【修复2】更严格的健康检查
@@ -194,6 +201,7 @@ class ExchangeWebSocketPool:
                             if takeover_success:
                                 # 接管成功，重置该位置计数器
                                 master_failures[conn_id] = 0
+                                self.takeover_success_count += 1
                             else:
                                 # 接管失败，记录到失败集合
                                 self.failed_connections_track.add(conn_id)
@@ -231,8 +239,8 @@ class ExchangeWebSocketPool:
                 await asyncio.sleep(5)
 
     async def _execute_takeover(self, master_index: int):
-        """执行接管 - 修复版"""
-        logger.critical(f"[接管] [{self.exchange}] 开始接管主连接{master_index}")
+        """执行接管 - 详细日志版"""
+        logger.critical(f"[{self.exchange}] 🔄【接管开始】准备接管主连接{master_index}")
         
         self.takeover_attempts += 1
         
@@ -293,10 +301,19 @@ class ExchangeWebSocketPool:
             
             # 记录A的合约
             a_symbols = a_master.symbols.copy()
-            a_master.log_with_role("info", f"B温备将接管我的{len(a_symbols)}个合约")
             
-            # B接管A的合约
-            b_standby.log_with_role("info", f"开始接管，订阅{len(a_symbols)}个合约")
+            # 🎯 详细日志：记录A和B的状态
+            logger.info(f"[{self.exchange}] 📋 A（原主）: {a_master.connection_id}")
+            logger.info(f"[{self.exchange}]   - 合约数量: {len(a_symbols)}个")
+            logger.info(f"[{self.exchange}]   - 连接状态: {'已连接' if a_master.connected else '已断开'}")
+            logger.info(f"[{self.exchange}]   - 订阅状态: {'已订阅' if a_master.subscribed else '未订阅'}")
+            
+            logger.info(f"[{self.exchange}] 📋 B（温备）: {b_standby.connection_id}")
+            logger.info(f"[{self.exchange}]   - 当前合约: {b_standby.symbols}")
+            logger.info(f"[{self.exchange}]   - 连接状态: {'已连接' if b_standby.connected else '已断开'}")
+            
+            # 步骤1: B接管A的合约
+            logger.info(f"[{self.exchange}] 🔄 步骤1: B开始接管A的{len(a_symbols)}个合约")
             takeover_success = await b_standby.switch_role(ConnectionType.MASTER, a_symbols)
             
             if not takeover_success:
@@ -306,18 +323,20 @@ class ExchangeWebSocketPool:
                 self.failed_connections_track.add(b_standby.connection_id)
                 return False
             
-            # 🚨【关键修复】B接管成功后，A立即清空合约！
-            a_master.log_with_role("critical", f"立即清空我的{len(a_master.symbols)}个合约")
+            logger.info(f"[{self.exchange}] ✅ B接管成功，成为新主连接")
+            
+            # 步骤2: A清空合约
+            logger.info(f"[{self.exchange}] 🔄 步骤2: A清空原有{len(a_master.symbols)}个合约")
             a_master.symbols = []
             a_master.subscribed = False
             
-            # 🚨【关键修复】在放入温备池前，调用switch_role方法设置心跳合约和订阅！
-            a_master.log_with_role("info", "正在切换为温备角色...")
-            
-            # ✅ 调用switch_role方法（设置心跳合约+启动延迟订阅）
+            # 步骤3: A切换为温备
+            logger.info(f"[{self.exchange}] 🔄 步骤3: A切换为温备角色")
             success = await a_master.switch_role(ConnectionType.WARM_STANDBY)
             
-            if not success:
+            if success:
+                logger.info(f"[{self.exchange}] ✅ A已成功切换为温备")
+            else:
                 a_master.log_with_role("error", "切换为温备失败，降级处理")
                 # 降级：至少设置type和心跳合约
                 a_master.connection_type = ConnectionType.WARM_STANDBY
@@ -325,15 +344,17 @@ class ExchangeWebSocketPool:
                 a_master.symbols = self._get_heartbeat_symbols()
                 a_master.log_with_role("info", "已手动设置心跳合约")
             
-            # 🚨【修复5】A进温备池尾部，但不立即重连！
+            # 步骤4: A进入温备池
+            logger.info(f"[{self.exchange}] 🔄 步骤4: A进入温备池尾部")
             self.warm_standby_connections.append(a_master)
-            a_master.log_with_role("info", f"已进入温备池，位置{len(self.warm_standby_connections)-1}（已设置心跳合约）")
+            a_master.log_with_role("info", f"已进入温备池，位置{len(self.warm_standby_connections)-1}")
             
-            # 🚨 重要：A不立即重连！由温备池的正常机制处理
-            
-            # 更新主连接列表
+            # 步骤5: 更新主连接列表
+            logger.info(f"[{self.exchange}] 🔄 步骤5: B替换为主连接列表位置{master_index}")
             self.master_connections[master_index] = b_standby
             b_standby.log_with_role("info", "现在担任主连接")
+            
+            logger.info(f"[{self.exchange}] 🎉【接管完成】 {a_master.connection_id}(主→备) ↔ {b_standby.connection_id}(备→主)")
             
             # 🚨【安全防护5】记录接管
             await self._report_failover_to_data_store(master_index, a_master.connection_id, b_standby.connection_id)
@@ -352,13 +373,15 @@ class ExchangeWebSocketPool:
             return False
 
     async def _check_and_request_restart(self, reason: str):
-        """检查并请求重启"""
-        # 🚨【修复6】检查是否需要重启
+        """检查并请求重启 - 详细日志版"""
+        logger.info(f"[{self.exchange}] 🔍 检查重启条件:")
+        
         total_connections = len(self.master_connections) + len(self.warm_standby_connections)
         
         # 条件1：接管尝试次数过多
+        logger.info(f"[{self.exchange}]   条件1-接管次数: {self.takeover_attempts}/{total_connections*2}")
         if self.takeover_attempts >= total_connections * 2:
-            logger.critical(f"[{self.exchange}] 🆘 接管尝试{self.takeover_attempts}次，需要重启")
+            logger.critical(f"[{self.exchange}] 🆘 触发重启条件1: 接管尝试{self.takeover_attempts}次 ≥ 限制{total_connections*2}次")
             self.need_restart = True
         
         # 条件2：所有连接都失败过
@@ -368,13 +391,18 @@ class ExchangeWebSocketPool:
         for conn in self.warm_standby_connections:
             all_connection_ids.add(conn.connection_id)
         
+        logger.info(f"[{self.exchange}]   条件2-失败记录: {len(self.failed_connections_track)}/{len(all_connection_ids)}")
+        if self.failed_connections_track:
+            logger.info(f"[{self.exchange}]   已失败连接: {list(self.failed_connections_track)}")
+        
         if self.failed_connections_track.issuperset(all_connection_ids) and all_connection_ids:
-            logger.critical(f"[{self.exchange}] 🆘 所有连接都失败过，需要重启")
+            logger.critical(f"[{self.exchange}] 🆘 触发重启条件2: 所有{len(all_connection_ids)}个连接都失败过")
             self.need_restart = True
         
         # 如果需要重启，直接通知管理员
-        if self.need_restart and self.admin_instance:
-            await self._notify_admin_restart_needed(reason)
+        if self.need_restart:
+            logger.critical(f"[{self.exchange}] 🚨 发送重启请求给管理员，原因: {reason}")
+            await self._notify_admin_restart_needed(f"接管监控触发: {reason}")
 
     async def _notify_admin_restart_needed(self, reason: str):
         """✅ 直接通知管理员需要重启 - 新增方法"""
@@ -391,8 +419,42 @@ class ExchangeWebSocketPool:
             logger.error(f"[{self.exchange}] 发送重启请求失败: {e}")
 
     async def _report_status_to_data_store(self):
-        """报告状态到共享存储"""
+        """报告状态到共享存储 - 详细日志版"""
         try:
+            # 🎯 先打印详细日志
+            logger.info(f"[{self.exchange}] ======== 详细状态报告 ========")
+            
+            # 主连接状态
+            logger.info(f"[{self.exchange}] 🎯 主连接池 ({len(self.master_connections)}个):")
+            for i, master in enumerate(self.master_connections):
+                status_icon = "✅" if master.connected else "❌"
+                subscribed_icon = "📡" if master.subscribed else "📭"
+                last_msg = f"{master.last_message_seconds_ago:.1f}秒前"
+                
+                logger.info(f"[{self.exchange}]   主{i}: {master.connection_id}")
+                logger.info(f"[{self.exchange}]     - 状态: {status_icon} {master.connection_type}")
+                logger.info(f"[{self.exchange}]     - 订阅: {subscribed_icon} {len(master.symbols)}个合约")
+                logger.info(f"[{self.exchange}]     - 最后消息: {last_msg}")
+            
+            # 温备连接状态
+            logger.info(f"[{self.exchange}] 🔄 温备连接池 ({len(self.warm_standby_connections)}个):")
+            for i, standby in enumerate(self.warm_standby_connections):
+                status_icon = "✅" if standby.connected else "❌"
+                has_symbols = "📝" if standby.symbols else "📭"
+                
+                logger.info(f"[{self.exchange}]   备{i}: {standby.connection_id}")
+                logger.info(f"[{self.exchange}]     - 状态: {status_icon} {standby.connection_type}")
+                logger.info(f"[{self.exchange}]     - 合约: {has_symbols} {len(standby.symbols)}个")
+            
+            # 统计信息
+            logger.info(f"[{self.exchange}] 📊 统计信息:")
+            logger.info(f"[{self.exchange}]   - 接管尝试: {self.takeover_attempts}次")
+            logger.info(f"[{self.exchange}]   - 接管成功: {self.takeover_success_count}次")
+            logger.info(f"[{self.exchange}]   - 失败连接: {len(self.failed_connections_track)}个")
+            logger.info(f"[{self.exchange}]   - 需要重启: {'🆘 是' if self.need_restart else '✅ 否'}")
+            logger.info(f"[{self.exchange}] ==============================")
+            
+            # 🚨 保留data_store报告（供API使用）
             status_report = {
                 "exchange": self.exchange,
                 "timestamp": datetime.now().isoformat(),
@@ -401,7 +463,8 @@ class ExchangeWebSocketPool:
                 "self_managed": True,
                 "need_restart": self.need_restart,
                 "failed_connections_count": len(self.failed_connections_track),
-                "takeover_attempts": self.takeover_attempts
+                "takeover_attempts": self.takeover_attempts,
+                "takeover_success_count": self.takeover_success_count
             }
             
             for conn in self.master_connections:
@@ -443,18 +506,23 @@ class ExchangeWebSocketPool:
 
     async def _health_check_loop(self):
         """健康检查循环"""
+        logger.info(f"[{self.exchange}] 🩺 启动健康检查循环（每30秒）")
+        
+        check_count = 0
         while True:
             try:
+                check_count += 1
+                
                 # 显示状态
                 for i, master in enumerate(self.master_connections):
                     role_char = "主" if master.connection_type == ConnectionType.MASTER else "备"
                     status = "✅" if master.connected else "❌"
-                    logger.debug(f"[健康检查] 主连接{i}: {master.connection_id}({role_char}) {status}")
+                    logger.info(f"[健康检查#{check_count}] 主连接{i}: {master.connection_id}({role_char}) {status}")
                 
                 for i, warm in enumerate(self.warm_standby_connections):
                     role_char = "备" if warm.connection_type == ConnectionType.WARM_STANDBY else "主"
                     status = "✅" if warm.connected else "❌"
-                    logger.debug(f"[健康检查] 温备{i}: {warm.connection_id}({role_char}) {status}")
+                    logger.info(f"[健康检查#{check_count}] 温备{i}: {warm.connection_id}({role_char}) {status}")
                 
                 await asyncio.sleep(30)
                 
@@ -473,7 +541,8 @@ class ExchangeWebSocketPool:
                 "self_managed": True,
                 "need_restart": self.need_restart,
                 "failed_connections_count": len(self.failed_connections_track),
-                "takeover_attempts": self.takeover_attempts
+                "takeover_attempts": self.takeover_attempts,
+                "takeover_success_count": self.takeover_success_count
             }
             
             for conn in self.master_connections:
