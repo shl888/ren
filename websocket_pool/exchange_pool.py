@@ -45,10 +45,20 @@ class ExchangeWebSocketPool:
         self.health_check_task = None
         self.monitor_scheduler_task = None
         
+        # 🚨🚨🚨 添加调试标志
+        self.debug_mode = True
+        
         logger.info(f"[{self.exchange}] 🚀 ExchangeWebSocketPool 初始化完成")
 
     async def initialize(self, symbols: List[str]):
         """🚨【日志增强】并发初始化 + 修复OKX单连接过载"""
+        # 🚨🚨🚨 强制打印初始化开始
+        print(f"\n{'='*80}")
+        print(f"🚀🚀🚀【强制打印】连接池初始化开始！交易所: {self.exchange}")
+        print(f"🚀🚀🚀 时间: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"🚀🚀🚀 合约数量: {len(symbols)}")
+        print(f"{'='*80}\n")
+        
         self.symbols = symbols
         
         # 🚨【关键修复】使用正确的配置名
@@ -72,9 +82,12 @@ class ExchangeWebSocketPool:
             self._balance_symbol_groups(active_connections)
         
         # 🚨【增强】显示分组详情
-        logger.info(f"[{self.exchange}] 📊 初始化连接池，共 {len(symbols)} 个合约，分为 {len(self.symbol_groups)} 组")
+        print(f"📊【强制打印】合约分组详情 - {self.exchange}")
+        print(f"  总合约数: {len(symbols)}")
+        print(f"  分组数: {len(self.symbol_groups)}")
         for i, group in enumerate(self.symbol_groups):
-            logger.info(f"[{self.exchange}]  分组{i}: {len(group)}个合约")
+            print(f"  分组{i}: {len(group)}个合约")
+        print()
         
         # 🚀 并发执行所有初始化任务
         init_tasks = [
@@ -96,8 +109,10 @@ class ExchangeWebSocketPool:
         for (name, _), result in zip(init_tasks, results):
             if isinstance(result, Exception):
                 logger.error(f"[{self.exchange}] ❌【连接池模块任务日志】 {name}初始化失败: {result}")
+                print(f"❌❌❌【强制打印】{name}初始化失败: {result}")
             else:
                 logger.info(f"[{self.exchange}] ✅【连接池模块任务日志】 {name}初始化完成")
+                print(f"✅✅✅【强制打印】{name}初始化完成")
         
         # 🚨 强制后置检查：确保监控调度器必须运行
         await self._enforce_monitor_scheduler()
@@ -106,17 +121,27 @@ class ExchangeWebSocketPool:
         self.health_check_task = asyncio.create_task(self._health_check_loop())
         logger.info(f"[{self.exchange}] 💓【监控调度】 健康检查已启动")
         
+        # 🚨🚨🚨 强制打印初始化完成
+        print(f"\n{'='*80}")
+        print(f"🎉🎉🎉【强制打印】连接池初始化完成！交易所: {self.exchange}")
+        print(f"🎉🎉🎉 主连接数: {len(self.master_connections)}")
+        print(f"🎉🎉🎉 温备数: {len(self.warm_standby_connections)}")
+        print(f"🎉🎉🎉 监控连接: {'✅已建立' if self.monitor_connection else '❌未建立'}")
+        print(f"{'='*80}\n")
+        
         logger.info(f"[{self.exchange}] 🎉 连接池初始化全部完成！")
 
     async def _enforce_monitor_scheduler(self):
         """🚨【日志增强】强制确保监控调度器运行"""
         # 检查监控连接是否存在且正常
         if not self.monitor_connection or not self.monitor_connection.connected:
+            print(f"⚠️⚠️⚠️【强制打印】监控连接异常！交易所: {self.exchange}")
             logger.warning(f"[{self.exchange}] ⚠️【监控调度】 监控连接异常，尝试紧急恢复...")
             await self._initialize_monitor_scheduler()
         
         # 检查调度循环是否运行
         if not self.monitor_scheduler_task or self.monitor_scheduler_task.done():
+            print(f"⚠️⚠️⚠️【强制打印】调度循环未运行！交易所: {self.exchange}")
             logger.warning(f"[{self.exchange}] ⚠️【监控调度】 调度循环未运行，强制启动...")
             self.monitor_scheduler_task = asyncio.create_task(
                 self._monitor_scheduling_loop()
@@ -148,10 +173,18 @@ class ExchangeWebSocketPool:
         """🚨【日志增强】初始化主连接 - 恢复详细日志"""
         ws_url = self.config.get("ws_public_url")
         
+        print(f"\n📡【强制打印】开始初始化主连接 - {self.exchange}")
+        print(f"📡 WebSocket URL: {ws_url}")
+        print(f"📡 分组数: {len(self.symbol_groups)}\n")
+        
         logger.info(f"[{self.exchange}] 🔄 【连接池】开始初始化主连接...")
         
         for i, symbol_group in enumerate(self.symbol_groups):
             conn_id = f"{self.exchange}_master_{i}"
+            print(f"🚀【强制打印】创建主连接{i}: {conn_id}")
+            print(f"  合约数: {len(symbol_group)}")
+            print(f"  合约示例: {symbol_group[:3] if symbol_group else []}...\n")
+            
             logger.info(f"[{self.exchange}] 🚀 【连接池】创建主连接{i}: {conn_id}，合约数: {len(symbol_group)}")
             
             connection = WebSocketConnection(
@@ -172,13 +205,18 @@ class ExchangeWebSocketPool:
                     self.master_connections.append(connection)
                     connection.log_with_role("success", "主连接启动成功")
                     logger.info(f"[{self.exchange}] ✅ 【连接池】主连接{i}启动成功")
+                    print(f"✅【强制打印】主连接{i}启动成功\n")
                 else:
                     connection.log_with_role("error", "主连接启动失败")
                     logger.error(f"[{self.exchange}] ❌【连接池】 主连接{i}启动失败")
+                    print(f"❌【强制打印】主连接{i}启动失败\n")
             except Exception as e:
                 connection.log_with_role("error", f"主连接异常: {e}")
                 logger.error(f"[{self.exchange}] ❌ 主【连接池】连接{i}异常: {e}")
+                print(f"❌【强制打印】主连接{i}异常: {e}\n")
         
+        print(f"\n✅✅✅【强制打印】主连接初始化完成 - {self.exchange}")
+        print(f"✅ 成功数: {len(self.master_connections)}/{len(self.symbol_groups)}\n")
         logger.info(f"[{self.exchange}] ✅ 【连接池】主连接初始化完成: {len(self.master_connections)} 个")
     
     async def _initialize_warm_standbys(self):
@@ -186,12 +224,19 @@ class ExchangeWebSocketPool:
         ws_url = self.config.get("ws_public_url")
         warm_standbys_count = self.config.get("warm_standbys_count", 3)
         
+        print(f"\n📡【强制打印】开始初始化温备连接 - {self.exchange}")
+        print(f"📡 WebSocket URL: {ws_url}")
+        print(f"📡 温备数量: {warm_standbys_count}\n")
+        
         logger.info(f"[{self.exchange}] 🔄 开始初始化温备连接，数量: {warm_standbys_count}")
         
         for i in range(warm_standbys_count):
             heartbeat_symbols = self._get_heartbeat_symbols()
             
             conn_id = f"{self.exchange}_warm_{i}"
+            print(f"🚀【强制打印】创建温备连接{i}: {conn_id}")
+            print(f"  心跳合约: {heartbeat_symbols}\n")
+            
             logger.info(f"[{self.exchange}] 🚀 创建温备连接{i}: {conn_id}")
             
             connection = WebSocketConnection(
@@ -211,16 +256,22 @@ class ExchangeWebSocketPool:
                     self.warm_standby_connections.append(connection)
                     connection.log_with_role("success", "温备连接启动成功")
                     logger.info(f"[{self.exchange}] ✅ 温备连接{i}启动成功")
+                    print(f"✅【强制打印】温备连接{i}启动成功\n")
                 else:
                     connection.log_with_role("error", "温备连接启动失败")
                     logger.error(f"[{self.exchange}] ❌ 温备连接{i}启动失败")
+                    print(f"❌【强制打印】温备连接{i}启动失败\n")
             except asyncio.TimeoutError:
                 connection.log_with_role("error", "温备连接超时30秒，强制跳过")
                 logger.error(f"[{self.exchange}] ⏰ 温备连接{i}超时")
+                print(f"⏰【强制打印】温备连接{i}超时\n")
             except Exception as e:
                 connection.log_with_role("error", f"温备连接异常: {e}")
                 logger.error(f"[{self.exchange}] ❌ 温备连接{i}异常: {e}")
+                print(f"❌【强制打印】温备连接{i}异常: {e}\n")
         
+        print(f"\n✅✅✅【强制打印】温备连接初始化完成 - {self.exchange}")
+        print(f"✅ 成功数: {len(self.warm_standby_connections)}/{warm_standbys_count}\n")
         logger.info(f"[{self.exchange}] ✅ 温备连接初始化完成: {len(self.warm_standby_connections)} 个")
     
     def _get_heartbeat_symbols(self):
@@ -235,12 +286,20 @@ class ExchangeWebSocketPool:
         """🚨【日志增强】初始化监控调度器 - 恢复详细日志"""
         ws_url = self.config.get("ws_public_url")
         
+        print(f"\n{'='*60}")
+        print(f"🔍🔍🔍【强制打印】开始初始化监控调度器 - {self.exchange}")
+        print(f"🔍 WebSocket URL: {ws_url}")
+        print(f"🔍 监控启用: {self.config.get('monitor_enabled', True)}")
+        print(f"{'='*60}\n")
+        
         if not self.config.get("monitor_enabled", True):
             logger.warning(f"[{self.exchange}] ⚠️ 监控调度器被配置禁用")
+            print(f"⚠️⚠️⚠️【强制打印】监控调度器被配置禁用 - {self.exchange}")
             return False
         
         if not ws_url:
             logger.error(f"[{self.exchange}] ❌ 【监控调度】WebSocket URL配置缺失")
+            print(f"❌❌❌【强制打印】WebSocket URL配置缺失 - {self.exchange}")
             return False
         
         conn_id = f"{self.exchange}_monitor"
@@ -250,6 +309,10 @@ class ExchangeWebSocketPool:
         
         for attempt in range(1, max_retries + 1):
             try:
+                print(f"\n🚀【强制打印】正在建立监控连接（第{attempt}次尝试）")
+                print(f"🚀 交易所: {self.exchange}")
+                print(f"🚀 连接ID: {conn_id}")
+                
                 logger.info(f"[{self.exchange}] 🚀【监控调度】 正在建立监控连接（第{attempt}次尝试）")
                 
                 self.monitor_connection = WebSocketConnection(
@@ -264,10 +327,10 @@ class ExchangeWebSocketPool:
                 success = await asyncio.wait_for(self.monitor_connection.connect(), timeout=30)
                 
                 if success:
-                    # 🚨 强制打印监控连接成功
-                    print(f"\n✅✅✅【强制打印】监控连接成功建立: {self.exchange}")
-                    print(f"✅✅✅ 监控连接ID: {conn_id}")
-                    print(f"✅✅✅ 连接状态: {self.monitor_connection.connected}\n")
+                    print(f"\n✅✅✅【强制打印】监控连接建立成功！")
+                    print(f"✅ 交易所: {self.exchange}")
+                    print(f"✅ 连接ID: {conn_id}")
+                    print(f"✅ 连接状态: {self.monitor_connection.connected}")
                     
                     self.monitor_connection.log_with_role("success", "监控连接建立成功")
                     logger.info(f"[{self.exchange}] ✅【监控调度】 监控连接建立成功")
@@ -276,40 +339,57 @@ class ExchangeWebSocketPool:
                         self._monitor_scheduling_loop()
                     )
                     
-                    # 🚨 强制确认调度任务已启动
-                    print(f"\n🚀🚀🚀【强制打印】监控调度循环已启动: {self.exchange}")
-                    print(f"🚀🚀🚀 调度任务: {self.monitor_scheduler_task}")
-                    print(f"🚀🚀🚀 任务状态: {'运行中' if not self.monitor_scheduler_task.done() else '已完成'}\n")
+                    print(f"\n🚀🚀🚀【强制打印】监控调度循环已启动！")
+                    print(f"🚀 交易所: {self.exchange}")
+                    print(f"🚀 调度任务: {self.monitor_scheduler_task}")
+                    print(f"🚀 任务状态: {'✅运行中' if not self.monitor_scheduler_task.done() else '❌已完成'}")
                     
                     logger.info(f"[{self.exchange}] ✅ 监控调度循环已启动")
                     return True
                 else:
+                    print(f"⚠️【强制打印】监控连接建立失败（{attempt}/{max_retries}）")
                     logger.warning(f"[{self.exchange}] ⚠️【监控调度】 监控连接建立失败（{attempt}/{max_retries}）")
                     
             except asyncio.TimeoutError:
+                print(f"⏰【强制打印】监控连接超时（{attempt}/{max_retries}）")
                 logger.error(f"[{self.exchange}] ⏰【监控调度】 监控连接超时（{attempt}/{max_retries}）")
             except Exception as e:
+                print(f"❌【强制打印】监控连接异常（{attempt}/{max_retries}）: {e}")
                 logger.error(f"[{self.exchange}] ❌【监控调度】 监控连接异常（{attempt}/{max_retries}）: {e}")
             
             if attempt < max_retries:
                 wait_time = 2 ** attempt
+                print(f"⏳【强制打印】等待{wait_time}秒后重试...")
                 logger.info(f"[{self.exchange}] ⏳【监控调度】 等待{wait_time}秒后重试...")
                 await asyncio.sleep(wait_time)
         
+        print(f"\n❌❌❌【强制打印】监控调度器在{max_retries}次尝试后仍失败！")
+        print(f"❌ 交易所: {self.exchange}")
         logger.error(f"[{self.exchange}] ❌ 监控调度器在{max_retries}次尝试后仍失败")
         return False
     
     async def _monitor_scheduling_loop(self):
         """🚨【日志增强】监控调度循环 - 详细状态显示"""
+        # 🚨🚨🚨 强制打印监控循环启动
+        print(f"\n{'='*80}")
+        print(f"🔄🔄🔄【强制打印】监控调度循环启动！")
+        print(f"🔄 交易所: {self.exchange}")
+        print(f"🔄 时间: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'='*80}\n")
+        
         logger.info(f"[{self.exchange}_monitor] 🚀 开始监控调度循环，每3秒检查一次")
         
         # 跟踪每个主连接的连续失败次数
         master_failures = {}
+        loop_count = 0
         
         while True:
             try:
+                loop_count += 1
                 current_time = datetime.now().strftime("%H:%M:%S")
-                logger.debug(f"[{self.exchange}_monitor] 🔍【监控调度】 监控检查开始 {current_time}")
+                
+                if loop_count % 10 == 1:  # 每10次打印一次状态
+                    print(f"\n📊【强制打印】监控检查第{loop_count}次 - {self.exchange} {current_time}")
                 
                 # 1. 详细监控主连接
                 for i, master_conn in enumerate(self.master_connections):
@@ -326,6 +406,17 @@ class ExchangeWebSocketPool:
                         current_failures = master_failures.get(conn_id, 0) + 1
                         master_failures[conn_id] = current_failures
                         
+                        # 🚨🚨🚨 强制打印发现问题
+                        print(f"\n{'!'*60}")
+                        print(f"⚠️⚠️⚠️【强制打印】发现问题！")
+                        print(f"⚠️ 交易所: {self.exchange}")
+                        print(f"⚠️ 主连接{i}({conn_id}) 不健康")
+                        print(f"⚠️ 连接状态: {master_conn.connected}")
+                        print(f"⚠️ 订阅状态: {master_conn.subscribed}")
+                        print(f"⚠️ 最后消息: {master_conn.last_message_seconds_ago:.1f}秒前")
+                        print(f"⚠️ 失败次数: {current_failures}次")
+                        print(f"{'!'*60}\n")
+                        
                         # 🚨 详细记录失败状态
                         health_status = {
                             "连接状态": "✅" if master_conn.connected else "❌",
@@ -339,6 +430,13 @@ class ExchangeWebSocketPool:
                         
                         # 🚨【关键】连续2次失败才触发接管（防止误判）
                         if current_failures >= 2:
+                            print(f"\n{'#'*80}")
+                            print(f"🚨🚨🚨【强制打印】触发接管！")
+                            print(f"🚨 交易所: {self.exchange}")
+                            print(f"🚨 主连接{i}连续{current_failures}次失败")
+                            print(f"🚨 触发接管过程...")
+                            print(f"{'#'*80}\n")
+                            
                             logger.critical(f"[{self.exchange}_monitor] 🚨【监控调度】 主连接{i}连续{current_failures}次失败，触发接管!")
                             await self._simple_takeover(i)
                             # 接管后重置失败计数
@@ -361,31 +459,59 @@ class ExchangeWebSocketPool:
                 await asyncio.sleep(3)  # 3秒检查一次
                 
             except Exception as e:
+                print(f"\n❌❌❌【强制打印】监控调度循环错误: {e}")
                 logger.error(f"[{self.exchange}_monitor] ❌【监控调度】 调度循环错误: {e}")
                 await asyncio.sleep(5)
 
     async def _simple_takeover(self, master_index: int):
         """🚨【日志增强】简单接管：温备变主连接，主连接变温备"""
+        # 🚨🚨🚨 强制打印接管开始
+        print(f"\n{'='*80}")
+        print(f"🚨🚨🚨【强制打印】接管开始！")
+        print(f"🚨 交易所: {self.exchange}")
+        print(f"🚨 时间: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"🚨 接管的主连接索引: {master_index}")
+        print(f"{'='*80}\n")
+        
         takeover_start = datetime.now()
         logger.critical(f"[{self.exchange}_monitor] 🚨🚨🚨【监控调度】 开始接管主连接{master_index}，时间: {takeover_start.strftime('%H:%M:%S')}")
         
         try:
             # 🚨 显示当前池状态
-            logger.info(f"[{self.exchange}_monitor] 📊 【监控调度】当前状态: 主连接数={len(self.master_connections)}, 温备数={len(self.warm_standby_connections)}")
+            print(f"📊【强制打印】当前池状态 - {self.exchange}:")
+            print(f"  主连接数: {len(self.master_connections)}")
+            print(f"  温备数: {len(self.warm_standby_connections)}")
+            
+            for i, master in enumerate(self.master_connections):
+                print(f"  主连接{i}: {master.connection_id} - 连接: {master.connected} - 订阅: {master.subscribed} - 最后消息: {master.last_message_seconds_ago:.1f}秒前")
+            
+            for i, warm in enumerate(self.warm_standby_connections):
+                pos = "头" if i == 0 else "中" if i < len(self.warm_standby_connections)-1 else "尾"
+                print(f"  温备{i}({pos}): {warm.connection_id} - 连接: {warm.connected} - 订阅: {warm.subscribed}")
             
             # 1. 检查温备池是否为空
             if not self.warm_standby_connections:
+                print(f"\n❌❌❌【强制打印】温备池为空，无法接管！")
                 logger.critical(f"[{self.exchange}_monitor] ❌【监控调度】 温备池为空，无法接管")
                 return False
             
             # 2. 检查主连接索引有效性
             if master_index < 0 or master_index >= len(self.master_connections):
+                print(f"\n❌❌❌【强制打印】无效的主连接索引: {master_index}")
                 logger.critical(f"[{self.exchange}_monitor] ❌【监控调度】 无效的主连接索引: {master_index}")
                 return False
             
             old_master = self.master_connections[master_index]
             
             # 🚨 详细记录原主连接状态
+            print(f"\n📋【强制打印】原主连接详情:")
+            print(f"  ID: {old_master.connection_id}")
+            print(f"  角色: {old_master.role_display.get(old_master.connection_type, '?')}")
+            print(f"  连接状态: {'✅' if old_master.connected else '❌'}")
+            print(f"  订阅状态: {'✅' if old_master.subscribed else '❌'}")
+            print(f"  最后消息: {old_master.last_message_seconds_ago:.1f}秒前")
+            print(f"  合约数: {len(old_master.symbols)}")
+            
             old_master_status = {
                 "ID": old_master.connection_id,
                 "角色": old_master.role_display.get(old_master.connection_type, "?"),
@@ -399,80 +525,115 @@ class ExchangeWebSocketPool:
             old_master.log_with_role("warning", "监控检测到故障，即将被接管")
             
             # 3. 从温备池取第一个温备
+            print(f"\n🔄【强制打印】从温备池获取最佳温备...")
             logger.info(f"[{self.exchange}_monitor] 🔄【监控调度】 从温备池获取最佳温备...")
             try:
                 new_master = self.warm_standby_connections.pop(0)
+                print(f"✅【强制打印】获取到温备: {new_master.connection_id}")
+                print(f"  当前角色: {new_master.role_display.get(new_master.connection_type, '?')}")
+                print(f"  连接状态: {'✅' if new_master.connected else '❌'}")
                 logger.info(f"[{self.exchange}_monitor] ✅【监控调度】 获取到温备: {new_master.connection_id}")
             except IndexError as e:
+                print(f"❌❌❌【强制打印】温备池弹出失败: {e}")
                 logger.critical(f"[{self.exchange}_monitor] ❌【监控调度】 温备池弹出失败: {e}")
                 return False
             
             # 4. 温备升级为主连接
+            print(f"\n🔄【强制打印】温备升级为主连接...")
+            print(f"  新主连接ID: {new_master.connection_id}")
+            print(f"  原主连接ID: {old_master.connection_id}")
             logger.info(f"[{self.exchange}_monitor] 🔄【监控调度】 温备升级为主连接...")
             
             # 先取消温备的心跳订阅（如果有）
             if new_master.subscribed:
+                print(f"  ⏳ 取消心跳订阅...")
                 new_master.log_with_role("info", "取消心跳订阅")
                 await new_master._unsubscribe()
                 await asyncio.sleep(1)
+                print(f"  ✅ 心跳订阅已取消")
             
             # 温备订阅主连接的合约
             master_symbols = self.symbol_groups[master_index] if master_index < len(self.symbol_groups) else old_master.symbols
             
+            print(f"  ⏳ 升级为主连接，订阅{len(master_symbols)}个合约...")
             new_master.log_with_role("info", f"升级为主连接，订阅{len(master_symbols)}个合约")
             success = await new_master.switch_role(ConnectionType.MASTER, master_symbols)
             
             if not success:
+                print(f"  ❌❌❌ 升级失败！")
                 new_master.log_with_role("error", "升级失败")
                 logger.critical(f"[{self.exchange}_monitor] ❌【监控调度】 温备升级失败")
                 # 失败时恢复原状
                 self.warm_standby_connections.insert(0, new_master)
+                print(f"  ⚠️ 已恢复温备池")
                 logger.warning(f"[{self.exchange}_monitor] ⚠️【监控调度】 已恢复温备池")
                 return False
             
+            print(f"  ✅ 温备升级成功")
             logger.info(f"[{self.exchange}_monitor] ✅【监控调度】 温备升级成功")
             
             # 5. 原主连接降级为温备
+            print(f"\n🔄【强制打印】原主连接降级为温备...")
             logger.info(f"[{self.exchange}_monitor] 🔄【监控调度】 原主连接降级为温备...")
             old_master.log_with_role("info", "降级为温备")
             
             # 取消原主连接的订阅
             if old_master.connected and old_master.subscribed:
+                print(f"  ⏳ 取消原主连接订阅...")
                 old_master.log_with_role("info", "取消主连接订阅")
                 await old_master._unsubscribe()
                 await asyncio.sleep(1)
+                print(f"  ✅ 原主连接订阅已取消")
             
             # 原主连接重置为温备身份
             old_master.connection_type = ConnectionType.WARM_STANDBY
             old_master.symbols = self._get_heartbeat_symbols()
+            print(f"  ✅ 原主连接已重置为温备")
             
             # 6. 交换位置
             self.master_connections[master_index] = new_master
             self.warm_standby_connections.append(old_master)  # 放到尾部
             
+            print(f"\n✅【强制打印】连接池更新完成")
+            print(f"  主连接[{master_index}] = {new_master.connection_id}")
+            print(f"  温备池尾部 = {old_master.connection_id}")
             logger.info(f"[{self.exchange}_monitor] ✅【监控调度】 连接池更新完成")
             
             # 🚨 显示更新后的温备池状态
-            logger.info(f"[{self.exchange}_monitor] 📊【监控调度】 接管后温备池状态 ({len(self.warm_standby_connections)}个):")
+            print(f"\n📊【强制打印】接管后温备池状态 ({len(self.warm_standby_connections)}个):")
             for i, conn in enumerate(self.warm_standby_connections):
                 if conn is not None:
                     role_char = conn.role_display.get(conn.connection_type, "?")
                     status = "✅" if conn.connected else "❌"
                     position = "头" if i == 0 else "尾" if i == len(self.warm_standby_connections)-1 else "中"
+                    print(f"  位置{i}({position}): {conn.connection_id}({role_char}) {status}")
                     logger.info(f"  【监控调度】位置{i}({position}): {conn.connection_id}({role_char}) {status}")
             
             # 7. 原主连接重新连接（作为温备）
             if not old_master.connected:
+                print(f"\n🔄【强制打印】原主连接重新连接为温备...")
                 logger.info(f"[{self.exchange}_monitor] 🔄【监控调度】 原主连接重新连接为温备...")
                 old_master.log_with_role("info", "重新连接为温备")
                 reconnect_success = await old_master.connect()
                 if not reconnect_success:
                     old_master.log_with_role("warning", "温备重连失败")
+                    print(f"  ⚠️ 原主连接重连失败")
                     logger.warning(f"[{self.exchange}_monitor] ⚠️【监控调度】 原主连接重连失败")
+                else:
+                    print(f"  ✅ 原主连接重连成功")
             
             # 🚨 最终状态汇总
             takeover_end = datetime.now()
             duration = (takeover_end - takeover_start).total_seconds()
+            
+            print(f"\n{'='*80}")
+            print(f"🎉🎉🎉【强制打印】接管成功！")
+            print(f"🎉 交易所: {self.exchange}")
+            print(f"🎉 耗时: {duration:.2f}秒")
+            print(f"🎉 新主连接: {new_master.connection_id}")
+            print(f"🎉 原主连接: {old_master.connection_id}")
+            print(f"🎉 时间: {takeover_end.strftime('%H:%M:%S')}")
+            print(f"{'='*80}\n")
             
             logger.critical(f"[{self.exchange}_monitor] 🎉【监控调度】 接管成功！耗时: {duration:.2f}秒")
             new_master.log_with_role("success", "现在担任主连接")
@@ -484,6 +645,11 @@ class ExchangeWebSocketPool:
             return True
             
         except Exception as e:
+            print(f"\n{'!'*80}")
+            print(f"❌❌❌【强制打印】接管过程异常！")
+            print(f"❌ 交易所: {self.exchange}")
+            print(f"❌ 错误: {e}")
+            print(f"{'!'*80}\n")
             logger.critical(f"[{self.exchange}_monitor] ❌【监控调度】 接管过程异常: {e}")
             return False
 

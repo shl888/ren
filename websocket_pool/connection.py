@@ -82,13 +82,24 @@ class WebSocketConnection:
         
         self.reconnect_interval = 3
         self.min_subscribe_interval = 2.0
+        
+        # 🚨🚨🚨 添加调试标志
+        self.debug_mode = True
     
     def log_with_role(self, level: str, message: str):
         """🚨【日志增强】带角色信息的日志 - 增加日志级别前缀"""
         role_char = self.role_display.get(self.connection_type, "?")
         full_name = f"{self.connection_id}({role_char})"
         
-        # 🚨【增强】添加日志级别前缀
+        # 🚨 如果是监控连接，添加特殊标记
+        if self.connection_type == ConnectionType.MONITOR:
+            full_name = f"🔍{full_name}"
+        
+        # 🚨🚨🚨 强制打印监控连接的重要日志
+        if self.connection_type == ConnectionType.MONITOR and level in ["info", "warning", "error", "critical", "success"]:
+            print(f"📡【监控连接日志】 {full_name} - {message}")
+        
+        # 🚨 原始日志逻辑
         if level == "info":
             logger.info(f"[{full_name}] ℹ️ {message}")
         elif level == "warning":
@@ -107,6 +118,14 @@ class WebSocketConnection:
     async def connect(self):
         """建立WebSocket连接 - 🚨【日志增强】连接过程详细日志"""
         try:
+            # 🚨🚨🚨 强制打印连接开始
+            if self.debug_mode and self.connection_type == ConnectionType.MONITOR:
+                print(f"\n📡📡📡【强制打印】监控连接开始连接！")
+                print(f"📡 交易所: {self.exchange}")
+                print(f"📡 连接ID: {self.connection_id}")
+                print(f"📡 WebSocket URL: {self.ws_url}")
+                print(f"📡 角色: {self.connection_type}")
+            
             # 🚨【增强】详细连接开始日志
             self.log_with_role("info", f"🔄 开始连接 {self.ws_url}")
             
@@ -129,6 +148,13 @@ class WebSocketConnection:
             self.connected = True
             self.last_message_time = datetime.now()
             self.reconnect_count = 0
+            
+            # 🚨🚨🚨 强制打印连接成功
+            if self.debug_mode and self.connection_type == ConnectionType.MONITOR:
+                print(f"\n✅✅✅【强制打印】监控连接成功！")
+                print(f"✅ 交易所: {self.exchange}")
+                print(f"✅ 连接ID: {self.connection_id}")
+                print(f"✅ 连接状态: {self.connected}")
             
             # 🚨【增强】详细成功日志
             self.log_with_role("success", f"✅ 连接成功 {self.ws_url}")
@@ -159,6 +185,13 @@ class WebSocketConnection:
             
             # 监控连接不订阅
             elif self.connection_type == ConnectionType.MONITOR:
+                # 🚨🚨🚨 强制打印监控连接建立完成
+                if self.debug_mode:
+                    print(f"\n🎯🎯🎯【强制打印】监控连接建立完成！")
+                    print(f"🎯 交易所: {self.exchange}")
+                    print(f"🎯 连接ID: {self.connection_id}")
+                    print(f"🎯 角色: 监控")
+                    print(f"🎯 订阅合约: 无（监控连接不订阅数据）\n")
                 self.log_with_role("success", "监控连接已就绪（不订阅）")
             
             # 启动接收任务
@@ -172,6 +205,13 @@ class WebSocketConnection:
             self.log_with_role("error", f"⏰ 连接 {self.ws_url} 30秒超时")
             self.connected = False
             self.subscribed = False
+            
+            # 🚨🚨🚨 强制打印监控连接超时
+            if self.connection_type == ConnectionType.MONITOR:
+                print(f"\n⏰⏰⏰【强制打印】监控连接超时！")
+                print(f"⏰ 交易所: {self.exchange}")
+                print(f"⏰ 连接ID: {self.connection_id}")
+            
             return False
         except Exception as e:
             # 🚨【增强】异常详细日志
@@ -179,6 +219,14 @@ class WebSocketConnection:
             self.log_with_role("error", f"🚨 连接 {self.ws_url} 失败: {error_type}: {e}")
             self.connected = False
             self.subscribed = False
+            
+            # 🚨🚨🚨 强制打印监控连接失败
+            if self.connection_type == ConnectionType.MONITOR:
+                print(f"\n❌❌❌【强制打印】监控连接失败！")
+                print(f"❌ 交易所: {self.exchange}")
+                print(f"❌ 连接ID: {self.connection_id}")
+                print(f"❌ 错误: {error_type}: {e}")
+            
             return False
     
     def _get_delay_for_warm_standby(self):
@@ -217,6 +265,17 @@ class WebSocketConnection:
         try:
             old_role_char = self.role_display.get(self.connection_type, "?")
             new_role_char = self.role_display.get(new_role, "?")
+            
+            # 🚨🚨🚨 强制打印角色切换
+            if self.debug_mode:
+                print(f"\n🔄🔄🔄【强制打印】角色切换！")
+                print(f"🔄 连接ID: {self.connection_id}")
+                print(f"🔄 交易所: {self.exchange}")
+                print(f"🔄 旧角色: {old_role_char}")
+                print(f"🔄 新角色: {new_role_char}")
+                if new_symbols:
+                    print(f"🔄 新合约数: {len(new_symbols)}")
+            
             self.log_with_role("info", f"🔄 角色切换: {old_role_char} → {new_role_char}")
             
             # 取消当前订阅（如果有）
@@ -243,9 +302,22 @@ class WebSocketConnection:
                     self.subscribed = True
                     self.is_active = True
                     self.log_with_role("success", "主连接订阅成功")
+                    
+                    # 🚨🚨🚨 强制打印主连接订阅成功
+                    if self.debug_mode:
+                        print(f"\n✅✅✅【强制打印】主连接订阅成功！")
+                        print(f"✅ 连接ID: {self.connection_id}")
+                        print(f"✅ 交易所: {self.exchange}")
+                        print(f"✅ 合约数: {len(self.symbols)}")
+                    
                     return True
                 else:
                     self.log_with_role("error", "主连接订阅失败")
+                    # 🚨🚨🚨 强制打印主连接订阅失败
+                    if self.debug_mode:
+                        print(f"\n❌❌❌【强制打印】主连接订阅失败！")
+                        print(f"❌ 连接ID: {self.connection_id}")
+                        print(f"❌ 交易所: {self.exchange}")
                     # 订阅失败，角色回退
                     self.connection_type = old_role
                     return False
@@ -276,6 +348,12 @@ class WebSocketConnection:
                 
         except Exception as e:
             self.log_with_role("error", f"角色切换失败: {e}")
+            # 🚨🚨🚨 强制打印角色切换失败
+            if self.debug_mode:
+                print(f"\n❌❌❌【强制打印】角色切换失败！")
+                print(f"❌ 连接ID: {self.connection_id}")
+                print(f"❌ 交易所: {self.exchange}")
+                print(f"❌ 错误: {e}")
             return False
     
     async def _subscribe(self):
