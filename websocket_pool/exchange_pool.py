@@ -161,8 +161,8 @@ class ExchangeWebSocketPool:
         return []
 
     async def _internal_monitoring_loop(self):
-        """内部监控循环 - 重构优化版（每3秒检查，每60秒报告）"""
-        logger.info(f"[{self.exchange}] 🚀【连接池】启动内部监控（每3秒检查，每60秒报告）")
+        """内部监控循环 - 重构优化版（每3秒检查，每120秒报告）"""
+        logger.info(f"[{self.exchange}] 🚀【连接池】启动内部监控（每3秒检查，每120秒报告）")
         
         master_failures = {}  # 主连接失败计数
         loop_count = 0
@@ -228,14 +228,14 @@ class ExchangeWebSocketPool:
                 
                 # ==== 第2部分：日志和报告（频率控制） ====
                 
-                # 判断是否到达60秒间隔（20次循环 × 3秒）
-                should_report_detailed = (loop_count % 20 == 0)
+                # 判断是否到达120秒间隔（40次循环 × 3秒）
+                should_report_detailed = (loop_count % 40 == 0)
                 
-                # 3. 运行状态日志（每60秒）
+                # 3. 运行状态日志（每120秒）
                 if should_report_detailed:
                     logger.info(f"[{self.exchange}] ✅【连接池】内部监控运行中，已检查{loop_count}次")
                 
-                # 4. 状态更新（每3秒更新data_store，每60秒打印详细日志）
+                # 4. 状态更新（每3秒更新data_store，每120秒打印详细日志）
                 if should_report_detailed:
                     # 详细报告（含日志）
                     await self._report_status_to_data_store()
@@ -463,40 +463,31 @@ class ExchangeWebSocketPool:
     async def _report_status_to_data_store(self):
         """报告状态到共享存储 - 详细日志版"""
         try:
-            # 🎯 详细状态报告日志
+            # 🎯 详细状态报告日志 - 修改为层级缩进格式（每行独立）
             logger.info(f"[{self.exchange}] ======== 详细状态报告 ========")
             
-            # 主连接状态
+            # 主连接状态 - 每行独立，但包含完整信息
             logger.info(f"[{self.exchange}] 🎯 [内部监控]【连接状态】主连接 ({len(self.master_connections)}个):")
             for i, master in enumerate(self.master_connections):
                 status_icon = "✅" if master.connected else "❌"
                 subscribed_icon = "📡" if master.subscribed else "📭"
                 last_msg = f"{master.last_message_seconds_ago:.1f}秒前"
                 
-                logger.info(f"[{self.exchange}]  主{i}: {master.connection_id}")
-                logger.info(f"[{self.exchange}]     - 状态: {status_icon} {master.connection_type}")
-                logger.info(f"[{self.exchange}]     - 订阅: {subscribed_icon} {len(master.symbols)}个合约")
-                logger.info(f"[{self.exchange}]     - 最后消息: {last_msg}")
+                # 修改：将多行合并为单行，用分隔符连接
+                logger.info(f"[{self.exchange}]   主{i}: {master.connection_id} | 状态: {status_icon} {master.connection_type} | 订阅: {subscribed_icon} {len(master.symbols)}个合约 | 最后消息: {last_msg}")
             
-            # 温备连接状态
+            # 温备连接状态 - 每行独立，但包含完整信息
             logger.info(f"[{self.exchange}] 🔄 [内部监控]【连接状态】温备连接 ({len(self.warm_standby_connections)}个):")
             for i, standby in enumerate(self.warm_standby_connections):
                 status_icon = "✅" if standby.connected else "❌"
                 has_symbols = "📝" if standby.symbols else "📭"
                 
-                logger.info(f"[{self.exchange}]   备{i}: {standby.connection_id}")
-                logger.info(f"[{self.exchange}]     - 状态: {status_icon} {standby.connection_type}")
-                logger.info(f"[{self.exchange}]     - 合约: {has_symbols} {len(standby.symbols)}个")
+                # 修改：将多行合并为单行，用分隔符连接
+                logger.info(f"[{self.exchange}]   备{i}: {standby.connection_id} | 状态: {status_icon} {standby.connection_type} | 合约: {has_symbols} {len(standby.symbols)}个")
             
-            # 统计信息 - 修复版：合并为一个完整的日志消息
-            stats_details = [
-                f"   - 接管尝试: {self.takeover_attempts}次",
-                f"   - 接管成功: {self.takeover_success_count}次",
-                f"   - 失败连接: {len(self.failed_connections_track)}个", 
-                f"   - 需要重启: {'🆘 是' if self.need_restart else '✅ 否'}"
-            ]
-            
-            logger.info(f"[{self.exchange}] 📊 [内部监控]统计信息:\n" + "\n".join(stats_details))
+            # 统计信息 - 修改为单行显示所有信息（方案5）
+            restart_status = '🆘 是' if self.need_restart else '✅ 否'
+            logger.info(f"[{self.exchange}] 📊 [内部监控]统计信息: 接管尝试:{self.takeover_attempts}次, 接管成功:{self.takeover_success_count}次, 失败连接:{len(self.failed_connections_track)}个, 需要重启:{restart_status}")
             
             # 🚨 更新data_store
             status_report = {
