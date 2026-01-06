@@ -39,7 +39,6 @@ class ExchangeWebSocketPool:
         self.symbol_groups = []
         
         # 任务
-        self.health_check_task = None
         self.internal_monitor_task = None
         
         # 🚨【修复1】自管理状态
@@ -79,7 +78,6 @@ class ExchangeWebSocketPool:
         
         # 启动监控
         self.internal_monitor_task = asyncio.create_task(self._internal_monitoring_loop())
-        self.health_check_task = asyncio.create_task(self._health_check_loop())
         
         logger.info(f"[{self.exchange}] ✅【连接池】连接池初始化完成！")
 
@@ -163,8 +161,8 @@ class ExchangeWebSocketPool:
         return []
 
     async def _internal_monitoring_loop(self):
-        """内部监控循环 - 详细日志版"""
-        logger.info(f"[{self.exchange}] 🚀【连接池】 启动内部监控（每3秒检查）")
+        """内部监控循环 - 重构优化版（每3秒检查，每60秒报告）"""
+        logger.info(f"[{self.exchange}] 🚀【连接池】启动内部监控（每3秒检查，每60秒报告）")
         
         master_failures = {}  # 主连接失败计数
         loop_count = 0
@@ -172,11 +170,9 @@ class ExchangeWebSocketPool:
         while True:
             loop_count += 1
             try:
-                # 🎯 每20次循环（60秒）记录一次状态
-                if loop_count % 20 == 0:
-                    logger.info(f"[{self.exchange}] ✅【连接池】内部 监控运行中，已检查{loop_count}次")
+                # ==== 第1部分：健康监控（每3秒执行） ====
                 
-                # 检查所有主连接
+                # 1. 检查所有主连接
                 for i, master_conn in enumerate(self.master_connections):
                     # 🚨【修复2】更严格的健康检查
                     is_healthy = (
@@ -191,6 +187,7 @@ class ExchangeWebSocketPool:
                         current_failures = master_failures.get(conn_id, 0) + 1
                         master_failures[conn_id] = current_failures
                         
+                        # 异常立即记录
                         master_conn.log_with_role("warning", f"❌【连接池】内部监控第{current_failures}次健康检查失败")
                         
                         # 🚨【修复3】连续2次失败才触发
@@ -209,7 +206,7 @@ class ExchangeWebSocketPool:
                         # 健康时重置
                         master_failures[master_conn.connection_id] = 0
                 
-                # 检查温备连接
+                # 2. 检查温备连接
                 for warm_conn in self.warm_standby_connections:
                     if not warm_conn.connected:
                         warm_conn.log_with_role("warning", "❌【连接池】[内部监控]温备连接断开，尝试重连")
@@ -229,14 +226,59 @@ class ExchangeWebSocketPool:
                         )
                         warm_conn.log_with_role("info", f"【连接池】[内部监控]将在{delay}秒后订阅心跳")
                 
-                # 状态报告
-                await self._report_status_to_data_store()
+                # ==== 第2部分：日志和报告（频率控制） ====
                 
+                # 判断是否到达60秒间隔（20次循环 × 3秒）
+                should_report_detailed = (loop_count % 20 == 0)
+                
+                # 3. 运行状态日志（每60秒）
+                if should_report_detailed:
+                    logger.info(f"[{self.exchange}] ✅【连接池】内部监控运行中，已检查{loop_count}次")
+                
+                # 4. 状态更新（每3秒更新data_store，每60秒打印详细日志）
+                if should_report_detailed:
+                    # 详细报告（含日志）
+                    await self._report_status_to_data_store()
+                else:
+                    # 静默更新（只更新data_store，不打印详细日志）
+                    await self._update_data_store_quietly()
+                
+                # 等待下次循环
                 await asyncio.sleep(3)
                 
             except Exception as e:
                 logger.error(f"【连接池】[内部监控] [{self.exchange}] 错误: {e}")
                 await asyncio.sleep(5)
+
+    async def _update_data_store_quietly(self):
+        """静默更新data_store - 只更新数据，不打印日志"""
+        try:
+            status_report = {
+                "exchange": self.exchange,
+                "timestamp": datetime.now().isoformat(),
+                "masters": [],
+                "warm_standbys": [],
+                "self_managed": True,
+                "need_restart": self.need_restart,
+                "failed_connections_count": len(self.failed_connections_track),
+                "takeover_attempts": self.takeover_attempts,
+                "takeover_success_count": self.takeover_success_count
+            }
+            
+            for conn in self.master_connections:
+                status_report["masters"].append(await conn.check_health())
+            
+            for conn in self.warm_standby_connections:
+                status_report["warm_standbys"].append(await conn.check_health())
+            
+            await data_store.update_connection_status(
+                self.exchange, 
+                "websocket_pool", 
+                status_report
+            )
+            
+        except Exception as e:
+            logger.error(f"[{self.exchange}] 静默更新data_store失败: {e}")
 
     async def _execute_takeover(self, master_index: int):
         """执行接管 - 详细日志版"""
@@ -421,7 +463,7 @@ class ExchangeWebSocketPool:
     async def _report_status_to_data_store(self):
         """报告状态到共享存储 - 详细日志版"""
         try:
-            # 🎯 先打印详细日志
+            # 🎯 详细状态报告日志
             logger.info(f"[{self.exchange}] ======== 详细状态报告 ========")
             
             # 主连接状态
@@ -454,7 +496,7 @@ class ExchangeWebSocketPool:
             logger.info(f"[{self.exchange}]   - 需要重启: {'🆘 是' if self.need_restart else '✅ 否'}")
             logger.info(f"[{self.exchange}] ==============================")
             
-            # 🚨 保留data_store报告（供API使用）
+            # 🚨 更新data_store
             status_report = {
                 "exchange": self.exchange,
                 "timestamp": datetime.now().isoformat(),
@@ -480,7 +522,7 @@ class ExchangeWebSocketPool:
             )
             
         except Exception as e:
-            logger.error(f"[{self.exchange}] 报告状态失败: {e}")
+            logger.error(f"[{self.exchange}] 详细状态报告失败: {e}")
 
     async def _report_failover_to_data_store(self, master_index: int, old_master_id: str, new_master_id: str):
         """报告故障转移"""
@@ -503,32 +545,6 @@ class ExchangeWebSocketPool:
             
         except Exception as e:
             logger.error(f"[内部监控] 保存故障转移记录失败: {e}")
-
-    async def _health_check_loop(self):
-        """健康检查循环"""
-        logger.info(f"[{self.exchange}] 🩺 启动健康检查循环（每300秒）")
-        
-        check_count = 0
-        while True:
-            try:
-                check_count += 1
-                
-                # 显示状态
-                for i, master in enumerate(self.master_connections):
-                    role_char = "主" if master.connection_type == ConnectionType.MASTER else "备"
-                    status = "✅" if master.connected else "❌"
-                    logger.info(f"[健康检查#{check_count}] 主连接{i}: {master.connection_id}({role_char}) {status}")
-                
-                for i, warm in enumerate(self.warm_standby_connections):
-                    role_char = "备" if warm.connection_type == ConnectionType.WARM_STANDBY else "主"
-                    status = "✅" if warm.connected else "❌"
-                    logger.info(f"[健康检查#{check_count}] 温备{i}: {warm.connection_id}({role_char}) {status}")
-                
-                await asyncio.sleep(300)
-                
-            except Exception as e:
-                logger.error(f"[健康检查] 错误: {e}")
-                await asyncio.sleep(300)
 
     async def get_status(self) -> Dict[str, Any]:
         """获取连接池状态"""
@@ -557,12 +573,10 @@ class ExchangeWebSocketPool:
             logger.error(f"[{self.exchange}] 获取状态失败: {e}")
             return {"error": str(e)}
 
+
     async def shutdown(self):
         """关闭连接池"""
         logger.info(f"[{self.exchange}] ⚠️【连接池】正在关闭连接池...")
-        
-        if self.health_check_task:
-            self.health_check_task.cancel()
         if self.internal_monitor_task:
             self.internal_monitor_task.cancel()
         
