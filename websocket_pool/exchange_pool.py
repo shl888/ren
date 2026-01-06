@@ -467,7 +467,7 @@ class ExchangeWebSocketPool:
             logger.info(f"[{self.exchange}] ======== 详细状态报告 ========")
             
             # 主连接状态
-            logger.info(f"[{self.exchange}] 🎯 【连接状态】主连接 ({len(self.master_connections)}个):")
+            logger.info(f"[{self.exchange}] 🎯 [内部监控]【连接状态】主连接 ({len(self.master_connections)}个):")
             for i, master in enumerate(self.master_connections):
                 status_icon = "✅" if master.connected else "❌"
                 subscribed_icon = "📡" if master.subscribed else "📭"
@@ -479,7 +479,7 @@ class ExchangeWebSocketPool:
                 logger.info(f"[{self.exchange}]     - 最后消息: {last_msg}")
             
             # 温备连接状态
-            logger.info(f"[{self.exchange}] 🔄 【连接状态】温备连接 ({len(self.warm_standby_connections)}个):")
+            logger.info(f"[{self.exchange}] 🔄 [内部监控]【连接状态】温备连接 ({len(self.warm_standby_connections)}个):")
             for i, standby in enumerate(self.warm_standby_connections):
                 status_icon = "✅" if standby.connected else "❌"
                 has_symbols = "📝" if standby.symbols else "📭"
@@ -488,13 +488,15 @@ class ExchangeWebSocketPool:
                 logger.info(f"[{self.exchange}]     - 状态: {status_icon} {standby.connection_type}")
                 logger.info(f"[{self.exchange}]     - 合约: {has_symbols} {len(standby.symbols)}个")
             
-            # 统计信息
-            logger.info(f"[{self.exchange}] 📊 统计信息:")
-            logger.info(f"[{self.exchange}]   - 接管尝试: {self.takeover_attempts}次")
-            logger.info(f"[{self.exchange}]   - 接管成功: {self.takeover_success_count}次")
-            logger.info(f"[{self.exchange}]   - 失败连接: {len(self.failed_connections_track)}个")
-            logger.info(f"[{self.exchange}]   - 需要重启: {'🆘 是' if self.need_restart else '✅ 否'}")
-            logger.info(f"[{self.exchange}] ==============================")
+            # 统计信息 - 修复版：合并为一个完整的日志消息
+            stats_details = [
+                f"   - 接管尝试: {self.takeover_attempts}次",
+                f"   - 接管成功: {self.takeover_success_count}次",
+                f"   - 失败连接: {len(self.failed_connections_track)}个", 
+                f"   - 需要重启: {'🆘 是' if self.need_restart else '✅ 否'}"
+            ]
+            
+            logger.info(f"[{self.exchange}] 📊 [内部监控]统计信息:\n" + "\n".join(stats_details))
             
             # 🚨 更新data_store
             status_report = {
@@ -572,7 +574,6 @@ class ExchangeWebSocketPool:
         except Exception as e:
             logger.error(f"[{self.exchange}] 获取状态失败: {e}")
             return {"error": str(e)}
-
 
     async def shutdown(self):
         """关闭连接池"""

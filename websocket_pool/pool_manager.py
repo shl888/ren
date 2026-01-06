@@ -50,8 +50,8 @@ async def default_data_callback(data):
         default_data_callback.counter += 1
         current_count = default_data_callback.counter
         
-        # 🎯 等于或超过500万就清零
-        if current_count >= 5000000:
+        # 🎯 等于或超过100万就清零
+        if current_count >= 1000000:
             default_data_callback.counter = 0
             current_count = 0
             logger.info(f"🫗【数据回调阈值重置】达到500万条，计数器清零重新开始")
@@ -60,12 +60,12 @@ async def default_data_callback(data):
         if current_count == 1:
             logger.info(f"🎉【数据回调第一条数据】{exchange} {symbol} ({data_type})")
         
-        # 2. 每5000条记录一次数据流动
-        if current_count % 5000 == 0:
+        # 2. 每10000条记录一次数据流动
+        if current_count % 10000 == 0:
             logger.info(f"✅【数据回调已接收】{current_count:,}条数据 - 最新: {exchange} {symbol}")
         
-        # 3. 每50000条里程碑
-        if current_count % 50000 == 0:
+        # 3. 每100000条里程碑
+        if current_count % 100000 == 0:
             logger.info(f"🏆【数据回调里程碑】{current_count:,} 条数据,已存储到data_store")
         
         # 🚨 关键：直接存储到data_store（不过大脑）
