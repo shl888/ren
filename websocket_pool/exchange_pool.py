@@ -71,7 +71,7 @@ class ExchangeWebSocketPool:
         if len(self.symbol_groups) > active_connections:
             self._balance_symbol_groups(active_connections)
         
-        logger.info(f"[{self.exchange}] 初始化，{len(symbols)}个合约分为{len(self.symbol_groups)}组")
+        logger.info(f"[{self.exchange}] 🌎【连接池】连接池初始化，{len(symbols)}个合约分为{len(self.symbol_groups)}组")
         
         # 并发初始化
         tasks = [self._initialize_masters(), self._initialize_warm_standbys()]
@@ -81,7 +81,7 @@ class ExchangeWebSocketPool:
         self.internal_monitor_task = asyncio.create_task(self._internal_monitoring_loop())
         self.health_check_task = asyncio.create_task(self._health_check_loop())
         
-        logger.info(f"[{self.exchange}] 连接池初始化完成！")
+        logger.info(f"[{self.exchange}] ✅【连接池】连接池初始化完成！")
 
     def _balance_symbol_groups(self, target_groups: int):
         """平衡合约分组"""
@@ -112,18 +112,18 @@ class ExchangeWebSocketPool:
                 symbols=symbol_group
             )
             
-            connection.log_with_role("info", f"启动，订阅{len(symbol_group)}个合约")
+            connection.log_with_role("info", f"✅【连接池】主连接启动，订阅{len(symbol_group)}个合约")
             
             try:
                 success = await connection.connect()
                 if success:
                     self.master_connections.append(connection)
                 else:
-                    connection.log_with_role("error", "启动失败")
+                    connection.log_with_role("error", "❌【连接池】主连接启动失败")
             except Exception as e:
-                connection.log_with_role("error", f"异常: {e}")
+                connection.log_with_role("error", f"❌【连接池】主连接异常: {e}")
         
-        logger.info(f"[{self.exchange}] 主连接: {len(self.master_connections)}个")
+        logger.info(f"[{self.exchange}] ✅【连接池】主连接: {len(self.master_connections)}个")
 
     async def _initialize_warm_standbys(self):
         """初始化温备连接"""
@@ -141,18 +141,18 @@ class ExchangeWebSocketPool:
                 symbols=self._get_heartbeat_symbols()
             )
             
-            connection.log_with_role("info", "温备启动")
+            connection.log_with_role("info", "✅【连接池】温备连接启动")
             
             try:
                 success = await connection.connect()
                 if success:
                     self.warm_standby_connections.append(connection)
                 else:
-                    connection.log_with_role("error", "启动失败")
+                    connection.log_with_role("error", "❌【连接池】温备连接启动失败")
             except Exception as e:
-                connection.log_with_role("error", f"异常: {e}")
+                connection.log_with_role("error", f"❌【连接池】温备连接异常: {e}")
         
-        logger.info(f"[{self.exchange}] 温备连接: {len(self.warm_standby_connections)}个")
+        logger.info(f"[{self.exchange}] ✅【连接池】温备连接: {len(self.warm_standby_connections)}个")
 
     def _get_heartbeat_symbols(self):
         """获取心跳合约"""
@@ -164,7 +164,7 @@ class ExchangeWebSocketPool:
 
     async def _internal_monitoring_loop(self):
         """内部监控循环 - 详细日志版"""
-        logger.info(f"[{self.exchange}] 🚀 启动内部监控（每3秒检查）")
+        logger.info(f"[{self.exchange}] 🚀【连接池】 启动内部监控（每3秒检查）")
         
         master_failures = {}  # 主连接失败计数
         loop_count = 0
@@ -172,9 +172,9 @@ class ExchangeWebSocketPool:
         while True:
             loop_count += 1
             try:
-                # 🎯 每10次循环（30秒）记录一次状态
-                if loop_count % 10 == 0:
-                    logger.info(f"[{self.exchange}] 🔄 监控运行中，已检查{loop_count}次")
+                # 🎯 每20次循环（60秒）记录一次状态
+                if loop_count % 20 == 0:
+                    logger.info(f"[{self.exchange}] ✅【连接池】内部 监控运行中，已检查{loop_count}次")
                 
                 # 检查所有主连接
                 for i, master_conn in enumerate(self.master_connections):
@@ -191,11 +191,11 @@ class ExchangeWebSocketPool:
                         current_failures = master_failures.get(conn_id, 0) + 1
                         master_failures[conn_id] = current_failures
                         
-                        master_conn.log_with_role("warning", f"第{current_failures}次健康检查失败")
+                        master_conn.log_with_role("warning", f"❌【连接池】内部监控第{current_failures}次健康检查失败")
                         
                         # 🚨【修复3】连续2次失败才触发
                         if current_failures >= 2:
-                            master_conn.log_with_role("critical", "触发接管!")
+                            master_conn.log_with_role("critical", "⚠️【连接池】[内部监控]主连接连续断开2次，触发接管!")
                             takeover_success = await self._execute_takeover(i)
                             
                             if takeover_success:
@@ -212,14 +212,14 @@ class ExchangeWebSocketPool:
                 # 检查温备连接
                 for warm_conn in self.warm_standby_connections:
                     if not warm_conn.connected:
-                        warm_conn.log_with_role("warning", "连接断开，尝试重连")
+                        warm_conn.log_with_role("warning", "❌【连接池】[内部监控]温备连接断开，尝试重连")
                         await warm_conn.connect()
                     
                     # 🚨【新增修复】检查温备连接是否缺少心跳合约
                     elif (warm_conn.connected and 
                           warm_conn.connection_type == ConnectionType.WARM_STANDBY and
                           not warm_conn.symbols):
-                        warm_conn.log_with_role("warning", "温备缺少心跳合约，正在修复...")
+                        warm_conn.log_with_role("warning", "⚠️【连接池】[内部监控]温备连接缺少心跳合约，正在修复...")
                         warm_conn.symbols = self._get_heartbeat_symbols()
                         if warm_conn.delayed_subscribe_task:
                             warm_conn.delayed_subscribe_task.cancel()
@@ -227,7 +227,7 @@ class ExchangeWebSocketPool:
                         warm_conn.delayed_subscribe_task = asyncio.create_task(
                             warm_conn._delayed_subscribe(delay)
                         )
-                        warm_conn.log_with_role("info", f"将在{delay}秒后订阅心跳")
+                        warm_conn.log_with_role("info", f"【连接池】[内部监控]将在{delay}秒后订阅心跳")
                 
                 # 状态报告
                 await self._report_status_to_data_store()
@@ -235,28 +235,28 @@ class ExchangeWebSocketPool:
                 await asyncio.sleep(3)
                 
             except Exception as e:
-                logger.error(f"[内部监控] [{self.exchange}] 错误: {e}")
+                logger.error(f"【连接池】[内部监控] [{self.exchange}] 错误: {e}")
                 await asyncio.sleep(5)
 
     async def _execute_takeover(self, master_index: int):
         """执行接管 - 详细日志版"""
-        logger.critical(f"[{self.exchange}] 🔄【接管开始】准备接管主连接{master_index}")
+        logger.critical(f"[{self.exchange}] ⚠️【触发接管】准备接管主连接{master_index}")
         
         self.takeover_attempts += 1
         
         try:
             # 🚨【安全防护1】参数验证
             if not isinstance(master_index, int):
-                logger.error(f"[接管] 无效的主连接索引类型: {type(master_index)}")
+                logger.error(f"❌【触发接管】 无效的主连接索引类型: {type(master_index)}")
                 return False
                 
             if master_index < 0 or master_index >= len(self.master_connections):
-                logger.error(f"[接管] 无效的主连接索引: {master_index}")
+                logger.error(f"❌【触发接管】 无效的主连接索引: {master_index}")
                 return False
             
             # 🚨【安全防护2】检查温备池
             if not self.warm_standby_connections:
-                logger.error(f"[接管] 温备池为空")
+                logger.error(f"❌【触发接管】 温备池为空")
                 await self._check_and_request_restart("温备池为空")
                 return False
             
@@ -273,13 +273,13 @@ class ExchangeWebSocketPool:
             # 如果没找到连接的温备，尝试重连第一个
             if not b_standby and self.warm_standby_connections:
                 first_standby = self.warm_standby_connections[0]
-                first_standby.log_with_role("info", "温备断开，尝试重连")
+                first_standby.log_with_role("info", "⚠️【触发接管】温备断开，尝试重连")
                 if await first_standby.connect():
                     b_standby = first_standby
                     standby_index = 0
             
             if not b_standby:
-                logger.error(f"[接管] 温备池无可用连接")
+                logger.error(f"❌【触发接管】 温备池无可用连接")
                 await self._check_and_request_restart("温备池无可用连接")
                 return False
             
@@ -291,12 +291,12 @@ class ExchangeWebSocketPool:
             
             # 🚨【安全防护3】验证连接
             if a_master is None:
-                logger.critical(f"[接管] ❌ 原主连接为空")
+                logger.critical(f" ❌ 【触发接管】原主连接为空")
                 self.warm_standby_connections.insert(0, b_standby)
                 return False
             
             if b_standby is None:
-                logger.critical(f"[接管] ❌ 温备连接为空")
+                logger.critical(f"❌ 【触发接管】温备连接为空")
                 return False
             
             # 记录原主连接的合约
@@ -379,9 +379,9 @@ class ExchangeWebSocketPool:
         total_connections = len(self.master_connections) + len(self.warm_standby_connections)
         
         # 条件1：接管尝试次数过多
-        logger.info(f"[{self.exchange}]   【触发接管】条件1-接管次数: {self.takeover_attempts}/{total_connections*2}")
+        logger.info(f"[{self.exchange}]   ⚠️【连接池】【内部监控】条件1-接管次数: {self.takeover_attempts}/{total_connections*2}")
         if self.takeover_attempts >= total_connections * 2:
-            logger.critical(f"[{self.exchange}] 🆘 【触发接管】触发重启条件1: 接管尝试{self.takeover_attempts}次 ≥ 限制{total_connections*2}次")
+            logger.critical(f"[{self.exchange}] 🆘 ⚠️【连接池】【内部监控】触发重启条件1: 接管尝试{self.takeover_attempts}次 ≥ 限制{total_connections*2}次")
             self.need_restart = True
         
         # 条件2：所有连接都失败过
@@ -391,32 +391,32 @@ class ExchangeWebSocketPool:
         for conn in self.warm_standby_connections:
             all_connection_ids.add(conn.connection_id)
         
-        logger.info(f"[{self.exchange}]   【触发接管】条件2-失败记录: {len(self.failed_connections_track)}/{len(all_connection_ids)}")
+        logger.info(f"[{self.exchange}]   ⚠️【连接池】【内部监控】条件2-失败记录: {len(self.failed_connections_track)}/{len(all_connection_ids)}")
         if self.failed_connections_track:
-            logger.info(f"[{self.exchange}]   【触发接管】已失败连接: {list(self.failed_connections_track)}")
+            logger.info(f"[{self.exchange}]   ⚠️【连接池】【内部监控】已失败连接: {list(self.failed_connections_track)}")
         
         if self.failed_connections_track.issuperset(all_connection_ids) and all_connection_ids:
-            logger.critical(f"[{self.exchange}] 🆘 【触发接管】触发重启条件2: 所有{len(all_connection_ids)}个连接都失败过")
+            logger.critical(f"[{self.exchange}] 🆘 ⚠️【连接池】【内部监控】触发重启条件2: 所有{len(all_connection_ids)}个连接都失败过")
             self.need_restart = True
         
         # 如果需要重启，直接通知管理员
         if self.need_restart:
-            logger.critical(f"[{self.exchange}] 🚨【触发接管】 发送重启请求给管理员，原因: {reason}")
+            logger.critical(f"[{self.exchange}] 🆘☎️【连接池】【内部监控】 发送重启请求给管理员，原因: {reason}")
             await self._notify_admin_restart_needed(f"接管监控触发: {reason}")
 
     async def _notify_admin_restart_needed(self, reason: str):
         """✅ 直接通知管理员需要重启 - 新增方法"""
         try:
-            logger.critical(f"[{self.exchange}] 🆘【触发接管】 直接请求管理员重启！原因: {reason}")
+            logger.critical(f"[{self.exchange}] 🆘☎️【连接池】【内部监控】 直接请求管理员重启！原因: {reason}")
             
             # ✅ 直接调用管理员的方法
             if self.admin_instance:
                 await self.admin_instance.handle_restart_request(self.exchange, reason)
             else:
-                logger.error(f"[{self.exchange}]【触发接管】 无法通知管理员：admin_instance未设置")
+                logger.error(f"[{self.exchange}]🆘❌【连接池】【内部监控】 无法通知管理员：admin_instance未设置")
                 
         except Exception as e:
-            logger.error(f"[{self.exchange}] 【触发接管】发送重启请求失败: {e}")
+            logger.error(f"[{self.exchange}] 🆘❌【连接池】【内部监控】发送重启请求失败: {e}")
 
     async def _report_status_to_data_store(self):
         """报告状态到共享存储 - 详细日志版"""
@@ -425,7 +425,7 @@ class ExchangeWebSocketPool:
             logger.info(f"[{self.exchange}] ======== 详细状态报告 ========")
             
             # 主连接状态
-            logger.info(f"[{self.exchange}] 🎯 【连接状态】主连接池 ({len(self.master_connections)}个):")
+            logger.info(f"[{self.exchange}] 🎯 【连接状态】主连接 ({len(self.master_connections)}个):")
             for i, master in enumerate(self.master_connections):
                 status_icon = "✅" if master.connected else "❌"
                 subscribed_icon = "📡" if master.subscribed else "📭"
@@ -437,7 +437,7 @@ class ExchangeWebSocketPool:
                 logger.info(f"[{self.exchange}]     - 最后消息: {last_msg}")
             
             # 温备连接状态
-            logger.info(f"[{self.exchange}] 🔄 【连接状态】温备连接池 ({len(self.warm_standby_connections)}个):")
+            logger.info(f"[{self.exchange}] 🔄 【连接状态】温备连接 ({len(self.warm_standby_connections)}个):")
             for i, standby in enumerate(self.warm_standby_connections):
                 status_icon = "✅" if standby.connected else "❌"
                 has_symbols = "📝" if standby.symbols else "📭"
@@ -506,7 +506,7 @@ class ExchangeWebSocketPool:
 
     async def _health_check_loop(self):
         """健康检查循环"""
-        logger.info(f"[{self.exchange}] 🩺 启动健康检查循环（每30秒）")
+        logger.info(f"[{self.exchange}] 🩺 启动健康检查循环（每300秒）")
         
         check_count = 0
         while True:
@@ -524,11 +524,11 @@ class ExchangeWebSocketPool:
                     status = "✅" if warm.connected else "❌"
                     logger.info(f"[健康检查#{check_count}] 温备{i}: {warm.connection_id}({role_char}) {status}")
                 
-                await asyncio.sleep(30)
+                await asyncio.sleep(300)
                 
             except Exception as e:
                 logger.error(f"[健康检查] 错误: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(300)
 
     async def get_status(self) -> Dict[str, Any]:
         """获取连接池状态"""
@@ -559,7 +559,7 @@ class ExchangeWebSocketPool:
 
     async def shutdown(self):
         """关闭连接池"""
-        logger.info(f"[{self.exchange}] 正在关闭连接池...")
+        logger.info(f"[{self.exchange}] ⚠️【连接池】正在关闭连接池...")
         
         if self.health_check_task:
             self.health_check_task.cancel()
@@ -575,4 +575,4 @@ class ExchangeWebSocketPool:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         
-        logger.info(f"[{self.exchange}] 连接池已关闭")
+        logger.info(f"[{self.exchange}] ❌【连接池】连接池已关闭")

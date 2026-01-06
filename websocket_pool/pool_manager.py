@@ -44,17 +44,17 @@ async def default_data_callback(data):
         # 🚨 计数器初始化
         if not hasattr(default_data_callback, 'counter'):
             default_data_callback.counter = 0
-            logger.info(f"💫【数据回调初始化】计数器创建")
+            logger.info(f"🌎【数据回调初始化】计数器创建")
         
         # 🎯 关键：先增加计数
         default_data_callback.counter += 1
         current_count = default_data_callback.counter
         
-        # 🎯 等于或超过100万就清零
-        if current_count >= 1000000:
+        # 🎯 等于或超过500万就清零
+        if current_count >= 5000000:
             default_data_callback.counter = 0
             current_count = 0
-            logger.info(f"🔄【数据回调阈值重置】达到100万条，计数器清零重新开始")
+            logger.info(f"🫗【数据回调阈值重置】达到500万条，计数器清零重新开始")
         
         # 1. 第一条数据（重要） - 确认系统启动
         if current_count == 1:
@@ -72,8 +72,8 @@ async def default_data_callback(data):
         await data_store.update_market_data(exchange, symbol, data)
             
     except Exception as e:
-        logger.error(f"⚠️[数据回调] 存储失败: {e}")
-        logger.error(f"失败数据: exchange={exchange}, symbol={symbol}")
+        logger.error(f"❌[数据回调] 存储失败: {e}")
+        logger.error(f"❌[数据回调]失败数据: exchange={exchange}, symbol={symbol}")
 
 # ============ 【WebSocket连接池管理器类】============
 class WebSocketPoolManager:
@@ -90,10 +90,10 @@ class WebSocketPoolManager:
         self._initializing = False
         self._shutting_down = False
         
-        logger.info("✅ WebSocketPoolManager 初始化完成")
+        logger.info("✅ WebSocketPoolManager 【连接池】初始化完成")
         logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
         if admin_instance:
-            logger.info("📞 已设置管理员引用，支持直接重启请求")
+            logger.info("☎️【连接池】 已设置管理员引用，支持直接重启请求")
         
     async def initialize(self):
         """初始化所有交易所连接池 - 防重入版"""
@@ -126,18 +126,18 @@ class WebSocketPoolManager:
         """设置单个交易所连接池"""
         try:
             # 1. 获取合约列表
-            logger.info(f"[{exchange_name}] 获取合约列表中...")
+            logger.info(f"[{exchange_name}] 🌎【连接池】获取合约列表中...")
             symbols = await self._fetch_exchange_symbols(exchange_name)
             
             if not symbols:
-                logger.warning(f"[{exchange_name}] API获取失败，使用静态合约列表")
+                logger.warning(f"[{exchange_name}] ❌❌❌【连接池】API获取失败，使用静态合约列表")
                 symbols = self._get_static_symbols(exchange_name)
             
             if not symbols:
-                logger.error(f"[{exchange_name}] 无法获取任何合约，跳过该交易所")
+                logger.error(f"[{exchange_name}] ❌❌❌【连接池】无法获取任何合约，跳过该交易所")
                 return
             
-            logger.info(f"[{exchange_name}] 成功获取 {len(symbols)} 个合约")
+            logger.info(f"[{exchange_name}] ✅✅✅【连接池】成功获取 {len(symbols)} 个合约")
             
             # 2. 限制合约数量（基于活跃连接数计算）
             active_connections = EXCHANGE_CONFIGS[exchange_name].get("active_connections", 3)
@@ -145,7 +145,7 @@ class WebSocketPoolManager:
             max_symbols = symbols_per_conn * active_connections
             
             if len(symbols) > max_symbols:
-                logger.info(f"[{exchange_name}] 合约数量 {len(symbols)} > 限制 {max_symbols}，进行裁剪")
+                logger.info(f"[{exchange_name}] 🤔【连接池】合约数量 {len(symbols)} > 限制 {max_symbols}，进行裁剪")
                 symbols = symbols[:max_symbols]
             
             # 3. 初始化连接池
@@ -158,7 +158,7 @@ class WebSocketPoolManager:
             logger.info(f"✅ [{exchange_name}] 连接池初始化成功")
             
         except Exception as e:
-            logger.error(f"[{exchange_name}] 设置失败: {e}")
+            logger.error(f"[{exchange_name}] ❌【连接池】设置失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
     
@@ -169,13 +169,13 @@ class WebSocketPoolManager:
         # 第1步: 尝试从API动态获取 (主路径)
         symbols = await self._fetch_symbols_via_api(exchange_name)
         if symbols:
-            logger.info(f"✅ [{exchange_name}] 通过API成功获取 {len(symbols)} 个合约")
+            logger.info(f"✅✅✅ 【连接池】[{exchange_name}] 通过API成功获取 {len(symbols)} 个合约")
             return symbols
         
         # 第2步: API失败，使用项目内置的静态列表 (降级)
-        logger.warning(f"[{exchange_name}] API获取失败，使用内置静态合约列表")
+        logger.warning(f"❌❌❌【连接池】[{exchange_name}] API获取失败，使用内置静态合约列表")
         symbols = self._get_static_symbols(exchange_name)
-        logger.info(f"⚠️ [{exchange_name}] 使用静态合约列表，共 {len(symbols)} 个")
+        logger.info(f"⚠️【连接池】 [{exchange_name}] 使用静态合约列表，共 {len(symbols)} 个")
         return symbols
     
     async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
@@ -190,7 +190,7 @@ class WebSocketPoolManager:
                 exchange_class = getattr(ccxt_async, exchange_name)
                 exchange = exchange_class(config)
                 
-                logger.info(f"[{exchange_name}] 正在加载市场数据... (尝试 {attempt}/{max_retries})")
+                logger.info(f"[{exchange_name}] 🌎【连接池】正在加载市场数据... (尝试 {attempt}/{max_retries})")
                 
                 # 关键区别：不同交易所使用不同方法
                 if exchange_name == "okx":
@@ -209,7 +209,7 @@ class WebSocketPoolManager:
                     # 将键转为大写
                     markets = {k.upper(): v for k, v in markets.items()}
                 
-                logger.info(f"[{exchange_name}] 市场数据加载完成，共 {len(markets)} 个市场")
+                logger.info(f"[{exchange_name}] ✅【连接池】市场数据加载完成，共 {len(markets)} 个市场")
                 
                 # 处理并筛选合约
                 filtered_symbols = self._filter_and_format_symbols(exchange_name, markets)
@@ -224,15 +224,15 @@ class WebSocketPoolManager:
                     
                     top_groups = sorted(symbol_groups.items(), key=lambda x: x[1], reverse=True)[:5]
                     group_info = ", ".join([f"{g[0]}:{g[1]}" for g in top_groups])
-                    logger.info(f"[{exchange_name}] 币种分组统计: {group_info}")
+                    logger.info(f"[{exchange_name}] 【连接池】币种分组统计: {group_info}")
                     
                     # 检查是否有重复USDT问题
                     duplicate_usdt_count = sum(1 for s in filtered_symbols if s.upper().endswith('USDTUSDT'))
                     if duplicate_usdt_count > 0:
-                        logger.error(f"[{exchange_name}] ⚠️ 发现 {duplicate_usdt_count} 个重复USDT的合约!")
+                        logger.error(f"【连接池】[{exchange_name}] ⚠️ 发现 {duplicate_usdt_count} 个重复USDT的合约!")
                         # 显示有问题的合约
                         problematic = [s for s in filtered_symbols if s.upper().endswith('USDTUSDT')][:5]
-                        logger.error(f"有问题的合约示例: {problematic}")
+                        logger.error(f"⚠️【连接池】有问题的合约示例: {problematic}")
                 
                 await exchange.close()
                 return filtered_symbols
@@ -243,10 +243,10 @@ class WebSocketPoolManager:
                 
                 if attempt < max_retries:
                     wait_time = 2 ** attempt  # 指数退避
-                    logger.warning(f'[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {error_detail}')
+                    logger.warning(f'❌【连接池】[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {error_detail}')
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f'[{exchange_name}] 所有{max_retries}次尝试均失败: {error_detail}')
+                    logger.error(f'❌【连接池】[{exchange_name}] 所有{max_retries}次尝试均失败: {error_detail}')
                     if exchange:
                         await exchange.close()
                     return []
@@ -282,7 +282,7 @@ class WebSocketPoolManager:
     def _filter_and_format_symbols(self, exchange_name: str, markets: dict) -> List[str]:
         """统一的合约筛选与格式化逻辑"""
         all_usdt_symbols = []
-        logger.info(f"[{exchange_name}] 分析市场中...")
+        logger.info(f"🤔【连接池】[{exchange_name}] 分析市场中...")
         
         for symbol, market in markets.items():
             try:
@@ -316,7 +316,7 @@ class WebSocketPoolManager:
                             
                             # 调试：记录前几个合约的转换
                             if len(all_usdt_symbols) <= 3:
-                                logger.info(f"币安合约转换示例: {symbol} → {clean_symbol}")
+                                logger.info(f"🤔【连接池】币安合约转换示例: {symbol} → {clean_symbol}")
                         
                 elif exchange_name == "okx":
                     # OKX合约转换 - 更稳健的判断
@@ -347,24 +347,24 @@ class WebSocketPoolManager:
                         
                         # 调试：记录前几个合约的转换
                         if len(all_usdt_symbols) <= 3:
-                            logger.info(f"OKX合约转换示例: {symbol} → {clean_symbol}")
+                            logger.info(f"🤔【连接池】OKX合约转换示例: {symbol} → {clean_symbol}")
                 
             except Exception as e:
-                logger.debug(f"[{exchange_name}] 处理市场 {symbol} 时跳过: {e}")
+                logger.debug(f"🤔【连接池】[{exchange_name}] 处理市场 {symbol} 时跳过: {e}")
                 continue
         
         # 去重排序
         symbols = sorted(list(set(all_usdt_symbols)))
         
         if symbols:
-            logger.info(f"✅ [{exchange_name}] 发现 {len(symbols)} 个USDT永续合约")
+            logger.info(f"✅ 【连接池】[{exchange_name}] 发现 {len(symbols)} 个USDT永续合约")
             
             # 打印前10个合约验证格式
-            logger.info(f"[{exchange_name}] 前10个合约示例: {symbols[:10]}")
+            logger.info(f"🔍【连接池】[{exchange_name}] 前10个合约示例: {symbols[:10]}")
         else:
-            logger.warning(f"[{exchange_name}] 未找到USDT永续合约")
+            logger.warning(f"⚠️⚠️⚠️⚠️⚠️【连接池】[{exchange_name}] 未找到USDT永续合约")
             # 打印一些市场信息帮助调试
-            logger.info(f"[{exchange_name}] 市场样例 (前5个):")
+            logger.info(f"🔍【连接池】[{exchange_name}] 市场样例 (前5个):")
             count = 0
             for symbol, market in list(markets.items())[:5]:
                 market_type = market.get('type', 'unknown')
@@ -388,7 +388,7 @@ class WebSocketPoolManager:
                 pool_status = await pool.get_status()
                 status[exchange_name] = pool_status
             except Exception as e:
-                logger.error(f"[{exchange_name}] 获取状态错误: {e}")
+                logger.error(f"❌【连接池】[{exchange_name}] 获取交易所连接状态错误: {e}")
                 status[exchange_name] = {"error": str(e)}
         
         return status
@@ -397,16 +397,16 @@ class WebSocketPoolManager:
         """关闭所有连接池 - 防重入版"""
         # ✅ 防重入检查
         if self._shutting_down:
-            logger.info("连接池已在关闭中，跳过重复操作")
+            logger.info("⚠️⚠️⚠️【连接池】连接池已在关闭中，跳过重复操作")
             return
         
         self._shutting_down = True
-        logger.info("正在关闭所有WebSocket连接池...")
+        logger.info("⚠️⚠️⚠️【连接池】正在关闭所有WebSocket连接池...")
         
         for exchange_name, pool in self.exchange_pools.items():
             try:
                 await pool.shutdown()
             except Exception as e:
-                logger.error(f"[{exchange_name}] 关闭连接池错误: {e}")
+                logger.error(f"❌【连接池】[{exchange_name}] 关闭连接池错误: {e}")
         
-        logger.info("✅ 所有WebSocket连接池已关闭")
+        logger.info("✅ 【连接池】所有WebSocket连接池已关闭")

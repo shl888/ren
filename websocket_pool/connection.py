@@ -61,7 +61,12 @@ class WebSocketConnection:
         
         self.reconnect_interval = 3
         self.min_subscribe_interval = 2.0
-    
+        
+        # 日志频率限制器
+        self._last_ping_error_log = None
+        self._json_decode_error_count = 0
+        self._last_callback_error_log = None
+        
     def log_with_role(self, level: str, message: str):
         """带角色信息的日志"""
         role_char = self.role_display.get(self.connection_type, "?")
@@ -73,7 +78,7 @@ class WebSocketConnection:
     async def connect(self):
         """建立WebSocket连接"""
         try:
-            self.log_with_role("info", f"正在连接 {self.ws_url}")
+            self.log_with_role("info", f"🌎【连接池】正在建立连接 {self.ws_url}")
             
             # 重置状态
             self.subscribed = False
@@ -94,7 +99,7 @@ class WebSocketConnection:
             self.last_message_time = datetime.now()
             self.reconnect_count = 0
             
-            self.log_with_role("info", "连接成功")
+            self.log_with_role("info", "✅【连接池】连接建立成功")
             
             # 启动保活任务
             self.keepalive_task = asyncio.create_task(self._periodic_ping())
@@ -104,12 +109,12 @@ class WebSocketConnection:
                 # 主连接立即订阅
                 subscribe_success = await self._subscribe()
                 if not subscribe_success:
-                    self.log_with_role("error", "主连接订阅失败")
+                    self.log_with_role("error", "❌【连接池】主连接订阅失败")
                     self.connected = False
                     return False
                 
                 self.is_active = True
-                self.log_with_role("info", "主连接已激活并订阅")
+                self.log_with_role("info", "✅【连接池】主连接已激活并订阅")
             
             elif self.connection_type == ConnectionType.WARM_STANDBY and self.symbols:
                 # 温备延迟订阅心跳
@@ -117,7 +122,7 @@ class WebSocketConnection:
                 self.delayed_subscribe_task = asyncio.create_task(
                     self._delayed_subscribe(delay_seconds)
                 )
-                self.log_with_role("info", f"将在 {delay_seconds} 秒后订阅心跳")
+                self.log_with_role("info", f"【连接池】将在 {delay_seconds} 秒后订阅心跳")
             
             # 启动接收任务
             self.receive_task = asyncio.create_task(self._receive_messages())
@@ -125,11 +130,11 @@ class WebSocketConnection:
             return True
             
         except asyncio.TimeoutError:
-            self.log_with_role("error", "连接超时30秒")
+            self.log_with_role("error", "⚠️【连接池】连接超时30秒")
             self.connected = False
             return False
         except Exception as e:
-            self.log_with_role("error", f"连接失败: {e}")
+            self.log_with_role("error", f"❌【连接池】连接失败: {e}")
             self.connected = False
             return False
     
@@ -147,31 +152,31 @@ class WebSocketConnection:
     async def _delayed_subscribe(self, delay_seconds: int):
         """延迟订阅"""
         try:
-            self.log_with_role("info", f"等待 {delay_seconds} 秒后订阅...")
+            self.log_with_role("info", f"🌎【连接池】等待 {delay_seconds} 秒后订阅...")
             await asyncio.sleep(delay_seconds)
             
             if self.connected and not self.subscribed and self.symbols:
-                self.log_with_role("info", "开始延迟订阅")
+                self.log_with_role("info", "🌎【连接池】开始延迟订阅")
                 await self._subscribe()
-                self.log_with_role("info", "延迟订阅完成")
+                self.log_with_role("info", "✅【连接池】延迟订阅完成")
             elif not self.connected:
-                self.log_with_role("warning", "连接已断开，取消延迟订阅")
+                self.log_with_role("warning", "❌【连接池】连接已断开，取消延迟订阅")
             elif self.subscribed:
-                self.log_with_role("info", "已经订阅，跳过延迟订阅")
+                self.log_with_role("info", "✅【连接池】已经订阅，跳过延迟订阅")
                 
         except Exception as e:
-            self.log_with_role("error", f"延迟订阅失败: {e}")
+            self.log_with_role("error", f"【连接池】延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
         """切换连接角色 - 安全版"""
         try:
             old_role_char = self.role_display.get(self.connection_type, "?")
             new_role_char = self.role_display.get(new_role, "?")
-            self.log_with_role("info", f"角色切换: {old_role_char} → {new_role_char}")
+            self.log_with_role("info", f"⚠️【触发接管】角色切换: {old_role_char} → {new_role_char}")
             
             # 1. 取消当前订阅（如果连接正常）
             if self.connected and self.subscribed:
-                self.log_with_role("info", "取消当前订阅")
+                self.log_with_role("info", "⚠️【触发接管】取消当前订阅")
                 await self._unsubscribe()
                 self.subscribed = False
                 await asyncio.sleep(1)
@@ -187,15 +192,15 @@ class WebSocketConnection:
             # 4. 根据新角色处理
             if new_role == ConnectionType.MASTER and self.symbols:
                 # 主连接立即订阅
-                self.log_with_role("info", f"主连接订阅{len(self.symbols)}个合约")
+                self.log_with_role("info", f"⚠️【触发接管】主连接订阅{len(self.symbols)}个合约")
                 success = await self._subscribe()
                 if success:
                     self.subscribed = True
                     self.is_active = True
-                    self.log_with_role("info", "主连接订阅成功")
+                    self.log_with_role("info", "✅【触发接管】主连接订阅成功")
                     return True
                 else:
-                    self.log_with_role("error", "主连接订阅失败")
+                    self.log_with_role("error", "❌【触发接管】主连接订阅失败")
                     # 订阅失败，恢复原角色
                     self.connection_type = old_role
                     return False
@@ -217,23 +222,23 @@ class WebSocketConnection:
                     self.delayed_subscribe_task = asyncio.create_task(
                         self._delayed_subscribe(delay_seconds)
                     )
-                    self.log_with_role("info", f"将在{delay_seconds}秒后订阅心跳")
+                    self.log_with_role("info", f"【触发接管】将在{delay_seconds}秒后订阅心跳")
                 
                 return True
             
             return True
                 
         except Exception as e:
-            self.log_with_role("error", f"角色切换失败: {e}")
+            self.log_with_role("error", f"❌【触发接管】角色切换失败: {e}")
             return False
     
     async def _subscribe(self):
         """订阅数据"""
         if not self.symbols:
-            self.log_with_role("warning", "没有合约可订阅")
+            self.log_with_role("warning", "❌【连接池】没有合约可订阅")
             return False
         
-        self.log_with_role("info", f"开始订阅 {len(self.symbols)} 个合约")
+        self.log_with_role("info", f"🌎【连接池】开始订阅 {len(self.symbols)} 个合约")
         
         if self.exchange == "binance":
             return await self._subscribe_binance()
@@ -267,11 +272,11 @@ class WebSocketConnection:
                     await asyncio.sleep(1.5)
             
             self.subscribed = True
-            self.log_with_role("info", f"订阅完成，共 {len(self.symbols)} 个合约")
+            self.log_with_role("info", f"✅【连接池】币安订阅完成，共 {len(self.symbols)} 个合约")
             return True
             
         except Exception as e:
-            self.log_with_role("error", f"币安订阅失败: {e}")
+            self.log_with_role("error", f"❌【连接池】币安订阅失败: {e}")
             return False
     
     async def _subscribe_okx(self):
@@ -296,24 +301,44 @@ class WebSocketConnection:
             await asyncio.sleep(2)
             
             self.subscribed = True
-            self.log_with_role("info", f"✅ OKX订阅成功！频道数:{len(all_subscriptions)}")
+            self.log_with_role("info", f"✅ 【连接池】OKX订阅成功！频道数:{len(all_subscriptions)}")
             return True
             
         except Exception as e:
-            self.log_with_role("error", f"OKX订阅失败: {e}")
+            self.log_with_role("error", f"❌【连接池】OKX订阅失败: {e}")
             return False
     
     async def _periodic_ping(self):
-        """持续ping保活任务"""
+        """持续ping保活任务 - 带频率限制的日志"""
+        last_error_log_time = None
+        consecutive_errors = 0
+        
         while self.connected:
             try:
                 await asyncio.sleep(self.ping_interval)
                 if self.ws and self.connected:
                     await self.ws.ping()
+                    
+                    # ping成功后重置错误计数
+                    if consecutive_errors > 0:
+                        consecutive_errors = 0
+                    
             except asyncio.CancelledError:
                 break
+                
             except Exception as e:
-                self.log_with_role("error", f"ping失败: {e}")
+                consecutive_errors += 1
+                
+                # 频率限制：首次错误立即记录，后续每30秒记录一次
+                current_time = datetime.now()
+                if (consecutive_errors == 1 or 
+                    last_error_log_time is None or 
+                    (current_time - last_error_log_time).total_seconds() > 30):
+                    
+                    self.log_with_role("error", 
+                        f"❌【连接池】ping失败(连续{consecutive_errors}次): {e}")
+                    last_error_log_time = current_time
+                
                 self.connected = False
                 break
     
@@ -323,7 +348,7 @@ class WebSocketConnection:
             if not self.symbols:
                 return
                 
-            self.log_with_role("info", f"取消订阅 {len(self.symbols)} 个合约")
+            self.log_with_role("info", f"✅【连接池】取消订阅 {len(self.symbols)} 个合约")
             
             if self.exchange == "binance":
                 streams = []
@@ -359,7 +384,7 @@ class WebSocketConnection:
                     await asyncio.sleep(2)
             
         except Exception as e:
-            self.log_with_role("error", f"取消订阅失败: {e}")
+            self.log_with_role("error", f"❌【连接池】取消订阅失败: {e}")
     
     async def _receive_messages(self):
         """接收消息"""
@@ -375,13 +400,13 @@ class WebSocketConnection:
                 asyncio.create_task(self._process_message(message))
                 
         except websockets.exceptions.ConnectionClosed as e:
-            self.log_with_role("error", f"连接关闭 - 代码: {e.code}, 原因: {e.reason}")
+            self.log_with_role("error", f"❌【连接池】连接关闭 - 代码: {e.code}, 原因: {e.reason}")
             self.connected = False
             self.subscribed = False
             self.is_active = False
             
             if self.exchange == "okx" and e.code == 1006:
-                self.log_with_role("critical", "🔥 OKX强制断开连接")
+                self.log_with_role("critical", "🔥❌ 【连接池】OKX强制断开连接")
             
         except Exception as e:
             self.log_with_role("error", f"接收消息错误: {e}")
@@ -405,9 +430,13 @@ class WebSocketConnection:
                 await self._process_okx_message(data)
                 
         except json.JSONDecodeError:
-            self.log_with_role("warning", "无法解析JSON消息")
+            # 频率限制：前3次和每10次记录一次
+            self._json_decode_error_count += 1
+            if self._json_decode_error_count <= 3 or self._json_decode_error_count % 10 == 0:
+                self.log_with_role("warning", 
+                    f"❌【连接池】无法解析JSON消息(第{self._json_decode_error_count}次)")
         except Exception as e:
-            self.log_with_role("error", f"处理消息错误: {e}")
+            self.log_with_role("error", f"❌【连接池】处理消息错误: {e}")
     
     async def _process_binance_message(self, data):
         """处理币安消息"""
@@ -433,7 +462,13 @@ class WebSocketConnection:
             try:
                 await self.data_callback(processed)
             except Exception as e:
-                self.log_with_role("error", f"数据回调失败: {e}")
+                # 频率限制：每30秒记录一次回调失败
+                current_time = datetime.now()
+                if (self._last_callback_error_log is None or 
+                    (current_time - self._last_callback_error_log).total_seconds() > 30):
+                    
+                    self.log_with_role("warning", f"❌【连接池】数据回调失败: {e}")
+                    self._last_callback_error_log = current_time
         
         elif event_type == "markPriceUpdate":
             symbol = data.get("s", "").upper()
@@ -450,7 +485,13 @@ class WebSocketConnection:
             try:
                 await self.data_callback(processed)
             except Exception as e:
-                self.log_with_role("error", f"数据回调失败: {e}")
+                # 频率限制：每30秒记录一次回调失败
+                current_time = datetime.now()
+                if (self._last_callback_error_log is None or 
+                    (current_time - self._last_callback_error_log).total_seconds() > 30):
+                    
+                    self.log_with_role("warning", f"❌【连接池】数据回调失败: {e}")
+                    self._last_callback_error_log = current_time
     
     async def _process_okx_message(self, data):
         """处理欧意消息"""
@@ -458,15 +499,14 @@ class WebSocketConnection:
             event_type = data.get("event")
             
             if event_type == "error":
-                self.log_with_role("critical", f"🔥 OKX错误: {json.dumps(data)}")
+                self.log_with_role("critical", f"🔥 ❌【连接池】OKX错误: {json.dumps(data)}")
                 if "too many requests" in str(data).lower():
                     self.connected = False
                     return
             
             elif event_type == "subscribe":
-                channel = data.get("arg", {}).get("channel", "")
-                inst_id = data.get("arg", {}).get("instId", "")
-                self.log_with_role("info", f"✅ 订阅确认: {channel} {inst_id}")
+                # 方案5：直接跳过订阅确认日志，避免刷屏
+                return
             
             return
         
@@ -506,7 +546,13 @@ class WebSocketConnection:
                     await self.data_callback(processed)
         
         except Exception as e:
-            self.log_with_role("warning", f"解析OKX数据失败: {e}")
+            # 频率限制：每10秒记录一次解析失败
+            current_time = datetime.now()
+            if (self._last_callback_error_log is None or 
+                (current_time - self._last_callback_error_log).total_seconds() > 10):
+                
+                self.log_with_role("warning", f"❌【连接池】解析OKX数据失败: {e}")
+                self._last_callback_error_log = current_time
     
     async def disconnect(self):
         """断开连接"""
@@ -527,10 +573,10 @@ class WebSocketConnection:
             self.subscribed = False
             self.is_active = False
             
-            self.log_with_role("info", "连接已断开")
+            self.log_with_role("info", "❌【连接池】连接已断开")
             
         except Exception as e:
-            self.log_with_role("error", f"断开连接错误: {e}")
+            self.log_with_role("error", f"❌【连接池】断开连接错误: {e}")
     
     @property
     def last_message_seconds_ago(self) -> float:

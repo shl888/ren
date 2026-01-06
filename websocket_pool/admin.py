@@ -18,7 +18,7 @@ class WebSocketAdmin:
     
     def __init__(self):
         """初始化"""
-        logger.info("WebSocketAdmin: 启动（纯被动模式）")
+        logger.info("[管理员]WebSocketAdmin: 启动（纯被动模式）")
         
         # ✅ 创建pool_manager时传入self引用
         self._pool_manager = WebSocketPoolManager(admin_instance=self)
@@ -30,17 +30,17 @@ class WebSocketAdmin:
         self._restart_requests = {}  # 存储重启请求
         self._processing_restart = set()  # ✅ 正在处理的重启集合
         
-        logger.info("✅ WebSocketAdmin 初始化完成")
+        logger.info("✅ [管理员]WebSocketAdmin 初始化完成")
     
     async def start(self):
         """启动整个WebSocket模块"""
         if self._running:
-            logger.warning("WebSocket模块已在运行中")
+            logger.warning("[管理员]WebSocket模块已在运行中")
             return True
         
         try:
             logger.info("=" * 60)
-            logger.info("WebSocketAdmin 正在启动模块...")
+            logger.info("[管理员]WebSocketAdmin 正在启动模块...")
             logger.info("=" * 60)
             
             # 1. 初始化连接池
@@ -55,15 +55,15 @@ class WebSocketAdmin:
             self._running = True
             self._initialized = True
             
-            logger.info("✅ WebSocketAdmin 模块启动成功")
+            logger.info("✅ [管理员]WebSocketAdmin 模块启动成功")
             logger.info("=" * 60)
-            logger.info("💡 模式: 纯被动接收（只响应直接请求）")
-            logger.info("💡 重启路径: 连接池 → 直接调用 → 管理员")
+            logger.info("💡[管理员] 模式: 纯被动接收（只响应直接请求）")
+            logger.info("💡[管理员] 重启路径: 连接池 → 直接调用 → 管理员")
             logger.info("=" * 60)
             return True
             
         except Exception as e:
-            logger.error(f"WebSocketAdmin 启动失败: {e}")
+            logger.error(f"[管理员]WebSocketAdmin 启动失败: {e}")
             await self.stop()
             return False
     
@@ -78,11 +78,11 @@ class WebSocketAdmin:
                 await asyncio.sleep(30)  # 长时间睡眠，减少CPU使用
                 
             except Exception as e:
-                logger.error(f"重启循环错误: {e}")
+                logger.error(f"[管理员]重启循环错误: {e}")
                 await asyncio.sleep(30)
     
     async def handle_restart_request(self, exchange: str, reason: str):
-        """✅ 处理连接池直接发来的重启请求"""
+        """✅ [管理员]处理连接池直接发来的重启请求"""
         logger.critical(f"[管理员] 🆘 收到直接重启请求: {exchange} - {reason}")
         
         if exchange not in self._restart_requests:
@@ -141,10 +141,10 @@ class WebSocketAdmin:
     async def stop(self):
         """停止整个WebSocket模块"""
         if not self._running:
-            logger.info("WebSocket模块未在运行")
+            logger.info("[管理员]WebSocket模块未在运行")
             return
         
-        logger.info("WebSocketAdmin 正在停止模块...")
+        logger.info("[管理员]WebSocketAdmin 正在停止模块...")
         
         # 🚨 完全删除monitor相关代码
         
@@ -152,7 +152,7 @@ class WebSocketAdmin:
             await self._pool_manager.shutdown()
         
         self._running = False
-        logger.info("✅ WebSocketAdmin 模块已停止")
+        logger.info("✅ [管理员]WebSocketAdmin 模块已停止")
     
     async def get_status(self) -> Dict[str, Any]:
         """获取模块状态"""
@@ -191,7 +191,7 @@ class WebSocketAdmin:
             return summary
             
         except Exception as e:
-            logger.error(f"WebSocketAdmin 获取状态失败: {e}")
+            logger.error(f"[管理员]WebSocketAdmin 获取状态失败: {e}")
             return {
                 "module": "websocket_pool",
                 "status": "error",
