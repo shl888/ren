@@ -165,7 +165,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
             if not self.connection.connected or self.connection.ws is None:
                 return False
             
-            ping_msg = {"op": "ping"}
+            ping_msg = "ping"
             await self.connection.ws.send(json.dumps(ping_msg))
             return True
         except Exception as e:
