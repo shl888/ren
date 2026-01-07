@@ -1,6 +1,6 @@
 """
-WebSocket心跳策略模块
-处理不同交易所的心跳差异 - 最终优化版
+WebSocket心跳策略模块 - 最终修正版
+已根据官方文档修正OKX心跳格式，确保连接稳定。
 """
 import asyncio
 import json
@@ -42,8 +42,9 @@ class HeartbeatStrategy(ABC):
             "timestamp": datetime.now().isoformat()
         }
 
+
 class OkxHeartbeatStrategy(HeartbeatStrategy):
-    """欧意策略：主动ping + 筛网捕获pong + 主动断联"""
+    """欧意策略：主动发送纯文本ping + 捕获纯文本pong"""
     
     def __init__(self, connection):
         super().__init__(connection)
@@ -79,24 +80,12 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
         self._log("info", "欧意心跳策略停止")
     
     async def on_message_received(self, raw_message: str) -> bool:
-        """筛网：快速过滤，精准捕获pong"""
-        # 🎯 快速过滤：长消息不是pong
-        if len(raw_message) > 50:
-            return False
-        
-        # 🎯 关键词过滤：不包含"pong"的不是目标
-        if '"pong"' not in raw_message:
-            return False
-        
-        # 🎯 精准捕获：确认是pong消息
-        try:
-            data = json.loads(raw_message)
-            if isinstance(data, dict) and data.get("event") == "pong":
-                await self._handle_captured_pong()
-                return True
-        except json.JSONDecodeError:
-            pass
-        
+        """处理消息：捕获OKX返回的纯文本'pong'"""
+        # 关键修正：OKX的pong是纯文本字符串，不是JSON。
+        if raw_message == 'pong':
+            await self._handle_captured_pong()
+            return True
+        # 如果不是'pong'，返回False，交由业务逻辑处理
         return False
     
     async def _handle_captured_pong(self):
@@ -121,8 +110,10 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
                 
                 # 发送ping
                 self._last_ping_sent = datetime.now()
-                await self._send_ping()
-                self._ping_count += 1
+                # 关键修正：这里调用修正后的 _send_ping
+                success = await self._send_ping()
+                if success:
+                    self._ping_count += 1
                 
                 # 等待pong响应
                 await asyncio.sleep(self._pong_timeout)
@@ -160,13 +151,14 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
                 await asyncio.sleep(5)
     
     async def _send_ping(self):
-        """发送ping消息"""
+        """发送ping消息 - 关键修正：发送纯文本'ping'"""
         try:
             if not self.connection.connected or self.connection.ws is None:
                 return False
             
-            ping_msg = "ping"
-            await self.connection.ws.send(json.dumps(ping_msg))
+            # 关键修正：OKX要求发送纯文本字符串 "ping"，而不是JSON格式。
+            # 直接发送字符串，切勿使用 json.dumps()
+            await self.connection.ws.send("ping")
             return True
         except Exception as e:
             self._log("error", f"发送ping失败: {e}")
@@ -196,9 +188,8 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
             log_method(f"[欧意心跳] {message}")
 
 
-
 class BinanceHeartbeatStrategy(HeartbeatStrategy):
-    """币安策略：筛网捕获ping + 立即响应pong（不断联）"""
+    """币安策略：被动响应服务器的JSON格式ping"""
     
     def __init__(self, connection):
         super().__init__(connection)
@@ -206,12 +197,12 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
         self._pong_count = 0
     
     async def start(self):
-        """启动策略 - 只启动筛网检测"""
+        """启动策略 - 币安无需主动发送任务，只需监听"""
         if self._running:
             return
         
         self._running = True
-        self._log("info", "币安心跳策略启动：仅响应ping，不断联检测")
+        self._log("info", "币安心跳策略启动：被动响应ping")
     
     async def stop(self):
         """停止策略"""
@@ -219,16 +210,8 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
         self._log("info", "币安心跳策略停止")
     
     async def on_message_received(self, raw_message: str) -> bool:
-        """筛网：快速过滤，精准捕获ping并立即回复pong"""
-        # 🎯 快速过滤：长消息不是ping
-        if len(raw_message) > 50:
-            return False
-        
-        # 🎯 关键词过滤：不包含"ping"的不是目标
-        if '"ping"' not in raw_message:
-            return False
-        
-        # 🎯 精准捕获：确认是ping消息
+        """捕获币安服务器的ping并回复pong"""
+        # 币安的ping是JSON格式：{"ping": timestamp}
         try:
             data = json.loads(raw_message)
             if isinstance(data, dict) and "ping" in data:
@@ -243,7 +226,7 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
         """处理捕获到的ping消息 - 立即异步回复pong"""
         self._ping_count += 1
         
-        # 🔥 立即异步回复pong（不阻塞消息处理）
+        # 立即异步回复pong（不阻塞消息处理）
         asyncio.create_task(self._reply_pong_async(ping_timestamp))
         
         # 低频日志
@@ -256,12 +239,13 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
             if not self.connection.connected or self.connection.ws is None:
                 return
             
+            # 币安要求pong格式为 {"pong": timestamp}
             pong_msg = json.dumps({"pong": ping_timestamp})
             await self.connection.ws.send(pong_msg)
             self._pong_count += 1
-        except Exception:
-            # 静默失败，不断联
-            pass
+        except Exception as e:
+            # 静默失败，避免因发送失败引发额外错误
+            self._log("debug", f"回复pong失败（通常无害）: {e}")
     
     def get_status(self) -> dict:
         """获取详细状态"""
@@ -281,12 +265,16 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
             log_method = getattr(logger, level, logger.info)
             log_method(f"[币安心跳] {message}")
 
+
 def create_heartbeat_strategy(exchange: str, connection) -> HeartbeatStrategy:
     """创建心跳策略工厂函数"""
-    if exchange.lower() == "okx":
+    exchange_lower = exchange.lower()
+    
+    if exchange_lower == "okx":
         return OkxHeartbeatStrategy(connection)
-    elif exchange.lower() == "binance":
+    elif exchange_lower == "binance":
         return BinanceHeartbeatStrategy(connection)
     else:
-        # 默认使用欧意策略（更安全）
-        return OkxHeartbeatStrategy(connection)
+        # 对于未知交易所，默认采用更保守的币安（被动响应）策略
+        # 这样可以避免向不支持的服务器主动发送ping导致错误
+        return BinanceHeartbeatStrategy(connection)
