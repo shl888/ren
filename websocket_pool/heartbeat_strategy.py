@@ -64,7 +64,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
         self._running = True
         self._consecutive_failures = 0
         self._task = asyncio.create_task(self._active_ping_loop())
-        self._log("info", "欧意心跳策略启动：主动ping + 断联检测")
+        self._log("info", "💗【okx心跳策略】已启动：主动ping + 检测断联")
     
     async def stop(self):
         """停止心跳"""
@@ -76,7 +76,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
             except asyncio.CancelledError:
                 pass
             self._task = None
-        self._log("info", "欧意心跳策略停止")
+        self._log("info", "❌【okx心跳策略】已停止")
     
     async def on_message_received(self, raw_message: str) -> bool:
         """筛网：快速过滤，精准捕获pong"""
@@ -104,10 +104,10 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
         
         # 低频日志
         if self._pong_count % 100 == 0:
-            self._log("debug", f"已收到{self._pong_count}次pong响应")
+            self._log("debug", f"💞✅【okx心跳策略】已收到{self._pong_count}次pong响应")
     
     async def _active_ping_loop(self):
-        """主动ping循环 + 断联检测"""
+        """主动ping循环 +检测断联"""
         while self._running:
             try:
                 # 等待ping间隔
@@ -133,27 +133,27 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
                     # pong超时
                     self._consecutive_failures += 1
                     self._log("warning", 
-                        f"第{self._consecutive_failures}次pong超时 "
+                        f"⚠️💞【okx心跳策略】第{self._consecutive_failures}次pong超时 "
                         f"(等待{self._pong_timeout}秒)")
                     
                     # 🚨 主动断联：连续2次失败
                     if self._consecutive_failures >= self._max_failures:
                         self._log("critical", 
-                            "连续pong超时，主动断开连接")
+                            "💔⚠️💔【okx心跳策略】连续pong超时，主动断开连接")
                         await self.connection._emergency_disconnect("pong超时")
                         break
                 
                 # 低频统计日志
                 if self._ping_count % 50 == 0:
                     self._log("info", 
-                        f"欧意心跳统计: ping={self._ping_count}, "
+                        f"💞【okx心跳策略】统计: ping={self._ping_count}, "
                         f"pong={self._pong_count}, "
                         f"失败={self._consecutive_failures}")
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                self._log("error", f"ping循环异常: {e}")
+                self._log("error", f"⚠️【okx心跳策略】ping循环异常: {e}")
                 await asyncio.sleep(5)
     
     async def _send_ping(self):
@@ -167,7 +167,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
             await self.connection.ws.send(ping_msg)  # 直接发送字符串！
             return True
         except Exception as e:
-            self._log("error", f"发送ping失败: {e}")
+            self._log("error", f"❌【okx心跳策略】发送ping失败: {e}")
             return False
     
     def get_status(self) -> dict:
@@ -188,15 +188,15 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
     def _log(self, level: str, message: str):
         """记录日志"""
         if hasattr(self.connection, 'log_with_role'):
-            self.connection.log_with_role(level, f"[心跳] {message}")
+            self.connection.log_with_role(level, f"💗【okx心跳策略】[心跳] {message}")
         else:
             log_method = getattr(logger, level, logger.info)
-            log_method(f"[欧意心跳] {message}")
+            log_method(f"💗【okx心跳策略】[okx心跳] {message}")
 
 
 
 class BinanceHeartbeatStrategy(HeartbeatStrategy):
-    """币安策略：筛网捕获ping + 立即响应pong（不断联）"""
+    """币安策略：筛网捕获ping + 立即回复pong（不参与连接的检测与断开）"""
     
     def __init__(self, connection):
         super().__init__(connection)
@@ -209,12 +209,12 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
             return
         
         self._running = True
-        self._log("info", "币安心跳策略启动：仅响应ping，不断联检测")
+        self._log("info", "💞【币安心跳策略】已启动：仅回复pong，不检测断联")
     
     async def stop(self):
         """停止策略"""
         self._running = False
-        self._log("info", "币安心跳策略停止")
+        self._log("info", "❌【币安心跳策略】已停止")
     
     async def on_message_received(self, raw_message: str) -> bool:
         """筛网：快速过滤，精准捕获ping并立即回复pong"""
@@ -246,7 +246,7 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
         
         # 低频日志
         if self._ping_count % 200 == 0:
-            self._log("debug", f"已响应{self._ping_count}次ping")
+            self._log("debug", f"💞✅【币安心跳策略】已响应{self._ping_count}次ping")
     
     async def _reply_pong_async(self, ping_timestamp: int):
         """异步回复pong - 无阻塞"""
@@ -274,10 +274,10 @@ class BinanceHeartbeatStrategy(HeartbeatStrategy):
     def _log(self, level: str, message: str):
         """记录日志"""
         if hasattr(self.connection, 'log_with_role'):
-            self.connection.log_with_role(level, f"[心跳] {message}")
+            self.connection.log_with_role(level, f"💗【币安心跳策略】[心跳] {message}")
         else:
             log_method = getattr(logger, level, logger.info)
-            log_method(f"[币安心跳] {message}")
+            log_method(f"💗【币安心跳策略】[币安心跳] {message}")
 
 def create_heartbeat_strategy(exchange: str, connection) -> HeartbeatStrategy:
     """创建心跳策略工厂函数"""
