@@ -1,6 +1,5 @@
 """
-单个WebSocket连接实现 - 简洁版
-支持主备切换，明确状态管理
+单个WebSocket连接实现 - 集成心跳策略版
 """
 import asyncio
 import json
@@ -9,6 +8,9 @@ from datetime import datetime
 from typing import Dict, Any, Callable
 import websockets
 
+# 导入心跳策略
+from .heartbeat_strategy import create_heartbeat_strategy
+
 logger = logging.getLogger(__name__)
 
 class ConnectionType:
@@ -16,7 +18,7 @@ class ConnectionType:
     WARM_STANDBY = "warm_standby"
 
 class WebSocketConnection:
-    """单个WebSocket连接 - 简洁版"""
+    """单个WebSocket连接 - 集成心跳策略"""
     
     def __init__(
         self,
@@ -43,30 +45,28 @@ class WebSocketConnection:
         self.is_active = False
         
         # 任务
-        self.keepalive_task = None
         self.receive_task = None
         self.delayed_subscribe_task = None
         
-        # 角色显示（温→备）
+        # 🎯 新增：心跳策略
+        self.heartbeat_strategy = create_heartbeat_strategy(exchange, self)
+        
+        # 角色显示
         self.role_display = {
             ConnectionType.MASTER: "主",
             ConnectionType.WARM_STANDBY: "备",
         }
         
-        # 配置
-        if exchange == "okx":
-            self.ping_interval = 3   # OKX必须3秒
-        else:
-            self.ping_interval = 10  # 币安10秒
-        
+        # 基础配置
         self.reconnect_interval = 3
-        self.min_subscribe_interval = 2.0
+        self.min_subscribe_interval = 2.5
         
         # 日志频率限制器
-        self._last_ping_error_log = None
         self._json_decode_error_count = 0
         self._last_callback_error_log = None
         
+        logger.debug(f"WebSocketConnection初始化: {connection_id}")
+    
     def log_with_role(self, level: str, message: str):
         """带角色信息的日志"""
         role_char = self.role_display.get(self.connection_type, "?")
@@ -84,13 +84,14 @@ class WebSocketConnection:
             self.subscribed = False
             self.is_active = False
             
-            # 建立连接
+            # 建立连接（禁用websockets库的自动ping）
             self.ws = await asyncio.wait_for(
                 websockets.connect(
                     self.ws_url,
-                    ping_interval=None,  # 用自己的保活
-                    ping_timeout=None,
-                    close_timeout=1
+                    ping_interval=None,  # 禁用自动ping
+                    ping_timeout=None,   # 禁用自动ping超时
+                    close_timeout=5,
+                    max_size=10 * 1024 * 1024  # 10MB
                 ),
                 timeout=30
             )
@@ -101,8 +102,8 @@ class WebSocketConnection:
             
             self.log_with_role("info", "✅【连接池】连接建立成功")
             
-            # 启动保活任务
-            self.keepalive_task = asyncio.create_task(self._periodic_ping())
+            # 🎯 启动心跳策略
+            await self.heartbeat_strategy.start()
             
             # 根据角色处理订阅
             if self.connection_type == ConnectionType.MASTER and self.symbols:
@@ -111,6 +112,7 @@ class WebSocketConnection:
                 if not subscribe_success:
                     self.log_with_role("error", "❌【连接池】主连接订阅失败")
                     self.connected = False
+                    await self.heartbeat_strategy.stop()
                     return False
                 
                 self.is_active = True
@@ -168,13 +170,13 @@ class WebSocketConnection:
             self.log_with_role("error", f"【连接池】延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
-        """切换连接角色 - 安全版"""
+        """切换连接角色"""
         try:
             old_role_char = self.role_display.get(self.connection_type, "?")
             new_role_char = self.role_display.get(new_role, "?")
             self.log_with_role("info", f"⚠️【触发接管】角色切换: {old_role_char} → {new_role_char}")
             
-            # 1. 取消当前订阅（如果连接正常）
+            # 1. 取消当前订阅
             if self.connected and self.subscribed:
                 self.log_with_role("info", "⚠️【触发接管】取消当前订阅")
                 await self._unsubscribe()
@@ -187,11 +189,10 @@ class WebSocketConnection:
             
             # 3. 设置新合约
             if new_symbols is not None:
-                self.symbols = new_symbols.copy()  # 复制避免引用问题
+                self.symbols = new_symbols.copy()
             
             # 4. 根据新角色处理
             if new_role == ConnectionType.MASTER and self.symbols:
-                # 主连接立即订阅
                 self.log_with_role("info", f"⚠️【触发接管】主连接订阅{len(self.symbols)}个合约")
                 success = await self._subscribe()
                 if success:
@@ -201,22 +202,18 @@ class WebSocketConnection:
                     return True
                 else:
                     self.log_with_role("error", "❌【触发接管】主连接订阅失败")
-                    # 订阅失败，恢复原角色
                     self.connection_type = old_role
                     return False
             
             elif new_role == ConnectionType.WARM_STANDBY:
-                # 温备设置
                 self.is_active = False
                 
-                # 如果没有合约，设置心跳合约
                 if not self.symbols:
                     if self.exchange == "binance":
                         self.symbols = ["BTCUSDT"]
                     elif self.exchange == "okx":
                         self.symbols = ["BTC-USDT-SWAP"]
                 
-                # 延迟订阅心跳
                 if self.connected and self.symbols:
                     delay_seconds = self._get_delay_for_warm_standby()
                     self.delayed_subscribe_task = asyncio.create_task(
@@ -308,40 +305,6 @@ class WebSocketConnection:
             self.log_with_role("error", f"❌【连接池】OKX订阅失败: {e}")
             return False
     
-    async def _periodic_ping(self):
-        """持续ping保活任务 - 带频率限制的日志"""
-        last_error_log_time = None
-        consecutive_errors = 0
-        
-        while self.connected:
-            try:
-                await asyncio.sleep(self.ping_interval)
-                if self.ws and self.connected:
-                    await self.ws.ping()
-                    
-                    # ping成功后重置错误计数
-                    if consecutive_errors > 0:
-                        consecutive_errors = 0
-                    
-            except asyncio.CancelledError:
-                break
-                
-            except Exception as e:
-                consecutive_errors += 1
-                
-                # 频率限制：首次错误立即记录，后续每30秒记录一次
-                current_time = datetime.now()
-                if (consecutive_errors == 1 or 
-                    last_error_log_time is None or 
-                    (current_time - last_error_log_time).total_seconds() > 30):
-                    
-                    self.log_with_role("error", 
-                        f"❌【连接池】ping失败(连续{consecutive_errors}次): {e}")
-                    last_error_log_time = current_time
-                
-                self.connected = False
-                break
-    
     async def _unsubscribe(self):
         """取消订阅"""
         try:
@@ -396,31 +359,33 @@ class WebSocketConnection:
                 if not message:
                     continue
                 
-                # 处理消息
-                asyncio.create_task(self._process_message(message))
+                # 🎯 先让心跳策略处理消息（ping/pong检测）
+                heartbeat_handled = await self.heartbeat_strategy.on_message_received(message)
+                
+                # 如果不是心跳消息，处理业务数据
+                if not heartbeat_handled:
+                    asyncio.create_task(self._process_message(message))
                 
         except websockets.exceptions.ConnectionClosed as e:
             self.log_with_role("error", f"❌【连接池】连接关闭 - 代码: {e.code}, 原因: {e.reason}")
-            self.connected = False
-            self.subscribed = False
-            self.is_active = False
-            
-            if self.exchange == "okx" and e.code == 1006:
-                self.log_with_role("critical", "🔥❌ 【连接池】OKX强制断开连接")
+            await self._handle_disconnect()
             
         except Exception as e:
             self.log_with_role("error", f"接收消息错误: {e}")
-            self.connected = False
-            self.subscribed = False
-            self.is_active = False
+            await self._handle_disconnect()
         
         finally:
-            self.connected = False
-            self.subscribed = False
-            self.is_active = False
+            await self._handle_disconnect()
+    
+    async def _handle_disconnect(self):
+        """处理断开连接"""
+        self.connected = False
+        self.subscribed = False
+        self.is_active = False
+        await self.heartbeat_strategy.stop()
     
     async def _process_message(self, message):
-        """处理消息"""
+        """处理业务消息"""
         try:
             data = json.loads(message)
             
@@ -430,7 +395,6 @@ class WebSocketConnection:
                 await self._process_okx_message(data)
                 
         except json.JSONDecodeError:
-            # 频率限制：前3次和每10次记录一次
             self._json_decode_error_count += 1
             if self._json_decode_error_count <= 3 or self._json_decode_error_count % 10 == 0:
                 self.log_with_role("warning", 
@@ -462,11 +426,9 @@ class WebSocketConnection:
             try:
                 await self.data_callback(processed)
             except Exception as e:
-                # 频率限制：每30秒记录一次回调失败
                 current_time = datetime.now()
                 if (self._last_callback_error_log is None or 
                     (current_time - self._last_callback_error_log).total_seconds() > 30):
-                    
                     self.log_with_role("warning", f"❌【连接池】数据回调失败: {e}")
                     self._last_callback_error_log = current_time
         
@@ -485,11 +447,9 @@ class WebSocketConnection:
             try:
                 await self.data_callback(processed)
             except Exception as e:
-                # 频率限制：每30秒记录一次回调失败
                 current_time = datetime.now()
                 if (self._last_callback_error_log is None or 
                     (current_time - self._last_callback_error_log).total_seconds() > 30):
-                    
                     self.log_with_role("warning", f"❌【连接池】数据回调失败: {e}")
                     self._last_callback_error_log = current_time
     
@@ -505,7 +465,6 @@ class WebSocketConnection:
                     return
             
             elif event_type == "subscribe":
-                # 方案5：直接跳过订阅确认日志，避免刷屏
                 return
             
             return
@@ -546,22 +505,22 @@ class WebSocketConnection:
                     await self.data_callback(processed)
         
         except Exception as e:
-            # 频率限制：每10秒记录一次解析失败
             current_time = datetime.now()
             if (self._last_callback_error_log is None or 
                 (current_time - self._last_callback_error_log).total_seconds() > 10):
-                
                 self.log_with_role("warning", f"❌【连接池】解析OKX数据失败: {e}")
                 self._last_callback_error_log = current_time
     
     async def disconnect(self):
-        """断开连接"""
+        """正常断开连接"""
         try:
+            self.log_with_role("info", "正在断开连接...")
+            
             if self.delayed_subscribe_task:
                 self.delayed_subscribe_task.cancel()
             
-            if self.keepalive_task:
-                self.keepalive_task.cancel()
+            # 停止心跳策略
+            await self.heartbeat_strategy.stop()
             
             if self.ws and self.connected:
                 await self.ws.close()
@@ -573,10 +532,40 @@ class WebSocketConnection:
             self.subscribed = False
             self.is_active = False
             
-            self.log_with_role("info", "❌【连接池】连接已断开")
+            self.log_with_role("info", "✅ 连接已断开")
             
         except Exception as e:
-            self.log_with_role("error", f"❌【连接池】断开连接错误: {e}")
+            self.log_with_role("error", f"❌ 断开连接错误: {e}")
+    
+    async def _emergency_disconnect(self, reason: str):
+        """紧急断开连接"""
+        try:
+            self.log_with_role("critical", f"🔥 执行紧急断开: {reason}")
+            
+            old_connected = self.connected
+            self.connected = False
+            self.subscribed = False
+            self.is_active = False
+            
+            # 停止心跳策略
+            await self.heartbeat_strategy.stop()
+            
+            if self.delayed_subscribe_task:
+                self.delayed_subscribe_task.cancel()
+                
+            if self.ws and old_connected:
+                try:
+                    await asyncio.wait_for(self.ws.close(), timeout=3)
+                except:
+                    pass
+                    
+            if self.receive_task:
+                self.receive_task.cancel()
+                
+            self.log_with_role("info", "✅ 紧急断开完成")
+            
+        except Exception as e:
+            self.log_with_role("error", f"紧急断开异常: {e}")
     
     @property
     def last_message_seconds_ago(self) -> float:
@@ -590,6 +579,9 @@ class WebSocketConnection:
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
         
+        # 获取心跳策略状态
+        heartbeat_status = self.heartbeat_strategy.get_status()
+        
         return {
             "connection_id": self.connection_id,
             "exchange": self.exchange,
@@ -600,5 +592,6 @@ class WebSocketConnection:
             "symbols_count": len(self.symbols),
             "last_message_seconds_ago": last_msg_seconds,
             "reconnect_count": self.reconnect_count,
+            "heartbeat": heartbeat_status,
             "timestamp": now.isoformat()
         }
