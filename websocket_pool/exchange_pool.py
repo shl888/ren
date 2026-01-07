@@ -345,8 +345,8 @@ class ExchangeWebSocketPool:
             a_symbols = a_master.symbols.copy()
             
             # 🎯 详细日志：记录原主连接和温备连接的状态 - 改为单行格式
-            logger.info(f"[{self.exchange}] 📋 原主连接:{a_master.connection_id} | 合约数量:{len(a_symbols)}个 | 连接状态:{'已连接' if a_master.connected else '已断开'} | 订阅状态:{'已订阅' if a_master.subscribed else '未订阅'}")
-            logger.info(f"[{self.exchange}] 📋 温备连接:{b_standby.connection_id} | 当前合约:{b_standby.symbols} | 连接状态:{'已连接' if b_standby.connected else '已断开'}")
+            logger.info(f"[{self.exchange}] 📋 【触发接管】【内部监控】原主连接:{a_master.connection_id} | 合约数量:{len(a_symbols)}个 | 连接状态:{'已连接' if a_master.connected else '已断开'} | 订阅状态:{'已订阅' if a_master.subscribed else '未订阅'}")
+            logger.info(f"[{self.exchange}] 📋 【触发接管】【内部监控】温备连接:{b_standby.connection_id} | 当前合约:{b_standby.symbols} | 连接状态:{'已连接' if b_standby.connected else '已断开'}")
             
             # 步骤1: 温备连接，接管，原主连接的合约
             logger.info(f"[{self.exchange}] 🔄 【触发接管】步骤1: {b_standby.connection_id}开始接管{a_master.connection_id}的{len(a_symbols)}个合约")
