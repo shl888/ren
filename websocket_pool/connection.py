@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, Optional
 import websockets
 
 # 导入心跳策略
@@ -48,7 +48,7 @@ class WebSocketConnection:
         self.receive_task = None
         self.delayed_subscribe_task = None
         
-        # 🎯 新增：心跳策略
+        # 🎯 新增：心跳策略（币安时为None）
         self.heartbeat_strategy = create_heartbeat_strategy(exchange, self)
         
         # 角色显示
@@ -102,8 +102,9 @@ class WebSocketConnection:
             
             self.log_with_role("info", "✅【连接池】连接建立成功")
             
-            # 🎯 启动心跳策略
-            await self.heartbeat_strategy.start()
+            # 🎯 启动心跳策略（如果有的话）
+            if self.heartbeat_strategy:
+                await self.heartbeat_strategy.start()
             
             # 根据角色处理订阅
             if self.connection_type == ConnectionType.MASTER and self.symbols:
@@ -112,7 +113,8 @@ class WebSocketConnection:
                 if not subscribe_success:
                     self.log_with_role("error", "❌【连接池】主连接订阅失败")
                     self.connected = False
-                    await self.heartbeat_strategy.stop()
+                    if self.heartbeat_strategy:
+                        await self.heartbeat_strategy.stop()
                     return False
                 
                 self.is_active = True
@@ -167,7 +169,7 @@ class WebSocketConnection:
                 self.log_with_role("info", "✅【连接池】已经订阅，跳过延迟订阅")
                 
         except Exception as e:
-            self.log_with_role("error", f"【连接池】延迟订阅失败: {e}")
+            self.log_with_role("error", f"❌【连接池】延迟订阅失败: {e}")
     
     async def switch_role(self, new_role: str, new_symbols: list = None):
         """切换连接角色"""
@@ -359,8 +361,10 @@ class WebSocketConnection:
                 if not message:
                     continue
                 
-                # 🎯 先让心跳策略处理消息（ping/pong检测）
-                heartbeat_handled = await self.heartbeat_strategy.on_message_received(message)
+                # 🎯 先让心跳策略处理消息（如果有策略且策略处理了消息）
+                heartbeat_handled = False
+                if self.heartbeat_strategy:
+                    heartbeat_handled = await self.heartbeat_strategy.on_message_received(message)
                 
                 # 如果不是心跳消息，处理业务数据
                 if not heartbeat_handled:
@@ -382,7 +386,8 @@ class WebSocketConnection:
         self.connected = False
         self.subscribed = False
         self.is_active = False
-        await self.heartbeat_strategy.stop()
+        if self.heartbeat_strategy:
+            await self.heartbeat_strategy.stop()
     
     async def _process_message(self, message):
         """处理业务消息"""
@@ -519,8 +524,9 @@ class WebSocketConnection:
             if self.delayed_subscribe_task:
                 self.delayed_subscribe_task.cancel()
             
-            # 停止心跳策略
-            await self.heartbeat_strategy.stop()
+            # 停止心跳策略（如果有的话）
+            if self.heartbeat_strategy:
+                await self.heartbeat_strategy.stop()
             
             if self.ws and self.connected:
                 await self.ws.close()
@@ -547,8 +553,9 @@ class WebSocketConnection:
             self.subscribed = False
             self.is_active = False
             
-            # 停止心跳策略
-            await self.heartbeat_strategy.stop()
+            # 停止心跳策略（如果有的话）
+            if self.heartbeat_strategy:
+                await self.heartbeat_strategy.stop()
             
             if self.delayed_subscribe_task:
                 self.delayed_subscribe_task.cancel()
@@ -579,8 +586,16 @@ class WebSocketConnection:
         now = datetime.now()
         last_msg_seconds = (now - self.last_message_time).total_seconds() if self.last_message_time else 999
         
-        # 获取心跳策略状态
-        heartbeat_status = self.heartbeat_strategy.get_status()
+        # 获取心跳策略状态（如果有的话）
+        heartbeat_status = {}
+        if self.heartbeat_strategy:
+            heartbeat_status = self.heartbeat_strategy.get_status()
+        else:
+            heartbeat_status = {
+                "strategy": "None",
+                "note": f"{self.exchange}心跳由websockets库协议层自动处理",
+                "timestamp": now.isoformat()
+            }
         
         return {
             "connection_id": self.connection_id,
@@ -595,3 +610,4 @@ class WebSocketConnection:
             "heartbeat": heartbeat_status,
             "timestamp": now.isoformat()
         }
+        
