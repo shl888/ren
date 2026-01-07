@@ -113,7 +113,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
         self._pong_count += 1
         
         # 低频日志
-        if self._pong_count % 20 == 0:  # 调整为每20次记录，便于观察
+        if self._pong_count % 12 == 0:  # 调整为每12次记录，便于观察
             self._log("debug", f"💞✅【okx心跳策略】已收到{self._pong_count}次pong响应")
     
     async def _active_ping_loop(self):
