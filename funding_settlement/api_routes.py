@@ -40,7 +40,7 @@ async def _startup_auto_fetch(app: web.Application):
             return
         
         # ✅【修改】延迟3分钟启动，确保所有初始化完成，避免被封IP
-        logger.info("⏳ 延迟3分钟启动，确保市场数据加载完成...")
+        logger.info("⏳【历史费率】 延迟3分钟启动，确保市场数据加载完成...")
         await asyncio.sleep(180)  # 180秒 = 3分钟
         
         logger.info("📡【历史费率】 开始获取币安资金费率结算数据...")
