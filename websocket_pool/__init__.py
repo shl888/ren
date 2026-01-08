@@ -7,7 +7,6 @@ WebSocket连接池模块 - 生产环境配置
 from .pool_manager import WebSocketPoolManager
 from .exchange_pool import ExchangeWebSocketPool
 from .connection import WebSocketConnection
-from .monitor import ConnectionMonitor
 from .config import EXCHANGE_CONFIGS, SUBSCRIPTION_TYPES, SYMBOL_FILTERS
 from .static_symbols import STATIC_SYMBOLS
 
