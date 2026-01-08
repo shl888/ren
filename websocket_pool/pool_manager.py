@@ -181,103 +181,130 @@ class WebSocketPoolManager:
     async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
         """方法1: 通过交易所API动态获取 - 修复版"""
         exchange = None
-        max_retries = 3
+        max_retries = 2  # 减少重试次数，避免触发频率限制
+        last_error = None
         
         for attempt in range(1, max_retries + 1):
+            exchange = None
             try:
-                # 针对不同交易所进行优化配置
-                config = self._get_exchange_config(exchange_name)
-                exchange_class = getattr(ccxt_async, exchange_name)
-                exchange = exchange_class(config)
+                # 1. 创建交易所实例（带优化配置）
+                exchange = self._create_exchange_instance(exchange_name)
                 
                 logger.info(f"[{exchange_name}] 🌎【连接池】正在加载市场数据... (尝试 {attempt}/{max_retries})")
                 
-                # 关键区别：不同交易所使用不同方法
-                if exchange_name == "okx":
-                    # OKX需要使用特定参数获取SWAP合约
-                    markets = await exchange.fetch_markets(params={'instType': 'SWAP'})
-                    # OKX的fetch_markets返回的是列表，需要转换为统一的字典格式
-                    markets_dict = {}
-                    for market in markets:
-                        symbol = market.get('symbol', '')
-                        if symbol:
-                            markets_dict[symbol.upper()] = market
-                    markets = markets_dict
-                else:
-                    # 币安等其他交易所使用load_markets，返回的是字典
-                    markets = await exchange.load_markets()
-                    # 将键转为大写
-                    markets = {k.upper(): v for k, v in markets.items()}
+                # 2. 获取市场数据（使用正确的API方法）
+                markets = await self._fetch_markets_safe(exchange, exchange_name)
                 
-                logger.info(f"[{exchange_name}] ✅【连接池】市场数据加载完成，共 {len(markets)} 个市场")
+                if not markets:
+                    logger.warning(f"[{exchange_name}] 获取市场数据失败，返回空")
+                    continue
                 
-                # 处理并筛选合约
+                # 3. 处理和筛选合约
                 filtered_symbols = self._filter_and_format_symbols(exchange_name, markets)
                 
-                if filtered_symbols:
-                    # 打印分组统计
-                    symbol_groups = {}
-                    for s in filtered_symbols:
-                        prefix = s[:3]
-                        symbol_groups.setdefault(prefix, 0)
-                        symbol_groups[prefix] += 1
-                    
-                    top_groups = sorted(symbol_groups.items(), key=lambda x: x[1], reverse=True)[:5]
-                    group_info = ", ".join([f"{g[0]}:{g[1]}" for g in top_groups])
-                    logger.info(f"[{exchange_name}] 【连接池】币种分组统计: {group_info}")
-                    
-                    # 检查是否有重复USDT问题
-                    duplicate_usdt_count = sum(1 for s in filtered_symbols if s.upper().endswith('USDTUSDT'))
-                    if duplicate_usdt_count > 0:
-                        logger.error(f"【连接池】[{exchange_name}] ⚠️ 发现 {duplicate_usdt_count} 个重复USDT的合约!")
-                        # 显示有问题的合约
-                        problematic = [s for s in filtered_symbols if s.upper().endswith('USDTUSDT')][:5]
-                        logger.error(f"⚠️【连接池】有问题的合约示例: {problematic}")
+                # 4. 正确关闭交易所实例
+                if exchange:
+                    try:
+                        await exchange.close()
+                    except Exception as e:
+                        logger.debug(f"[{exchange_name}] 关闭交易所实例异常: {e}")
                 
-                await exchange.close()
-                return filtered_symbols
+                if filtered_symbols:
+                    logger.info(f"[{exchange_name}] ✅【连接池】成功获取 {len(filtered_symbols)} 个合约")
+                    return filtered_symbols
+                    
+            except ccxt_async.RateLimitExceeded as e:
+                last_error = f"频率限制: {e}"
+                wait_time = 10 * attempt  # 指数退避，更长的等待时间
+                logger.warning(f'❌【连接池】[{exchange_name}] 频率限制，{wait_time}秒后重试')
+                await asyncio.sleep(wait_time)
+                
+            except ccxt_async.DDoSProtection as e:
+                last_error = f"DDoS保护: {e}"
+                wait_time = 15 * attempt  # 更长的等待时间
+                logger.warning(f'❌【连接池】[{exchange_name}] DDoS保护触发，{wait_time}秒后重试')
+                await asyncio.sleep(wait_time)
                 
             except Exception as e:
-                # 安全地记录真正的错误原因
-                error_detail = str(e) if e and hasattr(e, '__str__') else '未知错误'
-                
+                last_error = str(e)
                 if attempt < max_retries:
-                    wait_time = 2 ** attempt  # 指数退避
-                    logger.warning(f'❌【连接池】[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {error_detail}')
+                    wait_time = 5 * attempt
+                    logger.warning(f'❌【连接池】[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {last_error}')
                     await asyncio.sleep(wait_time)
                 else:
-                    logger.error(f'❌【连接池】[{exchange_name}] 所有{max_retries}次尝试均失败: {error_detail}')
-                    if exchange:
+                    logger.error(f'❌【连接池】[{exchange_name}] 所有尝试均失败: {last_error}')
+            finally:
+                # 确保在异常时也尝试关闭
+                if exchange:
+                    try:
                         await exchange.close()
-                    return []
+                    except:
+                        pass
+        
+        logger.error(f'❌【连接池】[{exchange_name}] 所有尝试均失败，最后错误: {last_error}')
+        return []
     
-    def _get_exchange_config(self, exchange_name: str) -> dict:
-        """获取针对不同交易所优化的配置"""
-        base_config = {
-            'apiKey': '',  # 不需要API密钥获取合约列表
-            'secret': '',
-            'enableRateLimit': True,
-            'timeout': 30000,  # 30秒超时
+    def _create_exchange_instance(self, exchange_name: str):
+        """安全创建交易所实例"""
+        exchange_class = getattr(ccxt_async, exchange_name)
+        
+        # 基础配置
+        config = {
+            'enableRateLimit': True,  # 🚀 关键：启用内置频率限制
+            'timeout': 30000,         # 30秒超时
+            'rateLimit': 2000,        # 降低频率限制，更保守
         }
         
-        if exchange_name == "okx":
-            # OKX专用配置
-            base_config.update({
-                'options': {
-                    'defaultType': 'swap',
-                    'fetchMarketDataRateLimit': 2000,  # 降低频率
-                }
-            })
-        elif exchange_name == "binance":
-            # 币安专用配置
-            base_config.update({
+        # 交易所特定配置
+        if exchange_name == "binance":
+            config.update({
                 'options': {
                     'defaultType': 'future',
                     'warnOnFetchOHLCVLimitArgument': False,
+                    'adjustForTimeDifference': True,
+                }
+            })
+        elif exchange_name == "okx":
+            config.update({
+                'options': {
+                    'defaultType': 'swap',
+                    'fetchMarketDataRateLimit': 3000,  # 降低频率
                 }
             })
         
-        return base_config
+        return exchange_class(config)
+    
+    async def _fetch_markets_safe(self, exchange, exchange_name: str):
+        """安全获取市场数据"""
+        try:
+            if exchange_name == "okx":
+                # OKX: 使用fetch_markets获取SWAP合约
+                markets = await exchange.fetch_markets(params={'instType': 'SWAP'})
+                # 转换为统一的字典格式
+                markets_dict = {}
+                for market in markets:
+                    symbol = market.get('symbol', '').upper()
+                    if symbol:
+                        markets_dict[symbol] = market
+                return markets_dict
+            else:
+                # 币安等: 使用load_markets
+                markets = await exchange.load_markets()
+                # 转换为大写键
+                return {k.upper(): v for k, v in markets.items()}
+                
+        except ccxt_async.NetworkError as e:
+            logger.error(f"[{exchange_name}] 网络错误: {e}")
+            return None
+        except ccxt_async.ExchangeError as e:
+            logger.error(f"[{exchange_name}] 交易所错误: {e}")
+            return None
+        except asyncio.TimeoutError as e:
+            logger.error(f"[{exchange_name}] 超时错误: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"[{exchange_name}] 获取市场数据异常: {e}")
+            return None
     
     def _filter_and_format_symbols(self, exchange_name: str, markets: dict) -> List[str]:
         """统一的合约筛选与格式化逻辑"""
