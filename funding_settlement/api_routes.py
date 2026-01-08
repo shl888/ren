@@ -23,42 +23,51 @@ logger = logging.getLogger(__name__)
 _manager = FundingSettlementManager()
 
 
-# ✅ 新增：启动时自动获取的任务
+# ✅ 修复：启动时自动获取的任务 - 不阻塞版本
 async def _startup_auto_fetch(app: web.Application):
     """
     服务器启动时自动获取一次历史资金费率数据
+    【修复】不阻塞其他启动任务
     """
     logger.info("=" * 60)
     logger.info("📝【历史费率】 启动时自动获取历史资金费率数据...")
     logger.info(f"   时间: {datetime.now().isoformat()}")
     logger.info("=" * 60)
     
-    try:
-        # 检查是否已经自动获取过
-        if _manager.is_auto_fetched:
-            logger.info("⏭️【历史费率】  已经自动获取过，跳过本次启动获取")
-            return
-        
-        # ✅【修改】延迟3分钟启动，确保所有初始化完成，避免被封IP
-        logger.info("⏳【历史费率】任务延迟3分钟启动，确保市场数据加载完成...")
-        await asyncio.sleep(180)  # 180秒 = 3分钟
-        
-        logger.info("📡【历史费率】 开始获取币安资金费率结算数据...")
-        result = await _manager.fetch_funding_settlement()
-        
-        if result["success"]:
-            logger.info(f"✅【历史费率】 启动自动获取成功！获取到币安 {result.get('filtered_count', 0)} 个合约")
-            logger.info(f"   ️🤔【历史费率】权重消耗: {result.get('weight_used', 0)}")
-            # 标记为已自动获取
-            _manager.is_auto_fetched = True
-        else:
-            logger.warning(f"️❌ 【历史费率】 启动自动获取失败: {result.get('error')}")
-            logger.warning("⚠️【历史费率】 将在第一次手动获取时重试")
+    # ✅【关键修复】创建后台任务，不阻塞 startup 流程
+    async def background_fetch_task():
+        try:
+            # 检查是否已经自动获取过
+            if _manager.is_auto_fetched:
+                logger.info("⏭️【历史费率】  已经自动获取过，跳过本次启动获取")
+                return
             
-    except Exception as e:
-        logger.error(f"⚠️ 【历史费率】启动自动获取异常: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
+            # ✅ 延迟3分钟启动，但不阻塞主流程
+            logger.info("⏳【历史费率】 任务延迟3分钟启动，确保市场数据加载完成...")
+            await asyncio.sleep(180)  # 180秒 = 3分钟
+            
+            logger.info("📡【历史费率】 开始获取币安资金费率结算数据...")
+            result = await _manager.fetch_funding_settlement()
+            
+            if result["success"]:
+                logger.info(f"✅【历史费率】 启动自动获取成功！获取到币安 {result.get('filtered_count', 0)} 个合约")
+                logger.info(f"   ️🤔【历史费率】权重消耗: {result.get('weight_used', 0)}")
+                # 标记为已自动获取
+                _manager.is_auto_fetched = True
+            else:
+                logger.warning(f"️❌ 【历史费率】 启动自动获取失败: {result.get('error')}")
+                logger.warning("⚠️【历史费率】 将在第一次手动获取时重试")
+                
+        except Exception as e:
+            logger.error(f"⚠️ 【历史费率】启动自动获取异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    # ✅ 立即创建后台任务，不等待它完成
+    asyncio.create_task(background_fetch_task())
+    
+    # ✅ 立即返回，不阻塞其他 startup 任务
+    logger.info("✅【历史费率】 后台获取任务已创建，系统继续启动...")
 
 
 # ✅ 公开的API（无需密码）
@@ -181,4 +190,4 @@ def setup_funding_settlement_routes(app: web.Application):
     logger.info("   - GET  /api/funding/settlement/status")
     logger.info("   - POST /api/funding/settlement/fetch")
     logger.info("   - GET  /funding/settlement")
-    logger.info("   - 📝【历史费率】 服务器启动时自动获取一次")
+    logger.info("   - 📝【历史费率】 服务器启动时自动获取一次（后台任务，不阻塞）")
