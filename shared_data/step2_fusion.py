@@ -81,16 +81,10 @@ class Step2Fusion:
                     self.exchange_stats[fused.exchange] += 1
                     self.total_output += 1
                 else:
-                    # ✅ 修改：将debug改为warning级别
-                    parts = key.split('_')
-                    if len(parts) >= 2:
-                        exchange, symbol = parts[0], parts[1]
-                        log_data_process("步骤2", "跳过", f"{exchange}.{symbol}: 融合返回空结果", "WARNING")
+                    # ✅ 修改：恢复到debug级别，避免警告刷屏
+                    logger.debug(f"{key}: 融合返回空结果")
             except Exception as e:
-                parts = key.split('_')
-                if len(parts) >= 2:
-                    exchange, symbol = parts[0], parts[1]
-                    log_data_process("步骤2", "错误", f"融合失败: {exchange}.{symbol} - {e}", "ERROR")
+                logger.error(f"融合失败: {key} - {e}", exc_info=True)
                 continue
         
         # ✅ 添加：5分钟统计
@@ -121,6 +115,7 @@ class Step2Fusion:
     def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
         """合并同一组内的所有数据"""
         if not items:
+            logger.debug("合并组接收空列表")
             return None
         
         # 取第一条的基础信息
@@ -141,7 +136,7 @@ class Step2Fusion:
         elif exchange == "binance":
             return self._merge_binance(items, fused)
         else:
-            log_data_process("步骤2", "警告", f"未知交易所: {exchange}，跳过", "WARNING")
+            logger.warning(f"未知交易所: {exchange}，跳过")
             return None
     
     def _merge_okx(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
@@ -157,16 +152,18 @@ class Step2Fusion:
             # ticker数据：提取价格
             if item.data_type == "okx_ticker":
                 fused.latest_price = payload.get("latest_price")
+                logger.debug(f"OKX {fused.symbol} ✓ 提取价格: {fused.latest_price}")
             
             # funding_rate数据：提取费率和时间
             elif item.data_type == "okx_funding_rate":
                 fused.funding_rate = payload.get("funding_rate")
                 fused.current_settlement_time = self._to_int(payload.get("current_settlement_time"))
                 fused.next_settlement_time = self._to_int(payload.get("next_settlement_time"))
+                logger.debug(f"OKX {fused.symbol} ✓ 提取费率: {fused.funding_rate}")
         
         # 验证：至少要有价格或费率之一
         if not any([fused.latest_price, fused.funding_rate]):
-            log_data_process("步骤2", "跳过", f"OKX.{fused.symbol}: 无有效数据（无价格或费率）", "WARNING")
+            logger.debug(f"OKX {fused.symbol} 跳过：无有效数据")
             return None
         
         return fused
@@ -182,8 +179,11 @@ class Step2Fusion:
                 break
         
         if not mark_price_item:
-            log_data_process("步骤2", "跳过", f"币安.{fused.symbol}: 无mark_price数据（必须有实时费率）", "WARNING")
+            # ✅ 恢复到原文件的debug级别，避免警告刷屏
+            logger.debug(f"币安 {fused.symbol} 跳过：无mark_price数据（必须有实时费率）")
             return None
+        
+        logger.debug(f"币安 {fused.symbol} ✓ 找到mark_price")
         
         # 从mark_price提取核心数据
         mark_payload = mark_price_item.payload
@@ -193,19 +193,21 @@ class Step2Fusion:
         
         # 验证：mark_price必须有费率
         if fused.funding_rate is None:
-            log_data_process("步骤2", "跳过", f"币安.{fused.symbol}: mark_price中无费率数据", "WARNING")
+            logger.warning(f"币安 {fused.symbol} 跳过：mark_price中无费率数据")
             return None
         
         # ticker数据：提取价格
         for item in items:
             if item.data_type == "binance_ticker":
                 fused.latest_price = item.payload.get("latest_price")
+                logger.debug(f"币安 {fused.symbol} ✓ 提取价格: {fused.latest_price}")
                 break
         
         # funding_settlement数据：填充上次结算时间
         for item in items:
             if item.data_type == "binance_funding_settlement":
                 fused.last_settlement_time = self._to_int(item.payload.get("last_settlement_time"))
+                logger.debug(f"币安 {fused.symbol} ✓ 提取上次结算时间")
                 break  # 只取第一个
         
         return fused
@@ -217,5 +219,5 @@ class Step2Fusion:
         try:
             return int(value)
         except (ValueError, TypeError) as e:
-            log_data_process("步骤2", "警告", f"时间戳转换失败: {value} - {e}", "WARNING")
+            logger.warning(f"时间戳转换失败: {value} - {e}")
             return None
