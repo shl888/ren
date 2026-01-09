@@ -3,6 +3,7 @@
 功能：1. 计算价格差、费率差（绝对值+百分比） 2. 打包双平台所有字段 3. 倒计时
 原则：只做数据计算，不做业务判断。所有数据都保留，交给后续交易模块处理。
 输出：原始套利数据，每条包含双平台完整信息
+稳定性增强：微调metadata字段命名，保持纯粹计算
 """
 
 import logging
@@ -43,25 +44,16 @@ class CrossPlatformData:
     binance_current_settlement: Optional[str] = None
     binance_next_settlement: Optional[str] = None
     
-    # 数据源标记（不含业务判断）
+    # ✅ 微调：数据源标记（不含业务判断，只记录来源）
     metadata: Dict[str, Any] = field(default_factory=lambda: {
         "calculated_at": None,
-        "price_validation": "unknown",
-        "rate_validation": "unknown",
-        "source": "step5_cross_calc"
+        "source": "step5_cross_calc",  # ✅ 只记录来源，不做验证标记
+        "version": "3.0.0-stable"
     })
     
     def __post_init__(self):
-        """只做标记，不做过滤"""
+        """只记录时间戳，不做任何验证"""
         self.metadata["calculated_at"] = datetime.now().isoformat()
-        
-        # 标记数据状态（仅标记，不过滤）
-        try:
-            okx_price = float(self.okx_price)
-            binance_price = float(self.binance_price)
-            self.metadata["price_validation"] = "valid" if okx_price > 0 and binance_price > 0 else "invalid"
-        except:
-            self.metadata["price_validation"] = "error"
 
 class Step5CrossCalc:
     """第五步：跨平台计算（专注数据计算版）"""
