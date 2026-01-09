@@ -18,7 +18,7 @@ if BASE_DIR not in sys.path:
 from websocket_pool.admin import WebSocketAdmin
 from http_server.server import HTTPServer
 from shared_data.data_store import data_store
-from shared_data.pipeline_manager import PipelineManager  # ✅ 删除 PipelineConfig
+from shared_data.pipeline_manager import PipelineManager
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,6 @@ def start_keep_alive_background():
 
 class BrainCore:
     def __init__(self):
-        # ✅ 不传递任何回调，让WebSocketAdmin使用pool_manager的默认回调
         self.ws_admin = WebSocketAdmin()
         self.http_server = None
         self.http_runner = None
@@ -56,7 +55,7 @@ class BrainCore:
         signal.signal(signal.SIGTERM, self.handle_signal)
     
     async def receive_processed_data(self, processed_data):
-        """🚨 大脑只接收data_store过滤后的成品数据"""
+        """🚨 大脑接收data_store过滤后的成品数据"""
         try:
             data_type = processed_data.get('data_type', 'unknown')
             exchange = processed_data.get('exchange', 'unknown')
@@ -101,13 +100,16 @@ class BrainCore:
             data_store.set_http_server_ready(True)
             logger.info("✅ HTTP服务已就绪！")
             
-            # 4. 初始化PipelineManager（流式版，无需配置）
+            # 4. 初始化PipelineManager并设置回调
             logger.info("【4️⃣】初始化PipelineManager（流式终极版）...")
-            # ✅ 删除 PipelineConfig，直接传回调
             self.pipeline_manager = PipelineManager(
                 brain_callback=self.receive_processed_data
             )
             await self.pipeline_manager.start()
+            
+            # ✅ 关键修复：同时设置DataStore的回调
+            data_store.set_brain_callback(self.receive_processed_data)
+            
             logger.info("✅ 流水线管理员启动完成！")
             
             # 5. 让data_store引用管理员
