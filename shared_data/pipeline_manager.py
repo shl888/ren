@@ -20,6 +20,21 @@ from shared_data.step5_cross_calc import Step5CrossCalc
 
 logger = logging.getLogger(__name__)
 
+# ✅ 添加：统一的日志工具函数
+def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
+    """统一的数据处理日志格式"""
+    prefix = f"[数据处理][{module}][{action}]"
+    full_message = f"{prefix} {message}"
+    
+    if level == "INFO":
+        logger.info(full_message)
+    elif level == "ERROR":
+        logger.error(full_message)
+    elif level == "WARNING":
+        logger.warning(full_message)
+    elif level == "DEBUG":
+        logger.debug(full_message)
+
 class DataType(Enum):
     """极简数据类型分类"""
     MARKET = "market"
@@ -72,45 +87,51 @@ class PipelineManager:
             'start_time': time.time()
         }
         
+        # ✅ 添加：5分钟统计
+        self.last_report_time = time.time()
+        self.data_received_count = 0
+        
         self.running = False
         
-        logger.info("✅ PipelineManager初始化完成（稳定性增强版）")
+        # ✅ 修改：统一日志格式
+        log_data_process("流水线", "启动", "初始化完成（稳定性增强版）")
         self._initialized = True
     
     def enable_async_push(self, enabled: bool = True):
         """启用或禁用异步推送"""
         self._async_push_enabled = enabled
-        logger.info(f"异步推送: {'启用' if enabled else '禁用'}")
+        log_data_process("流水线", "设置", f"异步推送: {'启用' if enabled else '禁用'}")
     
     async def start(self):
         """启动（流式版不需要后台循环）"""
         if self.running:
             return
         
-        logger.info("🚀 PipelineManager启动...")
+        # ✅ 修改：统一日志格式
+        log_data_process("流水线", "启动", "开始运行...")
         self.running = True
         
         # 流式版：不需要消费者循环，数据来时直接处理
-        logger.info("✅ 流式处理已就绪（来一条处理一条）")
+        log_data_process("流水线", "运行", "流式处理已就绪（来一条处理一条）")
     
     async def stop(self):
         """停止"""
-        logger.info("🛑 PipelineManager停止中...")
+        log_data_process("流水线", "停止", "正在停止...")
         self.running = False
         
         # 等待异步推送任务完成
         if self._active_push_tasks:
-            logger.info(f"等待 {len(self._active_push_tasks)} 个异步推送任务完成...")
+            log_data_process("流水线", "等待", f"等待 {len(self._active_push_tasks)} 个异步推送任务完成...")
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*self._active_push_tasks, return_exceptions=True),
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
-                logger.warning("异步推送任务超时，强制取消")
+                log_data_process("流水线", "警告", "异步推送任务超时，强制取消", "WARNING")
         
         await asyncio.sleep(1)
-        logger.info("✅ PipelineManager已停止")
+        log_data_process("流水线", "停止", "已停止")
     
     async def ingest_data(self, data: Dict[str, Any]) -> bool:
         """
@@ -127,6 +148,17 @@ class PipelineManager:
             else:
                 category = DataType.MARKET
             
+            # ✅ 添加：5分钟统计
+            self.data_received_count += 1
+            current_time = time.time()
+            if current_time - self.last_report_time >= 300:  # 5分钟
+                log_data_process("流水线", "统计", 
+                               f"5分钟: 接收{self.data_received_count}条数据, "
+                               f"处理市场{self.counters['market_processed']}条, "
+                               f"处理账户{self.counters['account_processed']}条")
+                self.last_report_time = current_time
+                self.data_received_count = 0
+            
             # ✅ 稳定性增强：带超时的锁
             try:
                 async with asyncio.timeout(self.lock_timeout):
@@ -137,13 +169,16 @@ class PipelineManager:
                             await self._process_account_data(data)
             
             except asyncio.TimeoutError:
-                logger.error(f"处理锁超时 ({self.lock_timeout}秒)，数据丢弃: {data.get('symbol', 'N/A')}")
+                symbol = data.get('symbol', 'N/A')
+                log_data_process("流水线", "错误", f"处理锁超时 ({self.lock_timeout}秒)，数据丢弃: {symbol}", "ERROR")
+                self.counters['errors'] += 1
                 return False
             
             return True
             
         except Exception as e:
-            logger.error(f"处理失败: {data.get('symbol', 'N/A')} - {e}")
+            symbol = data.get('symbol', 'N/A')
+            log_data_process("流水线", "错误", f"处理失败: {symbol} - {e}", "ERROR")
             self.counters['errors'] += 1
             return False
     
@@ -185,10 +220,12 @@ class PipelineManager:
                     try:
                         await self.brain_callback(result.__dict__)
                     except Exception as e:
-                        logger.error(f"同步推送失败: {e}")
+                        log_data_process("流水线", "错误", f"同步推送失败: {e}", "ERROR")
         
         self.counters['market_processed'] += 1
-        logger.debug(f"📊 处理完成: {data.get('symbol', 'N/A')}")
+        
+        # ✅ 移除原有的调试日志
+        # 改为在5分钟统计中显示
     
     def _push_async(self, result):
         """异步推送（不阻塞流水线）"""
@@ -199,7 +236,7 @@ class PipelineManager:
             try:
                 await self.brain_callback(result.__dict__)
             except Exception as e:
-                logger.error(f"异步推送失败: {e}")
+                log_data_process("流水线", "错误", f"异步推送失败: {e}", "ERROR")
             finally:
                 self._active_push_tasks.discard(task)
         
@@ -217,10 +254,12 @@ class PipelineManager:
                 try:
                     await self.brain_callback(data)
                 except Exception as e:
-                    logger.error(f"账户数据推送失败: {e}")
+                    log_data_process("流水线", "错误", f"账户数据推送失败: {e}", "ERROR")
         
         self.counters['account_processed'] += 1
-        logger.debug(f"💰 账户数据直达: {data.get('exchange', 'N/A')}")
+        
+        # ✅ 移除原有的调试日志
+        # 账户数据已经在data_store中实时打印了
     
     def _push_async_account(self, data):
         """异步推送账户数据"""
@@ -231,7 +270,7 @@ class PipelineManager:
             try:
                 await self.brain_callback(data)
             except Exception as e:
-                logger.error(f"异步账户推送失败: {e}")
+                log_data_process("流水线", "错误", f"异步账户推送失败: {e}", "ERROR")
             finally:
                 self._active_push_tasks.discard(task)
         

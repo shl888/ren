@@ -49,4 +49,5 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # 模块加载日志
 logger = logging.getLogger(__name__)
-logger.info(f"✅ shared_data v{__version__} 加载完成（流式终极版）")
+# ✅ 修改：统一日志格式
+logger.info(f"[数据处理][模块加载] shared_data v{__version__} 加载完成（流式终极版）")

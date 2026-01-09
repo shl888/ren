@@ -12,8 +12,24 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 from datetime import datetime
 import traceback
+import time  # ✅ 添加time模块
 
 logger = logging.getLogger(__name__)
+
+# ✅ 添加：统一的日志工具函数
+def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
+    """统一的数据处理日志格式"""
+    prefix = f"[数据处理][{module}][{action}]"
+    full_message = f"{prefix} {message}"
+    
+    if level == "INFO":
+        logger.info(full_message)
+    elif level == "ERROR":
+        logger.error(full_message)
+    elif level == "WARNING":
+        logger.warning(full_message)
+    elif level == "DEBUG":
+        logger.debug(full_message)
 
 @dataclass
 class CrossPlatformData:
@@ -68,21 +84,30 @@ class Step5CrossCalc:
             "binance_missing": 0,
             "price_invalid": 0,
             "calc_errors": 0,
-            "price_too_low": 0,  # 新增：价格过低统计
+            # ✅ 删除：price_too_low统计（按你要求）
             "start_time": None,
             "end_time": None
         }
+        
+        # ✅ 添加：5分钟统计计时器
+        self.last_report_time = time.time()
+        self.batch_input = 0
+        self.batch_output = 0
+        
+        log_data_process("步骤5", "启动", "Step5CrossCalc初始化完成（跨平台套利计算）")
     
     def process(self, platform_results: List) -> List[CrossPlatformData]:
         """
         处理Step4的单平台数据，只做数据计算，不做业务过滤
         """
         self.stats["start_time"] = datetime.now().isoformat()
-        self.stats["total_processed"] = len(platform_results)
-        logger.info(f"开始跨平台计算 {len(platform_results)} 条单平台数据...")
+        input_count = len(platform_results)
+        self.stats["total_processed"] = input_count
+        self.batch_input += input_count
         
+        # ✅ 修改：移除开始处理日志
         if not platform_results:
-            logger.warning("⚠️ 输入数据为空")
+            log_data_process("步骤5", "警告", "输入数据为空", "WARNING")
             return []
         
         # 按symbol分组
@@ -92,8 +117,6 @@ class Step5CrossCalc:
             if self._is_basic_valid(item):
                 grouped[item.symbol].append(item)
         
-        logger.info(f"检测到 {len(grouped)} 个不同合约")
-        
         # 合并每个合约的OKX和币安数据
         results = []
         for symbol, items in grouped.items():
@@ -102,18 +125,34 @@ class Step5CrossCalc:
                 if cross_data:
                     results.append(cross_data)
                     self.stats["successful"] += 1
+                    self.batch_output += 1
                     
             except Exception as e:
-                logger.error(f"跨平台计算失败: {symbol} - {e}")
-                logger.debug(f"错误详情: {traceback.format_exc()}")
+                log_data_process("步骤5", "错误", f"跨平台计算失败: {symbol} - {e}", "ERROR")
+                log_data_process("步骤5", "调试", f"错误详情: {traceback.format_exc()}", "DEBUG")
                 self.stats["failed"] += 1
                 self.stats["calc_errors"] += 1
                 continue
         
         self.stats["end_time"] = datetime.now().isoformat()
         
-        logger.info(f"Step5完成: 成功 {self.stats['successful']}/{self.stats['total_processed']}")
-        logger.info(f"统计详情: {self.stats}")
+        # ✅ 添加：5分钟统计
+        current_time = time.time()
+        if current_time - self.last_report_time >= 300:  # 5分钟
+            success_rate = (self.batch_output / self.batch_input * 100) if self.batch_input > 0 else 0
+            
+            log_data_process("步骤5", "统计", 
+                           f"5分钟: 接收{self.batch_input}条 → 跨平台数据{self.batch_output}条 "
+                           f"({success_rate:.1f}%)")
+            log_data_process("步骤5", "完成", 
+                           f"计算统计: 成功{self.stats['successful']}条, "
+                           f"价格无效{self.stats['price_invalid']}条, "
+                           f"计算错误{self.stats['calc_errors']}条")
+            
+            # 重置统计
+            self.last_report_time = current_time
+            self.batch_input = 0
+            self.batch_output = 0
         
         return results
     
@@ -130,7 +169,7 @@ class Step5CrossCalc:
             
             # 必须有交易所标识
             if item.exchange not in ["okx", "binance"]:
-                logger.warning(f"未知交易所: {item.exchange}")
+                log_data_process("步骤5", "警告", f"未知交易所: {item.exchange}", "WARNING")
                 return False
                 
             return True
@@ -150,7 +189,7 @@ class Step5CrossCalc:
                 self.stats["okx_missing"] += 1
             if not binance_item:
                 self.stats["binance_missing"] += 1
-            logger.debug(f"{symbol} 缺少平台数据，跳过")
+            log_data_process("步骤5", "跳过", f"{symbol}: 缺少平台数据", "WARNING")
             return None
         
         # 计算价格差和费率差
@@ -175,8 +214,7 @@ class Step5CrossCalc:
                     price_diff_percent = (price_diff / min_price) * 100
                 else:
                     price_diff_percent = 0.0
-                    self.stats["price_too_low"] += 1
-                    logger.debug(f"{symbol} 价格过低 ({min_price:.10f})，百分比差置0")
+                    # ✅ 删除：价格过低警告（按你要求）
             else:
                 price_diff_percent = 0.0
             
@@ -190,9 +228,10 @@ class Step5CrossCalc:
             rate_diff = abs(okx_rate - binance_rate)
             
         except Exception as e:
-            logger.error(f"{symbol} 计算失败: {e}")
-            # 记录原始数据以便调试
-            logger.debug(f"原始数据 - OKX价格: {okx_item.latest_price}, 币安价格: {binance_item.latest_price}")
+            log_data_process("步骤5", "错误", f"{symbol}: 计算失败 - {e}", "ERROR")
+            log_data_process("步骤5", "调试", 
+                           f"原始数据 - OKX价格: {okx_item.latest_price}, 币安价格: {binance_item.latest_price}", 
+                           "DEBUG")
             self.stats["calc_errors"] += 1
             return None
         

@@ -8,8 +8,24 @@ import logging
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import time  # ✅ 添加time模块
 
 logger = logging.getLogger(__name__)
+
+# ✅ 添加：统一的日志工具函数
+def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
+    """统一的数据处理日志格式"""
+    prefix = f"[数据处理][{module}][{action}]"
+    full_message = f"{prefix} {message}"
+    
+    if level == "INFO":
+        logger.info(full_message)
+    elif level == "ERROR":
+        logger.error(full_message)
+    elif level == "WARNING":
+        logger.warning(full_message)
+    elif level == "DEBUG":
+        logger.debug(full_message)
 
 @dataclass
 class AlignedData:
@@ -43,10 +59,19 @@ class Step3Align:
     
     def __init__(self):
         self.stats = {"total_symbols": 0, "okx_only": 0, "binance_only": 0, "both_platforms": 0}
+        # ✅ 添加：5分钟统计计时器
+        self.last_report_time = time.time()
+        self.total_input = 0
+        self.total_output = 0
+        self.platform_stats = {"both": 0, "okx_only": 0, "binance_only": 0}
+        
+        log_data_process("步骤3", "启动", "Step3Align初始化完成（双平台对齐+时间转换）")
     
     def process(self, fused_results: List) -> List[AlignedData]:
         """处理Step2的融合结果"""
-        logger.info(f"开始对齐 {len(fused_results)} 条融合数据...")
+        # ✅ 修改：移除开始处理日志，改为计数
+        input_count = len(fused_results)
+        self.total_input += input_count
         
         # 按symbol分组
         grouped = {}
@@ -65,12 +90,13 @@ class Step3Align:
         for symbol, data in grouped.items():
             if data["okx"] and data["binance"]:
                 self.stats["both_platforms"] += 1
+                self.platform_stats["both"] += 1
             elif data["okx"]:
                 self.stats["okx_only"] += 1
+                self.platform_stats["okx_only"] += 1
             elif data["binance"]:
                 self.stats["binance_only"] += 1
-        
-        logger.info(f"合约统计: {self.stats}")
+                self.platform_stats["binance_only"] += 1
         
         # 只保留双平台都有的合约
         results = []
@@ -80,11 +106,39 @@ class Step3Align:
                     aligned = self._align_item(symbol, data["okx"], data["binance"])
                     if aligned:
                         results.append(aligned)
+                        self.total_output += 1
                 except Exception as e:
-                    logger.error(f"对齐失败: {symbol} - {e}")
+                    log_data_process("步骤3", "错误", f"对齐失败: {symbol} - {e}", "ERROR")
                     continue
         
-        logger.info(f"Step3完成: {len(results)} 个双平台合约")
+        # ✅ 添加：5分钟统计
+        current_time = time.time()
+        if current_time - self.last_report_time >= 300:  # 5分钟
+            both_count = self.platform_stats["both"]
+            okx_only = self.platform_stats["okx_only"]
+            binance_only = self.platform_stats["binance_only"]
+            total_symbols = both_count + okx_only + binance_only
+            
+            if total_symbols > 0:
+                both_rate = (both_count / total_symbols * 100)
+            else:
+                both_rate = 0
+                
+            conversion_rate = (self.total_output / self.total_input * 100) if self.total_input > 0 else 0
+            
+            log_data_process("步骤3", "统计", 
+                           f"5分钟: 接收{self.total_input}合约 → 双平台对齐{self.total_output}合约 "
+                           f"({conversion_rate:.1f}%)")
+            log_data_process("步骤3", "完成", 
+                           f"平台分布: 双平台{both_count}({both_rate:.1f}%), "
+                           f"仅OKX{okx_only}, 仅币安{binance_only}")
+            
+            # 重置统计
+            self.last_report_time = current_time
+            self.total_input = 0
+            self.total_output = 0
+            self.platform_stats = {"both": 0, "okx_only": 0, "binance_only": 0}
+        
         return results
     
     def _align_item(self, symbol: str, okx_item, binance_item) -> Optional[AlignedData]:
@@ -137,5 +191,5 @@ class Step3Align:
             return dt_bj.strftime("%Y-%m-%d %H:%M:%S")
         
         except Exception as e:
-            logger.warning(f"时间戳转换失败: {ts} - {e}")
+            log_data_process("步骤3", "警告", f"时间戳转换失败: {ts} - {e}", "WARNING")
             return None

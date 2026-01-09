@@ -2,8 +2,24 @@ import logging
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from dataclasses import dataclass
+import time  # ✅ 添加time模块
 
 logger = logging.getLogger(__name__)
+
+# ✅ 添加：统一的日志工具函数
+def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
+    """统一的数据处理日志格式"""
+    prefix = f"[数据处理][{module}][{action}]"
+    full_message = f"{prefix} {message}"
+    
+    if level == "INFO":
+        logger.info(full_message)
+    elif level == "ERROR":
+        logger.error(full_message)
+    elif level == "WARNING":
+        logger.warning(full_message)
+    elif level == "DEBUG":
+        logger.debug(full_message)
 
 @dataclass
 class ExtractedData:
@@ -23,9 +39,21 @@ class Step1Filter:
     
     def __init__(self):
         self.stats = defaultdict(int)
+        # ✅ 添加：5分钟统计计时器
+        self.last_report_time = time.time()
+        self.batch_count = 0
+        self.total_processed = 0
+        self.total_success = 0
+        self.type_stats = defaultdict(int)
+        
+        log_data_process("步骤1", "启动", "Step1Filter初始化完成（5种数据源提取）")
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
-        logger.info(f"开始处理 {len(raw_items)} 条原始数据...")
+        # ✅ 修改：移除开始处理日志，改为计数
+        self.batch_count += 1
+        batch_size = len(raw_items)
+        self.total_processed += batch_size
+        
         results = []
         for item in raw_items:
             try:
@@ -33,10 +61,38 @@ class Step1Filter:
                 if extracted:
                     results.append(extracted)
                     self.stats[extracted.data_type] += 1
+                    self.type_stats[extracted.data_type] += 1
+                    self.total_success += 1
             except Exception as e:
-                logger.error(f"提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
+                exchange = item.get('exchange', 'unknown')
+                symbol = item.get('symbol', 'unknown')
+                log_data_process("步骤1", "错误", f"数据提取失败: {exchange}.{symbol} - {e}", "ERROR")
                 continue
-        logger.info(f"Step1过滤完成: {dict(self.stats)}")
+        
+        # ✅ 添加：5分钟统计
+        current_time = time.time()
+        if current_time - self.last_report_time >= 300:  # 5分钟
+            success_rate = (self.total_success / self.total_processed * 100) if self.total_processed > 0 else 0
+            
+            # 准备类型分布字符串
+            type_dist = []
+            for data_type, count in self.type_stats.items():
+                if count > 0:
+                    type_dist.append(f"{data_type}:{count}")
+            type_str = ", ".join(type_dist) if type_dist else "无"
+            
+            log_data_process("步骤1", "统计", 
+                           f"5分钟: 处理{self.total_processed}条 → 提取{self.total_success}条 "
+                           f"({success_rate:.1f}%)")
+            log_data_process("步骤1", "完成", f"类型分布: {type_str}")
+            
+            # 重置统计
+            self.last_report_time = current_time
+            self.batch_count = 0
+            self.total_processed = 0
+            self.total_success = 0
+            self.type_stats.clear()
+        
         return results
     
     def _traverse_path(self, data: Any, path: List[Any]) -> Any:
@@ -61,7 +117,7 @@ class Step1Filter:
         type_key = "binance_funding_settlement" if data_type == "funding_settlement" else f"{exchange}_{data_type}"
         
         if type_key not in self.FIELD_MAP:
-            logger.warning(f"未知数据类型: {type_key}")
+            log_data_process("步骤1", "警告", f"未知数据类型: {type_key}", "WARNING")
             return None
         
         config = self.FIELD_MAP[type_key]
@@ -73,7 +129,7 @@ class Step1Filter:
         
         # 增加空值检查
         if data_source is None:
-            logger.warning(f"{type_key} 数据路径失败: {path}")
+            log_data_process("步骤1", "跳过", f"{type_key} 数据路径失败: {path}", "WARNING")
             return None
         
         # 统一的字段提取逻辑

@@ -13,6 +13,21 @@ import time  # ✅ 添加time模块
 
 logger = logging.getLogger(__name__)
 
+# ✅ 添加：统一的日志工具函数
+def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
+    """统一的数据处理日志格式"""
+    prefix = f"[数据处理][{module}][{action}]"
+    full_message = f"{prefix} {message}"
+    
+    if level == "INFO":
+        logger.info(full_message)
+    elif level == "ERROR":
+        logger.error(full_message)
+    elif level == "WARNING":
+        logger.warning(full_message)
+    elif level == "DEBUG":
+        logger.debug(full_message)
+
 @dataclass
 class PlatformData:
     """单平台计算后的数据结构"""
@@ -50,7 +65,13 @@ class Step4Calc:
         self._last_cleanup_time = time.time()
         self._cleanup_interval_hours = 1  # 每小时检查一次
         
-        logger.info(f"✅ Step4Calc初始化完成（缓存TTL: {self._cache_ttl_hours}小时）")
+        # ✅ 添加：5分钟统计计时器
+        self.last_report_time = time.time()
+        self.total_processed = 0
+        self.rollover_count = 0
+        self.cache_updates = 0
+        
+        log_data_process("步骤4", "启动", f"Step4Calc初始化完成（单平台计算+时间滚动，缓存TTL: {self._cache_ttl_hours}小时）")
     
     def process(self, aligned_results: List) -> List[PlatformData]:
         """
@@ -59,7 +80,9 @@ class Step4Calc:
         # ✅ 处理前检查是否需要清理缓存
         self._auto_cleanup_if_needed()
         
-        logger.info(f"开始单平台计算 {len(aligned_results)} 个合约...")
+        # ✅ 修改：移除开始处理日志，改为计数
+        input_count = len(aligned_results)
+        self.total_processed += input_count
         
         results = []
         for item in aligned_results:
@@ -71,20 +94,38 @@ class Step4Calc:
                     results.append(okx_data)
                 if binance_data:
                     results.append(binance_data)
+                    self.cache_updates += 1
                 
             except Exception as e:
-                logger.error(f"计算失败: {item.symbol} - {e}")
+                log_data_process("步骤4", "错误", f"计算失败: {item.symbol} - {e}", "ERROR")
                 continue
         
-        logger.info(f"Step4计算完成: {len(results)} 条单平台数据")
-        logger.info(f"币安时间滚动统计: {dict(self.stats)}")
+        # ✅ 添加：5分钟统计
+        current_time = time.time()
+        if current_time - self.last_report_time >= 300:  # 5分钟
+            cache_size = len(self.binance_cache)
+            avg_period = self._calculate_average_period()
+            
+            log_data_process("步骤4", "统计", 
+                           f"5分钟: 处理{self.total_processed}合约, "
+                           f"时间滚动{self.rollover_count}次, "
+                           f"缓存更新{self.cache_updates}次")
+            log_data_process("步骤4", "缓存", 
+                           f"当前缓存: {cache_size}合约, "
+                           f"平均周期{avg_period:.1f}小时")
+            
+            # 重置统计
+            self.last_report_time = current_time
+            self.total_processed = 0
+            self.rollover_count = 0
+            self.cache_updates = 0
+        
         return results
     
     def _calc_okx(self, aligned_item) -> Optional[PlatformData]:
         """计算OKX数据（保持原样）"""
         
         if not aligned_item.okx_current_ts:
-            logger.debug(f"OKX {aligned_item.symbol} 无有效时间戳，跳过")
             return None
         
         # 直接保留Step3的字符串时间
@@ -114,7 +155,6 @@ class Step4Calc:
         """计算币安数据（时间滚动 - 添加缓存时间戳）"""
         
         if not aligned_item.binance_current_ts:
-            logger.debug(f"币安 {aligned_item.symbol} 无有效时间戳，跳过")
             return None
         
         symbol = aligned_item.symbol
@@ -134,12 +174,17 @@ class Step4Calc:
         
         # 时间滚动逻辑（保持原样）
         if T2 and T3 != T2:
-            logger.info(f"币安 {symbol} 结算时间更新: T1={T2} → T2={T3}")
+            # ✅ 修改：实时打印缓存更新（每次时间滚动都输出）
+            t2_str = self._ts_to_str(T2)
+            t3_str = self._ts_to_str(T3)
+            log_data_process("步骤4", "缓存", f"币安{symbol}: 时间滚动 {t2_str}→{t3_str}")
+            
             T1 = T2
             T2 = T3
             cache["last_ts"] = T1
             cache["current_ts"] = T2
             self.stats["binance_rollovers"] += 1
+            self.rollover_count += 1
         
         # ✅ 更新缓存时间戳
         cache["last_update_time"] = time.time()
@@ -178,7 +223,7 @@ class Step4Calc:
             now_ms = int(time.time() * 1000)
             return max(0, (settlement_ts - now_ms) // 1000)
         except Exception as e:
-            logger.warning(f"倒计时计算失败: {settlement_ts} - {e}")
+            log_data_process("步骤4", "警告", f"倒计时计算失败: {settlement_ts} - {e}", "WARNING")
             return None
     
     def _auto_cleanup_if_needed(self):
@@ -190,7 +235,7 @@ class Step4Calc:
         if time_since_last_cleanup >= (self._cleanup_interval_hours * 3600):
             cleaned = self._cleanup_expired_cache()
             if cleaned > 0:
-                logger.info(f"Step4缓存清理: 清理了 {cleaned} 个过期条目")
+                log_data_process("步骤4", "缓存", f"清理了 {cleaned} 个过期条目")
             self._last_cleanup_time = current_time
     
     def _cleanup_expired_cache(self) -> int:
@@ -213,12 +258,43 @@ class Step4Calc:
             try:
                 del self.binance_cache[symbol]
                 cleaned += 1
-                logger.debug(f"清理过期缓存: {symbol}")
+                log_data_process("步骤4", "缓存", f"清理过期缓存: {symbol}", "DEBUG")
             except KeyError:
                 pass
         
         return cleaned
     
+    def _calculate_average_period(self) -> float:
+        """计算平均费率周期（小时）"""
+        total_period = 0
+        count = 0
+        
+        for cache in self.binance_cache.values():
+            last_ts = cache.get("last_ts")
+            current_ts = cache.get("current_ts")
+            
+            if last_ts and current_ts and current_ts > last_ts:
+                period_hours = (current_ts - last_ts) / 1000 / 3600
+                if 0 < period_hours < 24:  # 合理范围
+                    total_period += period_hours
+                    count += 1
+        
+        return total_period / count if count > 0 else 0.0
+    
+    def _ts_to_str(self, ts: Optional[int]) -> str:
+        """时间戳转字符串（供日志使用）"""
+        if ts is None or ts <= 0:
+            return "无"
+        
+        try:
+            from datetime import datetime, timedelta
+            dt_utc = datetime.utcfromtimestamp(ts / 1000)
+            dt_bj = dt_utc + timedelta(hours=8)
+            return dt_bj.strftime("%H:%M")
+        except:
+            return "无效"
+    
+    # 以下方法保持原样...
     def manual_cleanup_cache(self) -> int:
         """手动清理缓存（用于监控或测试）"""
         return self._cleanup_expired_cache()
@@ -288,16 +364,3 @@ class Step4Calc:
             }
         
         return report
-    
-    def _ts_to_str(self, ts: Optional[int]) -> Optional[str]:
-        """内部辅助方法：时间戳转字符串（仅供报告使用）"""
-        if ts is None or ts <= 0:
-            return None
-        
-        try:
-            from datetime import datetime, timedelta
-            dt_utc = datetime.utcfromtimestamp(ts / 1000)
-            dt_bj = dt_utc + timedelta(hours=8)
-            return dt_bj.strftime("%Y-%m-%d %H:%M:%S")
-        except:
-            return None
