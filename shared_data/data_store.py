@@ -2,13 +2,14 @@
 共享内存数据存储 - 执行者版
 功能：只负责存储 + 执行管理员指令
 所有决策逻辑都在pipeline_manager的FlowInstructions中
-优化：日志优化，移除冗余代码
+优化：批量日志，避免刷屏
 """
 
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import logging
+import time
 
 # ✅ 导入管理员指令
 from shared_data.pipeline_manager import FlowInstructions
@@ -64,6 +65,11 @@ class DataStore:
             'connection_status': asyncio.Lock(),
         }
         
+        # ✅ 批量日志统计
+        self.storage_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
+        self.flow_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
+        self.last_log_time = time.time()
+        
         log_data_process("数据存储", "启动", "DataStore初始化完成（执行者版）")
     
     def set_brain_callback(self, callback):
@@ -79,6 +85,7 @@ class DataStore:
     async def update_market_data(self, exchange: str, symbol: str, data: Dict[str, Any]):
         """
         更新市场数据 → 存储 + 执行管理员指令
+        优化：批量统计日志，避免每条数据都打印
         """
         data_type = data.get("data_type", "unknown")
         
@@ -100,12 +107,15 @@ class DataStore:
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
         
-        # 只记录重要数据的存储日志
-        if data_type in ["funding_settlement", "funding_rate", "mark_price", "ticker"]:
-            log_data_process("数据存储", "存储", f"{exchange} {symbol} {data_type}")
+        # ✅ 统计存储数据
+        self.storage_stats["total"] += 1
+        if data_type in self.storage_stats:
+            self.storage_stats[data_type] += 1
         
         # 2. ✅ 执行管理员指令：是否应该流出
         if not FlowInstructions.should_flow_market_data(exchange, symbol, data_type, data):
+            # ✅ 定期打印存储统计
+            self._log_storage_stats_if_needed()
             return
         
         # 3. ✅ 执行管理员指令：流向哪里
@@ -115,6 +125,40 @@ class DataStore:
             await self._flow_to_pipeline(exchange, symbol, data_type, data)
         elif destination == "brain":
             await self._flow_to_brain(exchange, symbol, data_type, data)
+        
+        # ✅ 统计流出数据
+        self.flow_stats["total"] += 1
+        if data_type in self.flow_stats:
+            self.flow_stats[data_type] += 1
+        
+        # ✅ 定期打印存储和流出统计
+        self._log_storage_stats_if_needed()
+    
+    def _log_storage_stats_if_needed(self):
+        """定期打印存储和流出统计"""
+        current_time = time.time()
+        if current_time - self.last_log_time >= 5:  # 5秒打印一次
+            if self.storage_stats["total"] > 0 or self.flow_stats["total"] > 0:
+                # 构建存储统计字符串
+                storage_parts = []
+                for key, count in self.storage_stats.items():
+                    if key != "total" and count > 0:
+                        storage_parts.append(f"{key}:{count}")
+                storage_str = f"存储{self.storage_stats['total']}条({','.join(storage_parts)})"
+                
+                # 构建流出统计字符串
+                flow_parts = []
+                for key, count in self.flow_stats.items():
+                    if key != "total" and count > 0:
+                        flow_parts.append(f"{key}:{count}")
+                flow_str = f"流出{self.flow_stats['total']}条({','.join(flow_parts)})" if self.flow_stats["total"] > 0 else ""
+                
+                log_data_process("数据存储", "统计", f"5秒: {storage_str} {flow_str}")
+                
+                # 重置统计
+                self.storage_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
+                self.flow_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
+                self.last_log_time = current_time
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
         """
@@ -185,7 +229,7 @@ class DataStore:
             }
             
             await self.pipeline_manager.ingest_data(pipeline_data)
-            log_data_process("数据存储", "流向", f"{exchange} {symbol} {data_type} → 流水线")
+            # ✅ 移除单条日志，使用批量统计
             
         except Exception as e:
             log_data_process("数据存储", "错误", f"流向流水线失败: {e}", "ERROR")
@@ -206,7 +250,7 @@ class DataStore:
             }
             
             await self.brain_callback(brain_data)
-            log_data_process("数据存储", "流向", f"{exchange} {symbol} {data_type} → 大脑")
+            # ✅ 移除单条日志，使用批量统计
             
         except Exception as e:
             log_data_process("数据存储", "错误", f"流向大脑失败: {e}", "ERROR")

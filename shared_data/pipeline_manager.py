@@ -3,7 +3,7 @@
 PipelineManager 完整版
 功能：1. 控制流向 2. 管理流水线 3. 推送成品数据
 核心：历史费率按合约控制，每个合约只流出1次
-优化：初始化只调用一次，日志优化
+优化：批量日志，避免刷屏
 """
 
 import asyncio
@@ -87,10 +87,6 @@ class FlowInstructions:
         if data_type == "funding_settlement":
             # 检查这个合约的历史费率是否已流出过
             if symbol in cls._history_flowed_contracts:
-                funding_time = data.get('funding_time', 'unknown')
-                log_data_process("管理员指令", "历史", 
-                               f"{exchange}.{symbol} 的历史费率已流出过，阻止（结算时间: {funding_time}）", 
-                               "DEBUG")
                 return False  # ❌ 这个合约已流出过
             
             # ✅ 首次流出这个合约的历史费率
@@ -100,29 +96,21 @@ class FlowInstructions:
                            f"{exchange}.{symbol} 的历史费率首次流出（结算时间: {funding_time}）")
             return True  # ✅ 首次流出
         
-        # ✅ 实时数据正常流出（只记录重要数据）
-        if data_type in ["funding_rate", "mark_price", "ticker"]:
-            log_data_process("数据流动", "原始数据", f"{exchange}.{symbol}.{data_type}", "DEBUG")
+        # ✅ 实时数据正常流出
         return True
     
     @classmethod
     def should_flow_account_data(cls, exchange: str, data_type: str, data: dict) -> bool:
         """账户数据是否应该流出"""
         if not cls.ACCOUNT_FLOW_ENABLED:
-            log_data_process("管理员指令", "阻止", f"账户数据流出已禁用，阻止 {exchange}.{data_type}", "DEBUG")
             return False
-        
-        log_data_process("数据流动", "账户数据", f"{exchange}.{data_type}", "DEBUG")
         return True
     
     @classmethod
     def should_flow_order_data(cls, exchange: str, order_id: str, data: dict) -> bool:
         """订单数据是否应该流出"""
         if not cls.ORDER_FLOW_ENABLED:
-            log_data_process("管理员指令", "阻止", f"订单数据流出已禁用，阻止 {exchange}.{order_id}", "DEBUG")
             return False
-        
-        log_data_process("数据流动", "订单数据", f"{exchange}.{order_id}", "DEBUG")
         return True
     
     @classmethod
@@ -152,7 +140,7 @@ class FlowInstructions:
         }
 
 class PipelineManager:
-    """流水线管理器 - 只处理逻辑，不统计条数"""
+    """流水线管理器"""
     
     _instance: Optional['PipelineManager'] = None
     
@@ -189,7 +177,12 @@ class PipelineManager:
         self._active_push_tasks = set()
         
         # ✅ 状态记录（按合约）
-        self.processed_symbols = set()  # 已处理的合约
+        self.processed_symbols = set()
+        
+        # ✅ 批量日志统计
+        self.ingest_stats = {"total": 0, "market": 0, "account": 0}
+        self.final_stats = {"total": 0}
+        self.last_log_time = time.time()
         
         self.running = False
         
@@ -225,17 +218,25 @@ class PipelineManager:
     async def ingest_data(self, data: Dict[str, Any]) -> bool:
         """流水线处理入口"""
         try:
+            # ✅ 统计接收数据
+            self.ingest_stats["total"] += 1
+            
             symbol = data.get('symbol', 'unknown')
             
             # 快速分类
             data_type = data.get("data_type", "")
             if data_type.startswith(("ticker", "funding_rate", "mark_price")):
+                self.ingest_stats["market"] += 1
                 await self._process_market_data(data)
             elif data_type.startswith(("account", "position", "order", "trade")):
+                self.ingest_stats["account"] += 1
                 await self._process_account_data(data)
             
             # ✅ 记录处理的合约
             self.processed_symbols.add(symbol)
+            
+            # ✅ 批量打印日志
+            self._log_ingest_stats_if_needed()
             
             return True
             
@@ -243,6 +244,19 @@ class PipelineManager:
             symbol = data.get('symbol', 'N/A')
             log_data_process("流水线", "错误", f"处理失败: {symbol} - {e}", "ERROR")
             return False
+    
+    def _log_ingest_stats_if_needed(self):
+        """定期打印接收统计"""
+        current_time = time.time()
+        if current_time - self.last_log_time >= 5:
+            if self.ingest_stats["total"] > 0:
+                log_data_process("流水线", "接收", 
+                               f"5秒: 接收{self.ingest_stats['total']}条 "
+                               f"(市场:{self.ingest_stats['market']} 账户:{self.ingest_stats['account']})")
+                
+                # 重置统计
+                self.ingest_stats = {"total": 0, "market": 0, "account": 0}
+                self.last_log_time = current_time
     
     async def _process_market_data(self, data: Dict[str, Any]):
         """市场数据处理：5步流水线"""
@@ -285,8 +299,17 @@ class PipelineManager:
                         except Exception as e:
                             log_data_process("流水线", "错误", f"成品数据推送失败: {e}", "ERROR")
                     
-                    symbol = result.symbol
-                    log_data_process("流水线", "成品", f"{symbol} 套利数据生成完成")
+                    # ✅ 统计成品数据
+                    self.final_stats["total"] += 1
+                    self._log_final_stats_if_needed()
+    
+    def _log_final_stats_if_needed(self):
+        """定期打印成品数据统计"""
+        current_time = time.time()
+        if self.final_stats["total"] >= 10 or current_time - self.last_log_time >= 10:
+            if self.final_stats["total"] > 0:
+                log_data_process("流水线", "成品", f"生成 {self.final_stats['total']} 条套利数据")
+                self.final_stats = {"total": 0}
     
     def _crossplatform_to_dict(self, data: CrossPlatformData) -> Dict[str, Any]:
         """CrossPlatformData转换为字典"""
