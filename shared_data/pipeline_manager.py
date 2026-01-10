@@ -80,8 +80,8 @@ class PipelineManager:
     
     # ==================== 管理员核心功能 ====================
     
-    async def start_system(self):
-        """启动整个系统（管理员只做一次）"""
+    async def start(self):
+        """启动整个系统（保持接口兼容）"""
         if self.system_running:
             logger.warning("⚠️ 系统已经在运行中")
             return
@@ -113,8 +113,8 @@ class PipelineManager:
             self.system_running = False
             raise
     
-    async def stop_system(self):
-        """停止系统"""
+    async def stop(self):
+        """停止系统（保持接口兼容）"""
         logger.info("🛑 管理员正在停止系统...")
         self.system_running = False
         
@@ -219,8 +219,22 @@ class PipelineManager:
     
     # ==================== 状态查询 ====================
     
+    def get_status(self) -> Dict[str, Any]:
+        """获取系统状态（保持接口兼容）"""
+        uptime = time.time() - self.stats["start_time"]
+        
+        return {
+            "running": self.system_running,
+            "uptime_seconds": uptime,
+            "market_processed": self.stats["total_processed"],
+            "errors": self.stats["errors"],
+            "memory_mode": "定时全量处理，1秒间隔",
+            "step4_cache_size": len(self.step4.binance_cache) if hasattr(self.step4, 'binance_cache') else 0,
+            "timestamp": time.time()
+        }
+    
     def get_system_status(self) -> Dict[str, Any]:
-        """获取系统状态"""
+        """获取系统状态（详细版）"""
         uptime = time.time() - self.stats["start_time"]
         
         return {
@@ -240,6 +254,13 @@ class PipelineManager:
             "step4_stats": self.step4.stats if hasattr(self.step4, 'stats') else {},
             "step5_stats": self.step5.stats if hasattr(self.step5, 'stats') else {},
         }
+    
+    # ==================== 兼容原有接口 ====================
+    
+    async def ingest_data(self, data: Dict[str, Any]) -> bool:
+        """接收数据（保持接口兼容，但实际由DataStore控制）"""
+        logger.debug(f"📥 接收到数据（由DataStore统一控制）: {data.get('symbol', 'N/A')}")
+        return True
 
 # 使用示例
 async def main():
@@ -251,16 +272,16 @@ async def main():
     manager.brain_callback = brain_callback
     
     # 启动系统（一次）
-    await manager.start_system()
+    await manager.start()
     
     # 运行一段时间
     await asyncio.sleep(30)
     
     # 查看状态
-    print("系统状态:", manager.get_system_status())
+    print("系统状态:", manager.get_status())
     
     # 停止系统
-    await manager.stop_system()
+    await manager.stop()
 
 if __name__ == "__main__":
     asyncio.run(main())
