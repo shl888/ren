@@ -74,8 +74,7 @@ class PipelineManager:
             "start_time": time.time()
         }
         
-        logger.info("✅ PipelineManager初始化完成（立法者）")
-        logger.info(f"📋 制定规则: {self.rules}")
+        logger.info("✅【数据处理管理员】初始化完成")
         self._initialized = True
     
     # ==================== 管理员核心功能 ====================
@@ -83,39 +82,39 @@ class PipelineManager:
     async def start(self):
         """启动整个系统（保持接口兼容）"""
         if self.system_running:
-            logger.warning("⚠️ 系统已经在运行中")
+            logger.warning("⚠️【数据处理管理员】系统已经在运行中")
             return
         
-        logger.info("🚀 管理员开始启动系统...")
+        logger.info("🚀【数据处理管理员】开始启动系统...")
         self.system_running = True
         
         try:
             # 1. 把规则发给DataStore
             from shared_data.data_store import data_store
             await data_store.receive_rules(self.rules)
-            logger.info("📋 规则已下达给DataStore")
+            logger.info("📋【数据处理管理员】规则已下达给DataStore")
             
             # 2. 启动DataStore的放水系统
             await data_store.start_flowing(self._receive_water_callback)
-            logger.info("🚰 DataStore放水系统已启动")
+            logger.info("🚰【数据处理管理员】DataStore放水系统已启动")
             
             # 3. 流水线工人已就绪（步骤1-5）
-            logger.info("🔧 流水线工人已就位")
+            logger.info("🔧【数据处理管理员】流水线工人已就位")
             
             # 4. 系统运行中
-            logger.info("🎉 系统启动完成，开始自动运行")
+            logger.info("🎉【数据处理管理员】系统启动完成，开始自动运行")
             
             # 5. 启动状态监控（可选）
             self._monitor_task = asyncio.create_task(self._monitor_system())
             
         except Exception as e:
-            logger.error(f"系统启动失败: {e}")
+            logger.error(f"❌【数据处理管理员】系统启动失败: {e}")
             self.system_running = False
             raise
     
     async def stop(self):
         """停止系统（保持接口兼容）"""
-        logger.info("🛑 管理员正在停止系统...")
+        logger.info("🛑【数据处理管理员】正在停止系统...")
         self.system_running = False
         
         # 停止DataStore放水
@@ -126,7 +125,7 @@ class PipelineManager:
         if hasattr(self, '_monitor_task'):
             self._monitor_task.cancel()
         
-        logger.info("✅ 系统已停止")
+        logger.info("✅【数据处理管理员】系统已停止")
     
     async def update_rule(self, rule_key: str, rule_value: Any):
         """更新规则（动态调整）"""
@@ -134,13 +133,13 @@ class PipelineManager:
             old_value = self.rules[rule_key]
             self.rules[rule_key] = rule_value
             
-            logger.info(f"📝 规则更新: {rule_key} = {old_value} → {rule_value}")
+            logger.info(f"📝【数据处理管理员】规则更新: {rule_key} = {rule_value}")
             
             # 通知DataStore规则更新
             from shared_data.data_store import data_store
             await data_store.receive_rule_update(rule_key, rule_value)
         else:
-            logger.warning(f"未知规则: {rule_key}")
+            logger.warning(f"⚠️【数据处理管理员】未知规则: {rule_key}")
     
     # ==================== 回调函数 ====================
     
@@ -153,8 +152,6 @@ class PipelineManager:
             return
         
         try:
-            logger.debug(f"💧 收到 {len(water_data)} 条水数据")
-            
             # 步骤1：过滤提取
             step1_results = self.step1.process(water_data)
             if not step1_results:
@@ -189,12 +186,8 @@ class PipelineManager:
                 for result in step5_results:
                     await self.brain_callback(result.__dict__)
             
-            # 记录统计
-            if self.rules["pipeline"]["log_statistics"] and len(step5_results) > 0:
-                logger.info(f"📊 处理完成: {len(step5_results)} 条结果")
-            
         except Exception as e:
-            logger.error(f"流水线处理失败: {e}")
+            logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
             self.stats["errors"] += 1
     
     # ==================== 系统监控 ====================
@@ -207,14 +200,14 @@ class PipelineManager:
                 await asyncio.sleep(60)
                 
                 uptime = time.time() - self.stats["start_time"]
-                logger.info(f"📈 系统运行报告 - 运行时间: {uptime:.0f}秒, "
+                logger.info(f"📈【数据处理管理员】系统运行报告 - 运行时间: {uptime:.0f}秒, "
                           f"处理总数: {self.stats['total_processed']}, "
                           f"错误数: {self.stats['errors']}")
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"监控错误: {e}")
+                logger.error(f"❌【数据处理管理员】监控错误: {e}")
                 await asyncio.sleep(10)
     
     # ==================== 状态查询 ====================
@@ -259,13 +252,12 @@ class PipelineManager:
     
     async def ingest_data(self, data: Dict[str, Any]) -> bool:
         """接收数据（保持接口兼容，但实际由DataStore控制）"""
-        logger.debug(f"📥 接收到数据（由DataStore统一控制）: {data.get('symbol', 'N/A')}")
         return True
 
 # 使用示例
 async def main():
     async def brain_callback(data):
-        print(f"🧠 大脑收到: {data.get('symbol', 'N/A')}")
+        pass
     
     # 获取管理员实例
     manager = PipelineManager.instance()

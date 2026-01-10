@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -42,18 +43,15 @@ class Step3Align:
     """第三步：双平台对齐 + 时间转换（修正版）"""
     
     def __init__(self):
-        self.stats = {
-            "total_symbols": 0, 
-            "okx_only": 0, 
-            "binance_only": 0, 
-            "both_platforms": 0,
-            "time_conversion_errors": 0
-        }
-        self.align_results = []
+        self.last_log_time = 0
+        self.log_interval = 120  # 2分钟，单位：秒
+        self.process_count = 0
     
     def process(self, fused_results: List) -> List[AlignedData]:
         """处理Step2的融合结果"""
-        logger.info(f"✅【流水线步骤3】开始对齐 {len(fused_results)} 条融合数据...")
+        # 频率控制：只偶尔显示处理日志
+        current_time = time.time()
+        should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
         # 按symbol分组
         grouped = {}
@@ -67,91 +65,102 @@ class Step3Align:
             elif item.exchange == "binance":
                 grouped[symbol]["binance"] = item
         
-        # 统计
-        self.stats["total_symbols"] = len(grouped)
+        # 正确统计合约分布
+        okx_only_contracts = 0     # 仅OKX有的合约
+        binance_only_contracts = 0 # 仅币安有的合约
+        both_platform_contracts = 0  # 双平台都有的合约
+        total_contracts = len(grouped)  # 总合约数
+        
         for symbol, data in grouped.items():
             if data["okx"] and data["binance"]:
-                self.stats["both_platforms"] += 1
+                both_platform_contracts += 1
             elif data["okx"]:
-                self.stats["okx_only"] += 1
+                okx_only_contracts += 1
             elif data["binance"]:
-                self.stats["binance_only"] += 1
+                binance_only_contracts += 1
+        
+        # 验证统计正确性
+        expected_total = okx_only_contracts + binance_only_contracts + both_platform_contracts
+        if expected_total != total_contracts:
+            logger.error(f"❌【流水线步骤3】统计错误: 总合约数 {total_contracts} != 各部分之和 {expected_total}")
         
         # 只保留双平台都有的合约
+        align_results = []
+        time_conversion_errors = 0
+        
         for symbol, data in grouped.items():
             if data["okx"] and data["binance"]:
                 try:
                     aligned = self._align_item(symbol, data["okx"], data["binance"])
                     if aligned:
-                        self.align_results.append(aligned)
+                        align_results.append(aligned)
+                        # 统计时间转换错误
+                        if (data["okx"].current_settlement_time and not aligned.okx_current_settlement) or \
+                           (data["okx"].next_settlement_time and not aligned.okx_next_settlement) or \
+                           (data["binance"].last_settlement_time and not aligned.binance_last_settlement) or \
+                           (data["binance"].current_settlement_time and not aligned.binance_current_settlement):
+                            time_conversion_errors += 1
                 except Exception as e:
-                    logger.error(f"❌【流水线步骤3】对齐失败: {symbol} - {e}")
+                    # 只在频率控制时打印错误
+                    if should_log:
+                        logger.error(f"❌【流水线步骤3】对齐失败: {symbol} - {e}")
                     continue
         
-        # 处理完成后，打印统计结果
-        self._log_statistics()
-        
-        logger.info(f"✅【流水线步骤3】Step3对齐完成，共生成 {len(self.align_results)} 条对齐数据")
-        return self.align_results
-    
-    def _log_statistics(self):
-        """打印统计结果"""
-        logger.info("📝【流水线步骤3】对齐结果统计:")
-        
-        total_symbols = self.stats["total_symbols"]
-        okx_only = self.stats["okx_only"]
-        binance_only = self.stats["binance_only"]
-        both_platforms = self.stats["both_platforms"]
-        
-        logger.info(f"   总合约数: {total_symbols}")
-        logger.info(f"   仅OKX: {okx_only}")
-        logger.info(f"   仅币安: {binance_only}")
-        logger.info(f"   双平台: {both_platforms}")
-        
-        # 时间格式验证
-        self._validate_time_formats()
-        
-        # 过滤统计
-        filtered_count = okx_only + binance_only
-        logger.info(f"ℹ️【流水线步骤3】过滤掉 {filtered_count} 个单平台合约")
-        logger.info(f"✅【流水线步骤3】最终保留 {both_platforms} 个双平台合约")
-        
-        # 总结
-        if both_platforms > 0:
-            success_rate = (len(self.align_results) / both_platforms) * 100
-            logger.info(f"🎉 **恭喜！【流水线步骤3】Step3对齐功能{success_rate:.1f}%正常！**")
+        if should_log:
+            logger.info(f"🔄【流水线步骤3】开始对齐 {len(fused_results)} 条融合数据...")
             
-            if self.stats["time_conversion_errors"] == 0:
-                logger.info("✅【流水线步骤3】 时间已全部转为北京时间24小时制")
+            # 正确的合约分布统计
+            logger.info(f"📊【流水线步骤3】合约分布统计:")
+            logger.info(f"  • 总合约数: {total_contracts} 个")
+            logger.info(f"  • 仅OKX: {okx_only_contracts} 个")
+            logger.info(f"  • 仅币安: {binance_only_contracts} 个")
+            logger.info(f"  • 双平台: {both_platform_contracts} 个")
+            
+            logger.info(f"✅【流水线步骤3】Step3对齐完成，共生成 {len(align_results)} 条对齐数据")
+            
+            # 时间转换统计
+            if time_conversion_errors == 0:
+                logger.info(f"✅【流水线步骤3】时间转换: 全部 {len(align_results)} 个合约转换成功")
             else:
-                logger.warning(f"⚠️【流水线步骤3】  时间转换存在 {self.stats['time_conversion_errors']} 个错误")
+                logger.warning(f"⚠️【流水线步骤3】时间转换: {time_conversion_errors} 个合约存在转换错误")
             
-            logger.info("✅【流水线步骤3】 单平台合约已全部过滤")
+            # 验证时间格式
+            if align_results:
+                self._validate_time_formats(align_results)
+            
+            self.last_log_time = current_time
+            # 重置计数（仅用于频率控制）
+            self.process_count = 0
+        
+        self.process_count += 1
+        
+        return align_results
     
-    def _validate_time_formats(self):
+    def _validate_time_formats(self, align_results: List[AlignedData]):
         """验证时间格式是否正确"""
-        if not self.align_results:
+        if not align_results:
             return
         
         # 检查前几个时间格式作为样本
-        sample_count = min(5, len(self.align_results))
-        valid_formats = 0
+        sample_count = min(3, len(align_results))
+        valid_count = 0
         
         for i in range(sample_count):
-            item = self.align_results[i]
+            item = align_results[i]
             
             # 检查OKX时间格式
             if item.okx_current_settlement:
                 if self._is_valid_time_format(item.okx_current_settlement):
-                    valid_formats += 1
+                    valid_count += 1
             
             # 检查币安时间格式
             if item.binance_current_settlement:
                 if self._is_valid_time_format(item.binance_current_settlement):
-                    valid_formats += 1
+                    valid_count += 1
         
         if sample_count > 0:
-            logger.info(f"✅【流水线步骤3】 时间格式正确样本: {valid_formats}/{sample_count*2}")
+            total_checks = sample_count * 2
+            logger.info(f"✅【流水线步骤3】时间格式验证: {valid_count}/{total_checks} 个时间字段格式正确")
     
     def _is_valid_time_format(self, time_str: str) -> bool:
         """验证时间字符串格式"""
@@ -211,5 +220,4 @@ class Step3Align:
             return dt_bj.strftime("%Y-%m-%d %H:%M:%S")
         
         except Exception as e:
-            self.stats["time_conversion_errors"] += 1
             return None

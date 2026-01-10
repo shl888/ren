@@ -8,6 +8,7 @@ import logging
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from collections import defaultdict
 from dataclasses import dataclass
+import time
 
 # 类型检查时导入，避免循环依赖
 if TYPE_CHECKING:
@@ -37,12 +38,17 @@ class Step2Fusion:
             "success_groups": 0,
             "failed_groups": 0
         }
+        self.last_log_time = 0
+        self.log_interval = 120  # 2分钟，单位：秒
+        self.process_count = 0
     
     def process(self, step1_results: List["ExtractedData"]) -> List[FusedData]:
         """
         处理Step1的提取结果，按交易所+合约名合并
         """
-        logger.info(f"🔄【流水线步骤2】开始融合 {len(step1_results)} 条Step1数据...")
+        # 频率控制：只偶尔显示处理日志
+        current_time = time.time()
+        should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
         # 按 exchange + symbol 分组
         grouped = defaultdict(list)
@@ -51,81 +57,101 @@ class Step2Fusion:
             grouped[key].append(item)
         
         self.fusion_stats["total_groups"] = len(grouped)
-        logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
+        
+        if should_log:
+            logger.info(f"🔄【流水线步骤2】开始融合 {len(step1_results)} 条Step1数据...")
+            logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
         
         # 合并每组数据
         results = []
+        exchange_contracts = defaultdict(set)  # 统计成功融合的合约
+        
         for key, items in grouped.items():
             try:
                 fused = self._merge_group(items)
                 if fused:
                     results.append(fused)
+                    exchange_contracts[fused.exchange].add(fused.symbol)
                     self.stats[fused.exchange] += 1
                     self.fusion_stats["success_groups"] += 1
                 else:
                     self.fusion_stats["failed_groups"] += 1
             except Exception as e:
-                logger.error(f"❌【流水线步骤2】融合失败: {key} - {e}")
                 self.fusion_stats["failed_groups"] += 1
+                # 只在日志频率控制时打印错误
+                if should_log:
+                    logger.error(f"❌【流水线步骤2】融合失败: {key} - {e}")
                 continue
         
-        # 处理完成后，打印统计结果
-        self._log_statistics(results)
+        if should_log:
+            # 处理完成后，打印统计结果
+            logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
+            
+            # 按交易所统计合约数
+            okx_contracts = len(exchange_contracts.get("okx", set()))
+            binance_contracts = len(exchange_contracts.get("binance", set()))
+            total_contracts = okx_contracts + binance_contracts
+            
+            logger.info("📊【流水线步骤2】融合结果合约统计:")
+            if okx_contracts > 0:
+                logger.info(f"  • OKX合约数: {okx_contracts} 个")
+            if binance_contracts > 0:
+                logger.info(f"  • 币安合约数: {binance_contracts} 个")
+            logger.info(f"  • 总计: {total_contracts} 个合约")
+            
+            # 融合过程统计（合约组数）
+            logger.info(f"📊【流水线步骤2】融合过程统计:")
+            logger.info(f"  • 检测到合约组数: {self.fusion_stats['total_groups']} 组")
+            logger.info(f"  • 成功融合: {self.fusion_stats['success_groups']} 组")
+            logger.info(f"  • 失败/跳过: {self.fusion_stats['failed_groups']} 组")
+            
+            # 验证字段完整性（只针对成功融合的结果）
+            if results:
+                self._validate_fields(results)
+            
+            self.last_log_time = current_time
+            # 重置计数（仅用于频率控制）
+            self.process_count = 0
         
-        logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
+        self.process_count += 1
+        
         return results
-    
-    def _log_statistics(self, results: List[FusedData]):
-        """打印统计结果"""
-        logger.info("📝【流水线步骤2】融合结果统计:")
-        
-        # 按交易所统计
-        okx_count = self.stats.get("okx", 0)
-        binance_count = self.stats.get("binance", 0)
-        total_count = okx_count + binance_count
-        
-        logger.info(f"  OKX合约数: {okx_count}")
-        logger.info(f"  币安合约数: {binance_count}")
-        logger.info(f"  总计: {total_count}")
-        
-        # 验证字段完整性
-        if results:
-            self._validate_fields(results)
-        
-        # 融合过程统计
-        logger.info(f"  融合组数: {self.fusion_stats['total_groups']}")
-        logger.info(f"  成功融合: {self.fusion_stats['success_groups']}")
-        logger.info(f"  失败/跳过: {self.fusion_stats['failed_groups']}")
     
     def _validate_fields(self, results: List[FusedData]):
         """验证字段完整性"""
         okx_valid = 0
         binance_valid = 0
         
+        okx_contracts = []
+        binance_contracts = []
+        
         for item in results:
             if item.exchange == "okx":
+                okx_contracts.append(item)
                 # OKX验证：应该有next_settlement_time，没有last_settlement_time
                 if item.next_settlement_time is not None and item.last_settlement_time is None:
                     okx_valid += 1
             elif item.exchange == "binance":
+                binance_contracts.append(item)
                 # 币安验证：应该有last_settlement_time，没有next_settlement_time
                 if item.last_settlement_time is not None and item.next_settlement_time is None:
                     binance_valid += 1
         
-        total_count = len(results)
-        okx_count = self.stats.get("okx", 0)
-        binance_count = self.stats.get("binance", 0)
+        # 验证统计
+        okx_count = len(okx_contracts)
+        binance_count = len(binance_contracts)
         
-        # 只打印验证结果，不打印每条合约的验证过程
         if okx_count > 0:
-            validation_rate = (okx_valid / okx_count) * 100 if okx_count > 0 else 0
-            logger.info(f"【流水线步骤2】 ✅ OKX合约验证通过率: {okx_valid}/{okx_count} ({validation_rate:.1f}%)")
-            logger.info("【流水线步骤2】✅ OKX合约的last_settlement_time正确为空")
+            validation_rate = (okx_valid / okx_count) * 100
+            logger.info(f"📊【流水线步骤2】OKX合约验证:")
+            logger.info(f"  • 验证通过: {okx_valid}/{okx_count} ({validation_rate:.1f}%)")
+            logger.info(f"  • last_settlement_time正确为空: ✓")
             
         if binance_count > 0:
-            validation_rate = (binance_valid / binance_count) * 100 if binance_count > 0 else 0
-            logger.info(f"【流水线步骤2】✅ 币安合约验证通过率: {binance_valid}/{binance_count} ({validation_rate:.1f}%)")
-            logger.info("【流水线步骤2】✅ 币安合约的next_settlement_time正确为空")
+            validation_rate = (binance_valid / binance_count) * 100
+            logger.info(f"📊【流水线步骤2】币安合约验证:")
+            logger.info(f"  • 验证通过: {binance_valid}/{binance_count} ({validation_rate:.1f}%)")
+            logger.info(f"  • next_settlement_time正确为空: ✓")
     
     def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
         """合并同一组内的所有数据"""

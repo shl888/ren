@@ -60,14 +60,13 @@ class DataStore:
             'execution_records': asyncio.Lock(),
         }
         
-        logger.info("✅ DataStore初始化完成（执行者）")
+        logger.info("✅【数据池】初始化完成")
     
     # ==================== HTTP服务相关方法 ====================
     
     def set_http_server_ready(self, ready: bool):
         """设置HTTP服务就绪状态"""
         self._http_server_ready = ready
-        logger.info(f"🌐 HTTP服务状态: {'就绪' if ready else '未就绪'}")
     
     def is_http_server_ready(self) -> bool:
         """检查HTTP服务是否就绪"""
@@ -79,14 +78,13 @@ class DataStore:
         """接收管理员规则"""
         async with self.rule_lock:
             self.rules = rules
-            logger.info("📋 已接收管理员规则")
+            logger.info("📋【数据池】已接收管理员规则")
     
     async def receive_rule_update(self, rule_key: str, rule_value: Any):
         """接收规则更新"""
         async with self.rule_lock:
             if self.rules and rule_key in self.rules:
                 self.rules[rule_key] = rule_value
-                logger.info(f"📝 规则更新接收: {rule_key} = {rule_value}")
     
     # ==================== 放水系统 ====================
     
@@ -96,17 +94,17 @@ class DataStore:
         water_callback: 放水回调函数，水放给流水线
         """
         if self.flowing:
-            logger.warning("⚠️ 已经在放水中")
+            logger.warning("⚠️【数据池】已经在放水中")
             return
         
         if not self.rules:
-            logger.error("❌ 没有接收到规则，无法开始放水")
+            logger.error("❌【数据池】没有接收到规则，无法开始放水")
             return
         
         self.flowing = True
         self.water_callback = water_callback
         
-        logger.info("🚰 开始按规则放水...")
+        logger.info("🚰【数据池】开始按规则放水...")
         
         # 启动放水任务
         self.flow_task = asyncio.create_task(self._flow_loop())
@@ -116,7 +114,7 @@ class DataStore:
         if not self.flowing:
             return
         
-        logger.info("🛑 停止放水...")
+        logger.info("🛑【数据池】停止放水...")
         self.flowing = False
         
         if self.flow_task:
@@ -126,7 +124,7 @@ class DataStore:
             except asyncio.CancelledError:
                 pass
         
-        logger.info("✅ 放水已停止")
+        logger.info("✅【数据池】放水已停止")
     
     async def _flow_loop(self):
         """放水循环 - 按规则执行"""
@@ -156,7 +154,7 @@ class DataStore:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"放水循环错误: {e}")
+                logger.error(f"❌【数据池】放水循环错误: {e}")
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
@@ -205,7 +203,7 @@ class DataStore:
                             
                             if flowed_count >= threshold:
                                 self.execution_records["binance_history"]["history_complete"] = True
-                                logger.info(f"🎉 按规则完成：币安历史费率已流过 {flowed_count} 个合约（阈值 {threshold}）")
+                                logger.info(f"🎉【数据池】币安历史费率已流过 {flowed_count} 个合约（完成）")
                         
                         # ==================== 修复：构建正确的数据格式 ====================
                         water_item = {
@@ -217,14 +215,8 @@ class DataStore:
                             'priority': 5  # ✅ 保持和原版一致
                         }
                         
-                        # 调试：确保有raw_data
-                        if not water_item['raw_data']:
-                            logger.warning(f"⚠️ 数据缺少有效raw_data: {exchange}.{symbol}.{data_type}")
-                            continue
-                        
                         water.append(water_item)
         
-        logger.info(f"💧 按规则收集到 {len(water)} 条数据")
         return water
     
     # ==================== 数据接收接口 ====================
@@ -246,12 +238,6 @@ class DataStore:
             
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
-            
-            # 调试日志
-            if data_type in ['funding_rate', 'mark_price'] and exchange == "binance":
-                rate = data.get('funding_rate', 0)
-                if isinstance(rate, (int, float)):
-                    logger.debug(f"[DataStore] 存储 {exchange} {symbol} {data_type} = {rate:.6f}")
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
         """接收账户数据"""
@@ -341,7 +327,7 @@ class DataStore:
                 'data_types': data_type_count
             }
             stats['total_symbols'] += symbol_count
-            stats['total_data_types'] += data_type_count
+            stats['total_data_types"] += data_type_count
         return stats
     
     # ==================== 状态查询 ====================
@@ -359,37 +345,18 @@ class DataStore:
             "flowing": self.flowing,
             "has_rules": self.rules is not None,
             "execution_records": records,
-            "data_stats": self._get_data_stats(),
             "timestamp": datetime.now().isoformat()
         }
-    
-    def _get_data_stats(self) -> Dict[str, Any]:
-        """获取数据统计"""
-        stats = {
-            "binance_symbols": len(self.market_data.get("binance", {})),
-            "okx_symbols": len(self.market_data.get("okx", {})),
-            "binance_data_types": defaultdict(int),
-            "okx_data_types": defaultdict(int)
-        }
-        
-        for exchange in ["binance", "okx"]:
-            for symbol_data in self.market_data.get(exchange, {}).values():
-                for data_type in symbol_data.keys():
-                    if data_type not in ['latest', 'store_timestamp']:
-                        stats[f"{exchange}_data_types"][data_type] += 1
-        
-        return stats
     
     async def force_one_flow(self):
         """强制放水一次（测试用）"""
         if not self.flowing:
-            logger.warning("⚠️ 放水系统未启动")
+            logger.warning("⚠️【数据池】放水系统未启动")
             return
         
         water = await self._collect_water_by_rules()
         if water and self.water_callback:
             await self.water_callback(water)
-            logger.info(f"⚡ 强制放水完成: {len(water)} 条数据")
     
     async def clear_market_data(self, exchange: str = None):
         """
@@ -399,11 +366,11 @@ class DataStore:
             if exchange:
                 if exchange in self.market_data:
                     self.market_data[exchange].clear()
-                    logger.warning(f"⚠️ 已清空 {exchange} 市场数据")
+                    logger.warning(f"⚠️【数据池】已清空 {exchange} 市场数据")
             else:
                 self.market_data["binance"].clear()
                 self.market_data["okx"].clear()
-                logger.warning("⚠️ 已清空所有市场数据")
+                logger.warning("⚠️【数据池】已清空所有市场数据")
     
     async def health_check(self) -> Dict[str, Any]:
         """

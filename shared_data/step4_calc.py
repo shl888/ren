@@ -42,121 +42,164 @@ class Step4Calc:
     
     def __init__(self):
         self.binance_cache = {}
-        self.stats = {
-            "okx_total": 0,
-            "binance_total": 0,
-            "binance_rollovers": 0,
-            "binance_updates": 0,
-            "calculation_errors": 0
-        }
-        self.platform_results = {
-            "okx": [],
-            "binance": []
-        }
+        self.last_log_time = 0
+        self.log_interval = 120  # 2分钟，单位：秒
+        self.process_count = 0
     
     def process(self, aligned_results: List) -> List[PlatformData]:
         """
         处理Step3的对齐数据
         """
-        logger.info(f"🔄【流水线步骤4】开始单平台计算 {len(aligned_results)} 个合约...")
+        # 频率控制：只偶尔显示处理日志
+        current_time = time.time()
+        should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
+        
+        if should_log:
+            logger.info(f"🔄【流水线步骤4】开始单平台计算 {len(aligned_results)} 个合约...")
+        
+        # 当前批次统计（按合约计数）
+        batch_stats = {
+            "total_contracts": len(aligned_results),
+            "okx_complete_contracts": 0,     # OKX数据完整的合约数
+            "binance_complete_contracts": 0, # 币安数据完整的合约数
+            "both_platform_contracts": 0,    # 双平台都完整的合约数
+            "calculation_errors": 0,         # 计算失败的合约数
+            "binance_rollovers": 0,          # 币安时间滚动次数
+            
+            # 计算成功率统计
+            "okx_period_success": 0,         # OKX周期计算成功
+            "okx_countdown_success": 0,      # OKX倒计时计算成功
+            "binance_period_success": 0,     # 币安周期计算成功
+            "binance_countdown_success": 0,  # 币安倒计时计算成功
+        }
+        
+        all_results = []
         
         for item in aligned_results:
             try:
                 okx_data = self._calc_okx(item)
                 binance_data = self._calc_binance(item)
                 
-                if okx_data:
-                    self.platform_results["okx"].append(okx_data)
-                    self.stats["okx_total"] += 1
+                # 统计每个合约的平台数据完整情况
+                has_okx = okx_data is not None
+                has_binance = binance_data is not None
                 
-                if binance_data:
-                    self.platform_results["binance"].append(binance_data)
-                    self.stats["binance_total"] += 1
+                if has_okx:
+                    all_results.append(okx_data)
+                    batch_stats["okx_complete_contracts"] += 1
+                    # 统计OKX计算详情
+                    if okx_data.period_seconds is not None:
+                        batch_stats["okx_period_success"] += 1
+                    if okx_data.countdown_seconds is not None:
+                        batch_stats["okx_countdown_success"] += 1
+                
+                if has_binance:
+                    all_results.append(binance_data)
+                    batch_stats["binance_complete_contracts"] += 1
+                    # 统计币安计算详情
+                    if binance_data.period_seconds is not None:
+                        batch_stats["binance_period_success"] += 1
+                    if binance_data.countdown_seconds is not None:
+                        batch_stats["binance_countdown_success"] += 1
+                
+                if has_okx and has_binance:
+                    batch_stats["both_platform_contracts"] += 1
                 
             except Exception as e:
-                logger.error(f"❌【流水线步骤4】计算失败: {item.symbol} - {e}")
-                self.stats["calculation_errors"] += 1
+                batch_stats["calculation_errors"] += 1
+                if should_log:
+                    logger.error(f"❌【流水线步骤4】合约计算失败: {item.symbol} - {e}")
                 continue
         
-        # 合并所有结果
-        all_results = self.platform_results["okx"] + self.platform_results["binance"]
+        if should_log:
+            # 处理完成后，打印统计结果
+            self._log_batch_statistics(batch_stats)
+            
+            # 数据生成统计
+            logger.info(f"✅【流水线步骤4】Step4计算完成，共生成 {len(all_results)} 条单平台数据")
+            
+            # 添加缓存报告
+            self._log_cache_report(batch_stats["binance_complete_contracts"])
+            
+            self.last_log_time = current_time
+            self.process_count = 0
         
-        # 处理完成后，打印统计结果
-        self._log_statistics()
+        self.process_count += 1
         
-        logger.info(f"✅【流水线步骤4】Step4计算完成，共生成 {len(all_results)} 条单平台数据")
         return all_results
     
-    def _log_statistics(self):
-        """打印统计结果"""
-        logger.info("📝【流水线步骤4】单平台计算统计:")
+    def _log_batch_statistics(self, batch_stats: Dict[str, int]):
+        """打印当前批次的合约统计结果"""
+        logger.info("📝【流水线步骤4】当前批次合约统计:")
         
-        okx_count = self.stats["okx_total"]
-        binance_count = self.stats["binance_total"]
-        total_count = okx_count + binance_count
+        total_contracts = batch_stats["total_contracts"]
         
-        logger.info(f"   OKX数据: {okx_count} 条")
-        logger.info(f"   币安数据: {binance_count} 条")
-        logger.info(f"   总计: {total_count} 条")
+        logger.info(f"  • 总合约数: {total_contracts} 个")
+        logger.info(f"  • 双平台完整: {batch_stats['both_platform_contracts']} 个")
+        logger.info(f"  • 仅OKX完整: {batch_stats['okx_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
+        logger.info(f"  • 仅币安完整: {batch_stats['binance_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
+        logger.info(f"  • 计算失败: {batch_stats['calculation_errors']} 个")
         
-        # 验证双平台完整性
-        aligned_count = len(self.platform_results["okx"] + self.platform_results["binance"]) // 2
-        if okx_count == binance_count and okx_count > 0:
-            logger.info(f"✅【流水线步骤4】 每个合约都生成了OKX+币安两条数据 ({okx_count} 对)")
-        else:
-            logger.warning(f"⚠️【流水线步骤4】  平台数据不对称: OKX={okx_count}, 币安={binance_count}")
-        
-        # 币安缓存统计
-        cache_size = len(self.binance_cache)
-        logger.info(f"📝【流水线步骤4】币安缓存大小: {cache_size} 个合约")
-        
-        if cache_size == binance_count and binance_count > 0:
-            logger.info("✅【流水线步骤4】 缓存覆盖所有币安合约")
-        else:
-            logger.warning(f"   ⚠️【流水线步骤4】  缓存未完全覆盖: 缓存={cache_size}, 币安数据={binance_count}")
-        
-        # 缓存深度验证
-        self._validate_cache()
-        
-        # 时间滚动统计
-        if self.stats["binance_rollovers"] > 0:
-            logger.info(f"📝【流水线步骤4】币安时间滚动: {self.stats['binance_rollovers']} 次")
-        
-        # 总结
-        if total_count > 0:
-            success_rate = ((total_count - self.stats["calculation_errors"]) / total_count) * 100
-            logger.info(f"🎉 **恭喜！【流水线步骤4】Step4计算功能{success_rate:.1f}%正常！**")
-            logger.info(f"✅ 【流水线步骤4】成功处理 {aligned_count} 个合约的双平台数据。")
-            logger.info(f"✅【流水线步骤4】 币安缓存工作正常（{cache_size} 个合约）")
-            logger.info(f"✅【流水线步骤4】 倒计时和周期计算准确")
-    
-    def _validate_cache(self):
-        """验证币安缓存机制"""
-        if not self.binance_cache:
-            return
-        
-        total_cached = len(self.binance_cache)
-        with_history = 0
-        without_history = 0
-        symbols_without_history = []
-        
-        for symbol, cache in self.binance_cache.items():
-            if cache.get("last_ts"):
-                with_history += 1
-            else:
-                without_history += 1
-                symbols_without_history.append(symbol)
-        
-        if without_history > 0:
-            logger.info(f"🔍【流水线步骤4】 缓存机制深度验证")
-            logger.info(f"   ⚠️【流水线步骤4】  有 {without_history} 个币安合约的last_ts为空")
-            logger.info("🤔【流水线步骤4】   这些合约依赖首次滚动才能生成周期")
+        # 完整性统计
+        if total_contracts > 0:
+            both_rate = (batch_stats['both_platform_contracts'] / total_contracts) * 100
+            logger.info(f"✅【流水线步骤4】双平台完整率: {both_rate:.1f}%")
             
-            # 显示前几个缺少历史的合约
-            sample_size = min(5, len(symbols_without_history))
-            if sample_size > 0:
-                sample_symbols = symbols_without_history[:sample_size]
-                logger.info(f"   示例: {', '.join(sample_symbols)}")
+            if batch_stats['both_platform_contracts'] == total_contracts:
+                logger.info("🎉【流水线步骤4】所有合约双平台数据完整！")
+            else:
+                incomplete = total_contracts - batch_stats['both_platform_contracts']
+                logger.warning(f"⚠️【流水线步骤4】 {incomplete} 个合约数据不完整")
+        
+        # 费率周期和倒计时统计
+        logger.info("⏱️【流水线步骤4】费率周期和倒计时计算统计:")
+        
+        # OKX统计
+        if batch_stats["okx_complete_contracts"] > 0:
+            period_rate = (batch_stats["okx_period_success"] / batch_stats["okx_complete_contracts"]) * 100
+            countdown_rate = (batch_stats["okx_countdown_success"] / batch_stats["okx_complete_contracts"]) * 100
+            logger.info(f"  • OKX周期计算: {batch_stats['okx_period_success']}/{batch_stats['okx_complete_contracts']} ({period_rate:.1f}%)")
+            logger.info(f"  • OKX倒计时: {batch_stats['okx_countdown_success']}/{batch_stats['okx_complete_contracts']} ({countdown_rate:.1f}%)")
+        
+        # 币安统计
+        if batch_stats["binance_complete_contracts"] > 0:
+            period_rate = (batch_stats["binance_period_success"] / batch_stats["binance_complete_contracts"]) * 100
+            countdown_rate = (batch_stats["binance_countdown_success"] / batch_stats["binance_complete_contracts"]) * 100
+            logger.info(f"  • 币安周期计算: {batch_stats['binance_period_success']}/{batch_stats['binance_complete_contracts']} ({period_rate:.1f}%)")
+            logger.info(f"  • 币安倒计时: {batch_stats['binance_countdown_success']}/{batch_stats['binance_complete_contracts']} ({countdown_rate:.1f}%)")
+        
+        # 币安时间滚动统计
+        if batch_stats["binance_rollovers"] > 0:
+            logger.info(f"🔄【流水线步骤4】币安时间滚动: {batch_stats['binance_rollovers']} 次")
+    
+    def _log_cache_report(self, binance_contracts: int):
+        """打印币安缓存详细报告"""
+        cache_size = len(self.binance_cache)
+        
+        logger.info("🗃️【流水线步骤4】币安缓存详细报告:")
+        logger.info(f"  • 缓存合约数: {cache_size} 个")
+        logger.info(f"  • 当前批次币安合约: {binance_contracts} 个")
+        
+        if binance_contracts > 0:
+            cache_coverage = (cache_size / binance_contracts) * 100
+            logger.info(f"  • 缓存覆盖率: {cache_coverage:.1f}%")
+        
+        # 缓存深度分析
+        if cache_size > 0:
+            with_history = 0
+            without_history = 0
+            
+            for symbol, cache in self.binance_cache.items():
+                if cache.get("last_ts"):
+                    with_history += 1
+                else:
+                    without_history += 1
+            
+            logger.info(f"  • 有历史数据: {with_history} 个合约")
+            logger.info(f"  • 无历史数据: {without_history} 个合约")
+            
+            if without_history > 0:
+                logger.info(f"⚠️【流水线步骤4】 {without_history} 个合约缺少历史结算时间，等待首次滚动")
     
     def _calc_okx(self, aligned_item) -> Optional[PlatformData]:
         """计算OKX数据"""
@@ -214,9 +257,6 @@ class Step4Calc:
             T2 = T3
             cache["last_ts"] = T1
             cache["current_ts"] = T2
-            self.stats["binance_rollovers"] += 1
-        
-        self.stats["binance_updates"] += 1
         
         # 构建数据（保留字符串，保存时间戳用于计算）
         data = PlatformData(

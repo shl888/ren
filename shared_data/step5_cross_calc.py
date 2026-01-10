@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from collections import defaultdict
 from datetime import datetime
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -56,30 +57,24 @@ class Step5CrossCalc:
     """第五步：跨平台计算（专注数据计算版）"""
     
     def __init__(self):
-        # 基本统计（不包含业务逻辑）
-        self.stats = {
-            "total_symbols": 0,
-            "total_processed": 0,
-            "successful": 0,
-            "failed": 0,
-            "okx_missing": 0,
-            "binance_missing": 0,
-            "price_invalid": 0,
-            "price_too_low": 0,
-            "start_time": None,
-            "end_time": None
-        }
-        self.cross_results = []
+        self.last_log_time = 0
+        self.log_interval = 120  # 2分钟，单位：秒
+        self.process_count = 0
     
     def process(self, platform_results: List) -> List[CrossPlatformData]:
         """
         处理Step4的单平台数据，只做数据计算，不做业务过滤
         """
-        self.stats["start_time"] = datetime.now().isoformat()
-        logger.info(f"✅【流水线步骤5】开始跨平台计算 {len(platform_results)} 条单平台数据...")
+        # 频率控制：只偶尔显示处理日志
+        current_time = time.time()
+        should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
+        
+        if should_log:
+            logger.info(f"✅【流水线步骤5】开始跨平台计算 {len(platform_results)} 条单平台数据...")
         
         if not platform_results:
-            logger.warning("⚠️【流水线步骤5】 输入数据为空")
+            if should_log:
+                logger.warning("⚠️【流水线步骤5】输入数据为空")
             return []
         
         # 按symbol分组
@@ -89,69 +84,63 @@ class Step5CrossCalc:
             if self._is_basic_valid(item):
                 grouped[item.symbol].append(item)
         
-        self.stats["total_symbols"] = len(grouped)
-        logger.info(f"🤔【流水线步骤5】检测到 {len(grouped)} 个不同合约")
+        # 当前批次统计（基于合约数量）
+        total_contracts = len(grouped)
+        
+        if should_log:
+            logger.info(f"🤔【流水线步骤5】检测到 {total_contracts} 个合约")
+        
+        cross_results = []
         
         # 合并每个合约的OKX和币安数据
         for symbol, items in grouped.items():
             try:
                 cross_data = self._merge_pair(symbol, items)
                 if cross_data:
-                    self.cross_results.append(cross_data)
-                    self.stats["successful"] += 1
-                    
+                    cross_results.append(cross_data)
             except Exception as e:
-                logger.error(f"❌【流水线步骤5】跨平台计算失败: {symbol} - {e}")
-                self.stats["failed"] += 1
+                if should_log:
+                    logger.error(f"❌【流水线步骤5】跨平台计算失败: {symbol} - {e}")
                 continue
         
-        self.stats["total_processed"] = len(platform_results)
-        self.stats["end_time"] = datetime.now().isoformat()
+        if should_log:
+            # 处理完成后，打印统计结果
+            actual_contracts = len(cross_results)
+            
+            logger.info(f"✅【流水线步骤5】Step5计算完成，共生成 {actual_contracts} 条跨平台数据")
+            
+            # 只显示当前批次的统计
+            self._log_batch_statistics(total_contracts, actual_contracts, cross_results)
+            
+            self.last_log_time = current_time
+            self.process_count = 0
         
-        # 处理完成后，打印统计结果
-        self._log_statistics()
+        self.process_count += 1
         
-        logger.info(f"✅【流水线步骤5】Step5计算完成，共生成 {len(self.cross_results)} 条跨平台数据")
-        return self.cross_results
+        return cross_results
     
-    def _log_statistics(self):
-        """打印统计结果"""
-        logger.info("📝【流水线步骤5】跨平台计算统计:")
+    def _log_batch_statistics(self, total_contracts: int, actual_contracts: int, results: List[CrossPlatformData]):
+        """打印当前批次的统计结果"""
+        logger.info("📝【流水线步骤5】当前批次合约统计:")
         
-        expected_count = self.stats["total_symbols"]
-        actual_count = len(self.cross_results)
-        
-        logger.info(f"📝【流水线步骤5】预期套利数据: {expected_count} 条")
-        logger.info(f"📝【流水线步骤5】实际套利数据: {actual_count} 条")
-        
-        if expected_count == actual_count:
-            logger.info("✅【流水线步骤5】 数据数量完美匹配")
+        if total_contracts == actual_contracts:
+            logger.info(f"✅【流水线步骤5】合约数据完美匹配: {actual_contracts}/{total_contracts} 个合约")
         else:
-            logger.warning(f"️️❌【流水线步骤5】  数据数量不匹配: 预期={expected_count}, 实际={actual_count}")
-        
-        # 统计信息
-        logger.info(f"📝【流水线步骤5】统计信息: {{'total_symbols': {self.stats['total_symbols']}, "
-                    f"'okx_missing': {self.stats['okx_missing']}, "
-                    f"'binance_missing': {self.stats['binance_missing']}}}")
+            missing_count = total_contracts - actual_contracts
+            logger.warning(f"⚠️【流水线步骤5】合约数据不完整: {actual_contracts}/{total_contracts} 个合约，缺失 {missing_count} 个合约")
         
         # 数据处理结果验证
-        self._validate_data_quality()
-        
-        # 总结
-        if actual_count > 0:
-            success_rate = (actual_count / self.stats['total_symbols']) * 100
-            logger.info(f"🎉 **恭喜！【流水线步骤5】Step5跨平台计算功能{success_rate:.1f}%正常！**")
-            logger.info(f"✅ 【流水线步骤5】成功生成 {actual_count} 条高质量套利数据")
-            logger.info("✅【流水线步骤5】 价格差、价差百分比计算准确")
-            logger.info("✅ 【流水线步骤5】双平台数据完整")
-            logger.info("✅【流水线步骤5】 倒计时和周期信息齐全")
+        if results:
+            self._validate_data_quality(results)
+            
+            # 总结
+            success_rate = (actual_contracts / total_contracts) * 100
+            logger.info(f"🎉【流水线步骤5】当前批次完成率: {success_rate:.1f}%")
+            logger.info(f"✅【流水线步骤5】成功计算 {actual_contracts} 个合约的跨平台数据")
     
-    def _validate_data_quality(self):
+    def _validate_data_quality(self, results: List[CrossPlatformData]):
         """验证数据处理结果（只做统计，不做过滤）"""
-        if not self.cross_results:
-            return
-        
-        total_count = len(self.cross_results)
+        total_count = len(results)
         
         # 统计各种计算的完整性
         price_diff_count = 0
@@ -159,7 +148,7 @@ class Step5CrossCalc:
         rate_diff_count = 0
         countdown_count = 0
         
-        for item in self.cross_results:
+        for item in results:
             if item.price_diff is not None:
                 price_diff_count += 1
             if item.price_diff_percent is not None:
@@ -169,11 +158,11 @@ class Step5CrossCalc:
             if item.okx_countdown_seconds is not None or item.binance_countdown_seconds is not None:
                 countdown_count += 1
         
-        logger.info("🔍 【流水线步骤5】数据处理结果验证")
-        logger.info(f"✅ 【流水线步骤5】价格差计算完成: {price_diff_count}/{total_count}")
-        logger.info(f"✅【流水线步骤5】价格百分比差计算完成: {price_percent_count}/{total_count}")
-        logger.info(f"✅ 【流水线步骤5】费率差计算完成: {rate_diff_count}/{total_count}")
-        logger.info(f"✅ 【流水线步骤5】倒计时计算完成: {countdown_count}/{total_count}")
+        logger.info("🔍【流水线步骤5】数据处理质量验证:")
+        logger.info(f"  • 价格差计算: {price_diff_count}/{total_count} 个合约")
+        logger.info(f"  • 价格百分比差: {price_percent_count}/{total_count} 个合约")
+        logger.info(f"  • 费率差计算: {rate_diff_count}/{total_count} 个合约")
+        logger.info(f"  • 倒计时计算: {countdown_count}/{total_count} 个合约")
     
     def _is_basic_valid(self, item: Any) -> bool:
         """只做最基础的格式验证"""
@@ -199,10 +188,6 @@ class Step5CrossCalc:
         
         # 必须两个平台都有数据
         if not okx_item or not binance_item:
-            if not okx_item:
-                self.stats["okx_missing"] += 1
-            if not binance_item:
-                self.stats["binance_missing"] += 1
             return None
         
         # 计算价格差和费率差
@@ -213,7 +198,6 @@ class Step5CrossCalc:
             
             # 如果价格无效，使用0值
             if okx_price is None or binance_price is None:
-                self.stats["price_invalid"] += 1
                 okx_price = okx_price or 0
                 binance_price = binance_price or 0
             
@@ -226,7 +210,6 @@ class Step5CrossCalc:
                     price_diff_percent = (price_diff / min_price) * 100
                 else:
                     price_diff_percent = 0.0
-                    self.stats["price_too_low"] += 1
             else:
                 price_diff_percent = 0.0
             
@@ -240,7 +223,6 @@ class Step5CrossCalc:
             rate_diff = abs(okx_rate - binance_rate)
             
         except Exception as e:
-            logger.error(f"{symbol} 计算失败: {e}")
             return None
         
         # 构建最终数据（保留所有原始值）
@@ -295,20 +277,3 @@ class Step5CrossCalc:
                 return float(cleaned)
             except:
                 return None
-    
-    def get_detailed_report(self) -> Dict[str, Any]:
-        """获取详细处理报告"""
-        if self.stats["start_time"] and self.stats["end_time"]:
-            start = datetime.fromisoformat(self.stats["start_time"])
-            end = datetime.fromisoformat(self.stats["end_time"])
-            duration = (end - start).total_seconds()
-        else:
-            duration = 0
-        
-        return {
-            "statistics": self.stats,
-            "processing_time_seconds": duration,
-            "success_rate": self.stats["successful"] / max(1, self.stats["total_symbols"]),
-            "timestamp": datetime.now().isoformat()
-        }
-        
