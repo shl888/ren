@@ -61,7 +61,7 @@ class PipelineManager:
         
         # 定时全量控制
         self.history_flowed_contracts = set()  # 已流出历史费率的合约
-        self.push_interval = 0.5  # 500ms
+        self.push_interval = 0.5  # 500ms，保持不变！
         self.push_task = None
         self.running = False
         
@@ -75,7 +75,7 @@ class PipelineManager:
         
         self.running = True
         self.push_task = asyncio.create_task(self._push_loop())
-        logger.info(f"🚀 启动定时全量推送，间隔{self.push_interval}秒")
+        logger.info(f"🚀 启动定时全量推送，间隔{self.push_interval}秒（500ms）")
     
     async def _push_loop(self):
         """定时推送循环"""
@@ -93,18 +93,22 @@ class PipelineManager:
                 logger.error(f"定时推送失败: {e}")
                 self.counters['errors'] += 1
             
-            await asyncio.sleep(self.push_interval)
+            await asyncio.sleep(self.push_interval)  # 500ms
     
     async def ingest_data(self, data: Dict[str, Any]) -> bool:
         """
         数据处理入口（由data_store调用）
+        ✅ 修改：区分账户数据和市场数据
         """
         try:
             # 快速分类
             data_type = data.get("data_type", "")
-            if data_type.startswith(("account", "position", "order", "trade")):
+            
+            # 🚨 账户/订单数据：直接推送到大脑（不经过流水线）
+            if data_type.startswith(("account_", "position", "order", "trade")):
                 await self._process_account_data(data)
             else:
+                # 📊 市场数据：走完整5步流水线
                 await self._process_market_data(data)
             
             return True
@@ -142,16 +146,16 @@ class PipelineManager:
             if not final_results:
                 return
             
-            # 推送大脑
+            # 推送大脑：成品套利数据
             if self.brain_callback:
                 for result in final_results:
                     await self.brain_callback(result.__dict__)
             
             self.counters['market_processed'] += 1
-            logger.debug(f"📊 处理完成: {data.get('symbol', 'N/A')}")
+            logger.debug(f"📊 市场数据处理完成: {data.get('symbol', 'N/A')}")
     
     async def _process_account_data(self, data: Dict[str, Any]):
-        """账户数据：直连大脑"""
+        """账户数据：直接推送到大脑"""
         if self.brain_callback:
             await self.brain_callback(data)
         
@@ -186,4 +190,3 @@ class PipelineManager:
             self.push_task.cancel()
         await asyncio.sleep(0.1)
         logger.info("✅ PipelineManager已停止")
-        
