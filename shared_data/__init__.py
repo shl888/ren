@@ -40,8 +40,8 @@ __all__ = [
 ]
 
 # 版本信息
-__version__ = "3.1.0"
-__description__ = "智能数据处理流水线模块（定时全量版）"
+__version__ = "3.0.0"
+__description__ = "智能数据处理流水线模块（流式终极版）"
 
 # 初始化日志
 import logging
@@ -49,4 +49,4 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # 模块加载日志
 logger = logging.getLogger(__name__)
-logger.info(f"✅ shared_data v{__version__} 加载完成（定时全量版）")
+logger.info(f"✅ shared_data v{__version__} 加载完成（流式终极版）")
