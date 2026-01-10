@@ -181,7 +181,7 @@ class WebSocketPoolManager:
     async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
         """方法1: 通过交易所API动态获取 - 修复版"""
         exchange = None
-        max_retries = 2  # 减少重试次数，避免触发频率限制
+        max_retries = 2  # ✅ 修改为2：只尝试2次，快速降级到静态列表
         last_error = None
         
         for attempt in range(1, max_retries + 1):
@@ -252,7 +252,7 @@ class WebSocketPoolManager:
         config = {
             'enableRateLimit': True,  # 🚀 关键：启用内置频率限制
             'timeout': 30000,         # 30秒超时
-            'rateLimit': 2000,        # 降低频率限制，更保守
+            'rateLimit': 3000,        # ✅ 修改为3000ms：更保守的频率限制
         }
         
         # 交易所特定配置
@@ -260,6 +260,7 @@ class WebSocketPoolManager:
             config.update({
                 'options': {
                     'defaultType': 'future',
+                    'fetchMarkets': ['swap'],  # ✅ 新增：只获取永续合约
                     'warnOnFetchOHLCVLimitArgument': False,
                     'adjustForTimeDifference': True,
                 }
@@ -268,7 +269,8 @@ class WebSocketPoolManager:
             config.update({
                 'options': {
                     'defaultType': 'swap',
-                    'fetchMarketDataRateLimit': 3000,  # 降低频率
+                    'fetchMarkets': ['swap'],  # ✅ 新增：显式限制只获取swap
+                    'fetchMarketDataRateLimit': 3000,
                 }
             })
         
