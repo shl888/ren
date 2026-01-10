@@ -4,6 +4,7 @@ DataStore - 执行者/执法者
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
 import logging
@@ -25,6 +26,9 @@ class DataStore:
         self.account_data = {}
         self.order_data = {}
         self.connection_status = {}
+        
+        # HTTP服务就绪状态
+        self._http_server_ready = False
         
         # 管理员规则（等待接收）
         self.rules = None
@@ -57,6 +61,17 @@ class DataStore:
         }
         
         logger.info("✅ DataStore初始化完成（执行者）")
+    
+    # ==================== HTTP服务相关方法 ====================
+    
+    def set_http_server_ready(self, ready: bool):
+        """设置HTTP服务就绪状态"""
+        self._http_server_ready = ready
+        logger.info(f"🌐 HTTP服务状态: {'就绪' if ready else '未就绪'}")
+    
+    def is_http_server_ready(self) -> bool:
+        """检查HTTP服务是否就绪"""
+        return self._http_server_ready
     
     # ==================== 接收规则 ====================
     
@@ -247,6 +262,79 @@ class DataStore:
                 'update_time': datetime.now().isoformat()
             }
     
+    async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
+        """更新连接状态"""
+        async with self.locks['connection_status']:
+            if exchange not in self.connection_status:
+                self.connection_status[exchange] = {}
+            self.connection_status[exchange][connection_type] = {
+                **status,
+                'timestamp': datetime.now().isoformat()
+            }
+    
+    # ==================== 数据查询接口（兼容原有系统） ====================
+    
+    async def get_market_data(self, exchange: str, symbol: str = None, 
+                             data_type: str = None, get_latest: bool = False) -> Dict[str, Any]:
+        """获取市场数据（兼容原有接口）"""
+        async with self.locks['market_data']:
+            if exchange not in self.market_data:
+                return {}
+            if not symbol:
+                result = {}
+                for sym, data_dict in self.market_data[exchange].items():
+                    if get_latest and 'latest' in data_dict:
+                        result[sym] = data_dict.get(data_dict['latest'], {})
+                    else:
+                        result[sym] = {k: v for k, v in data_dict.items() 
+                                     if k not in ['latest', 'store_timestamp']}
+                return result
+            if symbol not in self.market_data[exchange]:
+                return {}
+            symbol_data = self.market_data[exchange][symbol]
+            if data_type:
+                return symbol_data.get(data_type, {})
+            return {k: v for k, v in symbol_data.items() 
+                   if k not in ['latest', 'store_timestamp']}
+    
+    async def get_account_data(self, exchange: str = None) -> Dict[str, Any]:
+        """获取账户数据"""
+        async with self.locks['account_data']:
+            if exchange:
+                return self.account_data.get(exchange, {}).copy()
+            return self.account_data.copy()
+    
+    async def get_order_data(self, exchange: str = None) -> Dict[str, Any]:
+        """获取订单数据"""
+        async with self.locks['order_data']:
+            if exchange:
+                return self.order_data.get(exchange, {}).copy()
+            return self.order_data.copy()
+    
+    async def get_connection_status(self, exchange: str = None) -> Dict[str, Any]:
+        """获取连接状态"""
+        async with self.locks['connection_status']:
+            if exchange:
+                return self.connection_status.get(exchange, {}).copy()
+            return self.connection_status.copy()
+    
+    def get_market_data_stats(self) -> Dict[str, Any]:
+        """获取统计数据（兼容原有接口）"""
+        stats = {'exchanges': {}, 'total_symbols': 0, 'total_data_types': 0}
+        for exchange, symbols in self.market_data.items():
+            symbol_count = len(symbols)
+            data_type_count = sum(
+                len([k for k in v.keys() if k not in ['latest', 'store_timestamp']])
+                for v in symbols.values()
+            )
+            stats['exchanges'][exchange] = {
+                'symbols': symbol_count,
+                'data_types': data_type_count
+            }
+            stats['total_symbols'] += symbol_count
+            stats['total_data_types'] += data_type_count
+        return stats
+    
     # ==================== 状态查询 ====================
     
     async def get_execution_status(self) -> Dict[str, Any]:
@@ -293,9 +381,44 @@ class DataStore:
         if water and self.water_callback:
             await self.water_callback(water)
             logger.info(f"⚡ 强制放水完成: {len(water)} 条数据")
+    
+    async def clear_market_data(self, exchange: str = None):
+        """
+        清空市场数据（谨慎使用）
+        """
+        async with self.locks['market_data']:
+            if exchange:
+                if exchange in self.market_data:
+                    self.market_data[exchange].clear()
+                    logger.warning(f"⚠️ 已清空 {exchange} 市场数据")
+            else:
+                self.market_data["binance"].clear()
+                self.market_data["okx"].clear()
+                logger.warning("⚠️ 已清空所有市场数据")
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        健康检查
+        """
+        stats = self.get_market_data_stats()
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "market_data": {
+                "total_symbols": stats["total_symbols"],
+                "total_data_types": stats["total_data_types"],
+                "exchanges": list(stats["exchanges"].keys())
+            },
+            "account_data": {
+                "exchanges": list(self.account_data.keys())
+            },
+            "order_data": {
+                "exchanges": list(self.order_data.keys())
+            },
+            "http_server_ready": self._http_server_ready,
+            "flowing": self.flowing
+        }
 
 # 全局实例
 data_store = DataStore()
-
-# 导入time模块
-import time
