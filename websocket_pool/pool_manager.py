@@ -245,7 +245,7 @@ class WebSocketPoolManager:
         return []
     
     def _create_exchange_instance(self, exchange_name: str):
-        """安全创建交易所实例"""
+        """安全创建交易所实例 - 修复版"""
         exchange_class = getattr(ccxt_async, exchange_name)
         
         # 基础配置
@@ -259,18 +259,18 @@ class WebSocketPoolManager:
         if exchange_name == "binance":
             config.update({
                 'options': {
-                    'defaultType': 'future',
-                    'fetchMarkets': ['swap'],  # ✅ 新增：只获取永续合约
+                    'defaultType': 'swap',  # ✅ 修正：使用'swap'获取永续合约
+                    'defaultSubType': 'linear',  # ✅ 线性合约
+                    'adjustedForTimeDifference': True,  # ✅ 修正拼写
                     'warnOnFetchOHLCVLimitArgument': False,
-                    'adjustForTimeDifference': True,
+                    'recvWindow': 60000,  # ✅ 添加接收窗口
                 }
             })
         elif exchange_name == "okx":
             config.update({
                 'options': {
-                    'defaultType': 'swap',
-                    'fetchMarkets': ['swap'],  # ✅ 新增：显式限制只获取swap
-                    'fetchMarketDataRateLimit': 3000,
+                    'defaultType': 'swap',  # ✅ 确保只获取永续合约
+                    'adjustedForTimeDifference': True,  # ✅ 统一参数名
                 }
             })
         
@@ -318,34 +318,30 @@ class WebSocketPoolManager:
                 symbol_upper = symbol.upper()
                 
                 if exchange_name == "binance":
-                    # 币安合约转换 - 解决重复USDT
-                    is_perpetual = market.get('swap', False) or market.get('linear', False)
+                    # 币安合约转换 - 简化版（已经通过defaultType: 'swap'过滤）
                     is_active = market.get('active', False)
                     is_usdt = '/USDT' in symbol_upper
                     
-                    if is_perpetual and is_active and is_usdt:
-                        # 暴力提取基础币种名
-                        # 格式可能是: BTC/USDT 或 BTC/USDT:USDT
-                        parts = symbol_upper.split('/')
-                        if len(parts) >= 2:
-                            base_symbol = parts[0]  # BTC部分
-                            
-                            # 清理base_symbol中可能存在的:USDT
-                            if ':USDT' in base_symbol:
-                                base_symbol = base_symbol.split(':')[0]
-                            
-                            # 组成最终合约名
-                            clean_symbol = f"{base_symbol}USDT"
-                            
-                            # 最终检查：确保没有重复USDT
-                            if clean_symbol.endswith('USDTUSDT'):
-                                clean_symbol = clean_symbol[:-4]  # 去掉一个USDT
-                            
-                            all_usdt_symbols.append(clean_symbol)
-                            
-                            # 调试：记录前几个合约的转换
-                            if len(all_usdt_symbols) <= 3:
-                                logger.info(f"🤔【连接池】币安合约转换示例: {symbol} → {clean_symbol}")
+                    if is_active and is_usdt:
+                        # 直接提取基础币种
+                        base_symbol = symbol_upper.split('/')[0]
+                        
+                        # 清理可能的:USDT后缀
+                        if ':USDT' in base_symbol:
+                            base_symbol = base_symbol.split(':')[0]
+                        
+                        # 组成最终合约名
+                        clean_symbol = f"{base_symbol}USDT"
+                        
+                        # 避免重复USDT
+                        if clean_symbol.endswith('USDTUSDT'):
+                            clean_symbol = clean_symbol[:-4]
+                        
+                        all_usdt_symbols.append(clean_symbol)
+                        
+                        # 调试：记录前几个合约的转换
+                        if len(all_usdt_symbols) <= 3:
+                            logger.info(f"🤔【连接池】币安合约转换示例: {symbol} → {clean_symbol}")
                         
                 elif exchange_name == "okx":
                     # OKX合约转换 - 更稳健的判断
