@@ -327,7 +327,7 @@ class DataStore:
                 'data_types': data_type_count
             }
             stats['total_symbols'] += symbol_count
-            stats['total_data_types"] += data_type_count
+            stats['total_data_types'] += data_type_count
         return stats
     
     # ==================== 状态查询 ====================
