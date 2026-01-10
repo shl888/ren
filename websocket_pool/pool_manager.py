@@ -89,6 +89,8 @@ class WebSocketPoolManager:
         self.initialized = False
         self._initializing = False
         self._shutting_down = False
+        self._common_symbols_cache = None  # ✅ 新增：双平台合约缓存
+        self._last_symbols_update = 0  # ✅ 新增：上次更新时间
         
         logger.info("✅ WebSocketPoolManager 【连接池】初始化完成")
         logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
@@ -110,7 +112,7 @@ class WebSocketPoolManager:
         exchange_tasks = []
         for exchange_name in ["binance", "okx"]:
             if exchange_name in EXCHANGE_CONFIGS:
-                task = asyncio.create_task(self._setup_exchange_pool(exchange_name))
+                task = asyncio.create_task(self._setup_exchange_pool_optimized(exchange_name))
                 exchange_tasks.append(task)
         
         # 等待所有交易所初始化完成
@@ -122,22 +124,24 @@ class WebSocketPoolManager:
         logger.info("✅ WebSocket连接池管理器初始化完成")
         logger.info(f"{'=' * 60}")
     
-    async def _setup_exchange_pool(self, exchange_name: str):
-        """设置单个交易所连接池"""
+    async def _setup_exchange_pool_optimized(self, exchange_name: str):
+        """设置单个交易所连接池 - 优化版：只订阅双平台共有合约"""
         try:
-            # 1. 获取合约列表
-            logger.info(f"[{exchange_name}] 🌎【连接池】获取合约列表中...")
-            symbols = await self._fetch_exchange_symbols(exchange_name)
+            # 1. 获取双平台共有合约列表
+            logger.info(f"[{exchange_name}] 🌎【连接池】获取双平台共有合约列表中...")
+            common_symbols = await self._get_common_symbols()
+            
+            if not common_symbols or exchange_name not in common_symbols:
+                logger.warning(f"[{exchange_name}] ❌【连接池】双平台过滤失败，使用单平台合约列表")
+                return await self._setup_exchange_pool_fallback(exchange_name)
+            
+            symbols = common_symbols[exchange_name]
             
             if not symbols:
-                logger.warning(f"[{exchange_name}] ❌❌❌【连接池】API获取失败，使用静态合约列表")
+                logger.warning(f"[{exchange_name}] ❌【连接池】该交易所在双平台名单中没有合约")
                 symbols = self._get_static_symbols(exchange_name)
             
-            if not symbols:
-                logger.error(f"[{exchange_name}] ❌❌❌【连接池】无法获取任何合约，跳过该交易所")
-                return
-            
-            logger.info(f"[{exchange_name}] ✅✅✅【连接池】成功获取 {len(symbols)} 个合约")
+            logger.info(f"[{exchange_name}] ✅✅✅【连接池】成功获取 {len(symbols)} 个双平台共有合约")
             
             # 2. 限制合约数量（基于活跃连接数计算）
             active_connections = EXCHANGE_CONFIGS[exchange_name].get("active_connections", 3)
@@ -155,12 +159,181 @@ class WebSocketPoolManager:
             await pool.initialize(symbols)
             self.exchange_pools[exchange_name] = pool
             
-            logger.info(f"✅ [{exchange_name}] 连接池初始化成功")
+            logger.info(f"✅ [{exchange_name}] 连接池初始化成功（双平台优化模式）")
             
         except Exception as e:
             logger.error(f"[{exchange_name}] ❌【连接池】设置失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
+    
+    async def _get_common_symbols(self, force_refresh: bool = False) -> Dict[str, List[str]]:
+        """获取双平台共有合约 - 带缓存"""
+        current_time = time.time()
+        
+        # 检查缓存是否有效（1小时有效期）
+        if (not force_refresh and 
+            self._common_symbols_cache is not None and 
+            current_time - self._last_symbols_update < 3600):
+            logger.info("📦【连接池】【双平台过滤】使用缓存的共有合约列表")
+            return self._common_symbols_cache
+        
+        logger.info("🔄【连接池】【双平台过滤】开始计算双平台共有合约...")
+        
+        # 存储各交易所的原始合约列表
+        all_symbols = {}
+        
+        try:
+            # 1. 并行获取所有交易所的合约
+            tasks = []
+            for exchange_name in ["binance", "okx"]:
+                task = asyncio.create_task(self._fetch_exchange_symbols_single(exchange_name))
+                tasks.append((exchange_name, task))
+            
+            # 等待所有任务完成
+            for exchange_name, task in tasks:
+                try:
+                    symbols = await task
+                    all_symbols[exchange_name] = symbols
+                    logger.info(f"✅【连接池】【双平台过滤】{exchange_name} 获取到 {len(symbols)} 个原始合约")
+                except Exception as e:
+                    logger.error(f"❌【连接池】【双平台过滤】{exchange_name} 获取合约失败: {e}")
+                    # 降级到静态列表
+                    all_symbols[exchange_name] = self._get_static_symbols(exchange_name)
+            
+            # 2. 计算双平台共有合约
+            if "binance" in all_symbols and "okx" in all_symbols:
+                # 标准化币安合约格式（去除可能的后缀）
+                binance_standard = self._standardize_binance_symbols(all_symbols["binance"])
+                okx_standard = self._standardize_okx_symbols(all_symbols["okx"])
+                
+                # 找出共有合约（基于标准化后的格式）
+                binance_set = set(binance_standard.keys())
+                okx_set = set(okx_standard.keys())
+                
+                common_base_symbols = binance_set.intersection(okx_set)
+                
+                if common_base_symbols:
+                    logger.info(f"🎯【连接池】【双平台过滤】发现 {len(common_base_symbols)} 个双平台共有合约")
+                    
+                    # 为每个平台生成对应的合约名
+                    result = {}
+                    
+                    # 币安：使用原始格式
+                    binance_common = []
+                    for base_symbol in common_base_symbols:
+                        original_symbol = binance_standard[base_symbol]
+                        binance_common.append(original_symbol)
+                    
+                    # OKX：使用原始格式
+                    okx_common = []
+                    for base_symbol in common_base_symbols:
+                        original_symbol = okx_standard[base_symbol]
+                        okx_common.append(original_symbol)
+                    
+                    result["binance"] = sorted(binance_common)
+                    result["okx"] = sorted(okx_common)
+                    
+                    # 缓存结果
+                    self._common_symbols_cache = result
+                    self._last_symbols_update = current_time
+                    
+                    # 打印统计信息
+                    logger.info(f"📊【连接池】【双平台过滤】币安双平台合约: {len(result['binance'])} 个")
+                    logger.info(f"📊【连接池】【双平台过滤】OKX双平台合约: {len(result['okx'])} 个")
+                    
+                    # 打印前10个共有合约示例
+                    sample_common = sorted(list(common_base_symbols))[:10]
+                    logger.info(f"🔍【连接池】【双平台过滤】前10个共有合约: {sample_common}")
+                    
+                    return result
+                else:
+                    logger.error("❌❌❌【连接池】【双平台过滤】未找到任何双平台共有合约！")
+            else:
+                logger.error("❌❌❌【连接池】【双平台过滤】无法获取所有交易所合约列表")
+        
+        except Exception as e:
+            logger.error(f"❌【连接池】【双平台过滤】计算共有合约失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        # 失败时返回空
+        return {}
+    
+    def _standardize_binance_symbols(self, symbols: List[str]) -> Dict[str, str]:
+        """标准化币安合约格式 -> 基础币种名: 原始合约名"""
+        standardized = {}
+        for symbol in symbols:
+            # 币安格式: BTCUSDT, ETHUSDT, 1000SHIBUSDT
+            if symbol.endswith('USDT'):
+                base_symbol = symbol[:-4]  # 去掉USDT
+                standardized[base_symbol] = symbol
+        return standardized
+    
+    def _standardize_okx_symbols(self, symbols: List[str]) -> Dict[str, str]:
+        """标准化OKX合约格式 -> 基础币种名: 原始合约名"""
+        standardized = {}
+        for symbol in symbols:
+            # OKX格式: BTC-USDT-SWAP, ETH-USDT-SWAP
+            if '-USDT-SWAP' in symbol:
+                # 提取基础币种: BTC-USDT-SWAP -> BTC
+                parts = symbol.split('-')
+                if len(parts) >= 1:
+                    base_symbol = parts[0]  # BTC部分
+                    standardized[base_symbol] = symbol
+        return standardized
+    
+    async def _fetch_exchange_symbols_single(self, exchange_name: str) -> List[str]:
+        """单独获取某个交易所的合约列表（不降级）"""
+        try:
+            # 使用原来的API获取方法
+            symbols = await self._fetch_symbols_via_api(exchange_name)
+            if not symbols:
+                # 如果API失败，使用静态列表
+                symbols = self._get_static_symbols(exchange_name)
+            
+            logger.debug(f"[{exchange_name}] 获取到 {len(symbols)} 个合约")
+            return symbols
+        except Exception as e:
+            logger.error(f"[{exchange_name}] 获取合约失败: {e}")
+            return []
+    
+    async def _setup_exchange_pool_fallback(self, exchange_name: str):
+        """降级方案：使用原来的单平台逻辑"""
+        logger.warning(f"[{exchange_name}] ⚠️ 使用单平台合约列表（降级模式）")
+        
+        symbols = await self._fetch_exchange_symbols(exchange_name)
+        
+        if not symbols:
+            logger.warning(f"[{exchange_name}] ❌❌❌【连接池】API获取失败，使用静态合约列表")
+            symbols = self._get_static_symbols(exchange_name)
+        
+        if not symbols:
+            logger.error(f"[{exchange_name}] ❌❌❌【连接池】无法获取任何合约，跳过该交易所")
+            return
+        
+        logger.info(f"[{exchange_name}] ⚠️【连接池】降级模式获取 {len(symbols)} 个合约")
+        
+        # 限制合约数量
+        active_connections = EXCHANGE_CONFIGS[exchange_name].get("active_connections", 3)
+        symbols_per_conn = EXCHANGE_CONFIGS[exchange_name].get("symbols_per_connection", 300)
+        max_symbols = symbols_per_conn * active_connections
+        
+        if len(symbols) > max_symbols:
+            logger.info(f"[{exchange_name}] 🤔【连接池】合约数量 {len(symbols)} > 限制 {max_symbols}，进行裁剪")
+            symbols = symbols[:max_symbols]
+        
+        # 初始化连接池
+        pool = ExchangeWebSocketPool(exchange_name, self.data_callback, self.admin_instance)
+        await pool.initialize(symbols)
+        self.exchange_pools[exchange_name] = pool
+        
+        logger.info(f"✅ [{exchange_name}] 连接池初始化成功（降级模式）")
+    
+    # ============ 以下为原始方法，保持不变 ============
+    
+    async def _setup_exchange_pool(self, exchange_name: str):
+        """原始方法 - 保持兼容性"""
+        return await self._setup_exchange_pool_optimized(exchange_name)
     
     async def _fetch_exchange_symbols(self, exchange_name: str) -> List[str]:
         """获取交易所的合约列表 - 增强稳健版"""
@@ -472,3 +645,28 @@ class WebSocketPoolManager:
                 logger.error(f"❌【连接池】[{exchange_name}] 关闭连接池错误: {e}")
         
         logger.info("✅ 【连接池】所有WebSocket连接池已关闭")
+    
+    # ============ 新增方法：双平台合约管理 ============
+    
+    async def refresh_common_symbols(self, force: bool = False):
+        """手动刷新双平台共有合约列表"""
+        logger.info("🔄【连接池】手动刷新双平台共有合约列表...")
+        await self._get_common_symbols(force_refresh=force)
+        logger.info("✅【连接池】双平台共有合约列表已刷新")
+    
+    def get_common_symbols_stats(self) -> Dict[str, Any]:
+        """获取双平台合约统计信息"""
+        if not self._common_symbols_cache:
+            return {"status": "未计算", "binance_count": 0, "okx_count": 0}
+        
+        return {
+            "status": "已计算",
+            "binance_count": len(self._common_symbols_cache.get("binance", [])),
+            "okx_count": len(self._common_symbols_cache.get("okx", [])),
+            "last_update": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(self._last_symbols_update)),
+            "cache_age_seconds": int(time.time() - self._last_symbols_update),
+            "sample_symbols": {
+                "binance": self._common_symbols_cache.get("binance", [])[:5],
+                "okx": self._common_symbols_cache.get("okx", [])[:5],
+            }
+        }
