@@ -55,24 +55,68 @@ class BrainCore:
         signal.signal(signal.SIGTERM, self.handle_signal)
     
     async def receive_processed_data(self, processed_data):
-        """🚨 大脑接收data_store过滤后的成品数据"""
+        """
+        🚨 大脑接收两种数据：
+        1. 成品数据：来自PipelineManager的Step5（套利分析数据）
+        2. 原始数据：来自DataStore直接推送（账户、订单、交易数据）
+        """
         try:
             data_type = processed_data.get('data_type', 'unknown')
             exchange = processed_data.get('exchange', 'unknown')
             symbol = processed_data.get('symbol', 'unknown')
             
-            if data_type.startswith('account_') or data_type in ['order', 'trade']:
-                logger.info(f"💰 账户/订单成品数据: {exchange}.{symbol} ({data_type})")
+            # 🔍 判断数据来源
+            # 📊 类型1：成品数据（套利分析）- 有price_diff或rate_diff字段
+            if 'price_diff' in processed_data or 'rate_diff' in processed_data:
+                logger.info(f"🎯 套利成品数据: {exchange}.{symbol} | "
+                           f"价差: {processed_data.get('price_diff', 0):.2f} | "
+                           f"费率差: {processed_data.get('rate_diff', 0):.6f}")
+                await self._handle_arbitrage_decision(processed_data)
+            
+            # 💰 类型2：账户数据
+            elif data_type.startswith('account_'):
+                logger.info(f"💰 账户数据: {exchange} | 类型: {data_type}")
+                await self._update_account_balance(processed_data)
+            
+            # 📝 类型3：订单数据
+            elif data_type == 'order':
+                logger.info(f"📝 订单数据: {exchange}.{symbol} | ID: {processed_data.get('order_id', 'N/A')}")
+                await self._update_order_status(processed_data)
+            
+            # 📈 类型4：其他市场数据（默认记录）
             else:
-                # 🚨 只记录重要数据，避免日志过多
-                if data_type in ['套利信号', '资金费率套利']:  # 只记录关键成品数据
-                    logger.info(f"🎯 关键套利成品数据: {exchange}.{symbol} ({data_type})")
+                # 只记录重要数据，避免日志过多
+                if data_type in ['套利信号', '资金费率套利']:
+                    logger.info(f"🎯 关键市场数据: {exchange}.{symbol} ({data_type})")
                 else:
-                    # 普通市场数据不记录，避免日志过多
-                    logger.debug(f"📊 市场数据: {exchange}.{symbol} ({data_type})")
+                    logger.debug(f"📈 普通市场数据: {exchange}.{symbol} ({data_type})")
                     
         except Exception as e:
             logger.error(f"接收数据错误: {e}")
+            logger.debug(f"错误数据: {processed_data}")
+    
+    async def _handle_arbitrage_decision(self, arbitrage_data: dict):
+        """处理套利决策"""
+        # 这里添加套利逻辑
+        symbol = arbitrage_data.get('symbol', 'unknown')
+        price_diff = arbitrage_data.get('price_diff', 0)
+        
+        # 示例逻辑：价差超过阈值时记录
+        if price_diff > 10:  # 阈值可以根据需要调整
+            logger.warning(f"⚠️ 检测到套利机会: {symbol} 价差 {price_diff:.2f}")
+            # 这里可以触发交易逻辑
+    
+    async def _update_account_balance(self, account_data: dict):
+        """更新账户余额"""
+        # 这里添加账户更新逻辑
+        exchange = account_data.get('exchange', 'unknown')
+        logger.debug(f"更新{exchange}账户信息")
+    
+    async def _update_order_status(self, order_data: dict):
+        """更新订单状态"""
+        # 这里添加订单更新逻辑
+        order_id = order_data.get('order_id', 'unknown')
+        logger.debug(f"更新订单状态: {order_id}")
     
     async def initialize(self):
         """初始化 - 流式终极版"""
@@ -103,12 +147,12 @@ class BrainCore:
             # 4. 初始化PipelineManager并设置回调
             logger.info("【4️⃣】初始化PipelineManager（流式终极版）...")
             self.pipeline_manager = PipelineManager(
-                brain_callback=self.receive_processed_data
+                brain_callback=self.receive_processed_data  # ✅ 设置大脑回调
             )
             await self.pipeline_manager.start()
             
-            # ✅ 关键修复：同时设置DataStore的回调
-            data_store.set_brain_callback(self.receive_processed_data)
+            # 🚨 重要：删除错误的回调设置
+            # ❌ 删除这行：data_store.set_brain_callback(self.receive_processed_data)
             
             logger.info("✅ 流水线管理员启动完成！")
             
