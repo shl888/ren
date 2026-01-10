@@ -82,7 +82,7 @@ class BrainCore:
         logger.info("=" * 60)
         
         # 🚨【临时关闭shared_data日志】- 要恢复日志请注释掉这一行
-        logging.getLogger('shared_data').setLevel(logging.ERROR)
+       # logging.getLogger('shared_data').setLevel(logging.ERROR)
         
         try:
             # 1. 创建HTTP服务器
