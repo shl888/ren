@@ -207,15 +207,24 @@ class DataStore:
                                 self.execution_records["binance_history"]["history_complete"] = True
                                 logger.info(f"🎉 按规则完成：币安历史费率已流过 {flowed_count} 个合约（阈值 {threshold}）")
                         
-                        # ==================== 添加到水 ====================
-                        water.append({
+                        # ==================== 修复：构建正确的数据格式 ====================
+                        water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'data': data,
-                            'store_timestamp': data.get('store_timestamp', datetime.now().isoformat())
-                        })
+                            'raw_data': data.get('raw_data', data),  # ✅ 关键修复：必须是raw_data
+                            'timestamp': data.get('timestamp'),
+                            'priority': 5  # ✅ 保持和原版一致
+                        }
+                        
+                        # 调试：确保有raw_data
+                        if not water_item['raw_data']:
+                            logger.warning(f"⚠️ 数据缺少有效raw_data: {exchange}.{symbol}.{data_type}")
+                            continue
+                        
+                        water.append(water_item)
         
+        logger.info(f"💧 按规则收集到 {len(water)} 条数据")
         return water
     
     # ==================== 数据接收接口 ====================
