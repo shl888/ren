@@ -25,8 +25,10 @@ class Step1Filter:
         self.stats = defaultdict(int)
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
-        logger.info(f"开始处理 {len(raw_items)} 条原始数据...")
+        logger.info(f"🔄【流水线步骤1】开始处理 {len(raw_items)} 条原始数据...")
         results = []
+        
+        # 批量处理，不打印每条数据的处理日志
         for item in raw_items:
             try:
                 extracted = self._extract_item(item)
@@ -34,10 +36,26 @@ class Step1Filter:
                     results.append(extracted)
                     self.stats[extracted.data_type] += 1
             except Exception as e:
-                logger.error(f"提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
+                # 只打印错误日志，正常处理过程不打印
+                logger.error(f"❌【流水线步骤1】提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
                 continue
-        logger.info(f"Step1过滤完成: {dict(self.stats)}")
+        
+        # 处理完成后，打印统计结果
+        self._log_statistics()
+        
+        logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条数据")
         return results
+    
+    def _log_statistics(self):
+        """打印统计结果"""
+        if not self.stats:
+            logger.info("❌【流水线步骤1】未提取到任何数据")
+            return
+        
+        logger.info("📝【流水线步骤1】提取结果统计:")
+        for data_type, count in sorted(self.stats.items()):
+            # 使用缩进显示，类似示例格式
+            logger.info(f"  {data_type}: {count} 条")
     
     def _traverse_path(self, data: Any, path: List[Any]) -> Any:
         """遍历路径获取数据"""
@@ -61,7 +79,8 @@ class Step1Filter:
         type_key = "binance_funding_settlement" if data_type == "funding_settlement" else f"{exchange}_{data_type}"
         
         if type_key not in self.FIELD_MAP:
-            logger.warning(f"未知数据类型: {type_key}")
+            # 只在遇到未知类型时打印警告，而不是每条数据都打印
+            logger.warning(f"⚠️【流水线步骤1】未知数据类型: {type_key}")
             return None
         
         config = self.FIELD_MAP[type_key]
@@ -73,7 +92,7 @@ class Step1Filter:
         
         # 增加空值检查
         if data_source is None:
-            logger.warning(f"{type_key} 数据路径失败: {path}")
+            # 不再为每条空值数据打印警告，减少日志刷屏
             return None
         
         # 统一的字段提取逻辑

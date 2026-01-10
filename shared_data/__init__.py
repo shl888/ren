@@ -1,15 +1,12 @@
 """
-shared_data 顶级模块
-功能：数据存储 + 智能流水线 + 5步过滤
+shared_data 顶级模块 - 管理员-执行者架构
 """
 
 # 核心实例
-from .data_store import data_store  # 全局数据存储
+from .data_store import data_store  # 执行者
+from .pipeline_manager import PipelineManager  # 管理员
 
-# 管理员（主要接口）
-from .pipeline_manager import PipelineManager  # 仅保留PipelineManager
-
-# 5个步骤类（高级调试用）
+# 5个步骤类
 from .step1_filter import Step1Filter, ExtractedData
 from .step2_fusion import Step2Fusion, FusedData
 from .step3_align import Step3Align, AlignedData
@@ -20,8 +17,6 @@ from .step5_cross_calc import Step5CrossCalc, CrossPlatformData
 __all__ = [
     # 核心实例
     'data_store',
-    
-    # 管理员
     'PipelineManager',
     
     # 5个步骤类
@@ -40,8 +35,8 @@ __all__ = [
 ]
 
 # 版本信息
-__version__ = "3.0.0"
-__description__ = "智能数据处理流水线模块（流式终极版）"
+__version__ = "4.0.0"
+__description__ = "管理员-执行者架构数据处理系统"
 
 # 初始化日志
 import logging
@@ -49,4 +44,4 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # 模块加载日志
 logger = logging.getLogger(__name__)
-logger.info(f"✅ shared_data v{__version__} 加载完成（流式终极版）")
+logger.info(f"✅ shared_data v{__version__} 加载完成（管理员-执行者架构）")
