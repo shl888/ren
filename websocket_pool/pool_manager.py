@@ -179,9 +179,9 @@ class WebSocketPoolManager:
         return symbols
     
     async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
-        """方法1: 通过交易所API动态获取 - 修复版"""
+        """方法1: 通过交易所API动态获取 - 修复连接泄漏版"""
         exchange = None
-        max_retries = 2  # ✅ 修改为2：只尝试2次，快速降级到静态列表
+        max_retries = 2
         last_error = None
         
         for attempt in range(1, max_retries + 1):
@@ -197,6 +197,9 @@ class WebSocketPoolManager:
                 
                 if not markets:
                     logger.warning(f"[{exchange_name}] 获取市场数据失败，返回空")
+                    # ✅ 确保即使失败也关闭连接
+                    if exchange:
+                        await self._safe_close_exchange(exchange, exchange_name)
                     continue
                 
                 # 3. 处理和筛选合约
@@ -204,10 +207,7 @@ class WebSocketPoolManager:
                 
                 # 4. 正确关闭交易所实例
                 if exchange:
-                    try:
-                        await exchange.close()
-                    except Exception as e:
-                        logger.debug(f"[{exchange_name}] 关闭交易所实例异常: {e}")
+                    await self._safe_close_exchange(exchange, exchange_name)
                 
                 if filtered_symbols:
                     logger.info(f"[{exchange_name}] ✅【连接池】成功获取 {len(filtered_symbols)} 个合约")
@@ -215,62 +215,82 @@ class WebSocketPoolManager:
                     
             except ccxt_async.RateLimitExceeded as e:
                 last_error = f"频率限制: {e}"
-                wait_time = 10 * attempt  # 指数退避，更长的等待时间
+                wait_time = 10 * attempt
                 logger.warning(f'❌【连接池】[{exchange_name}] 频率限制，{wait_time}秒后重试')
+                
+                # ✅ 异常时也要关闭连接
+                if exchange:
+                    await self._safe_close_exchange(exchange, exchange_name)
+                    
                 await asyncio.sleep(wait_time)
                 
             except ccxt_async.DDoSProtection as e:
                 last_error = f"DDoS保护: {e}"
-                wait_time = 15 * attempt  # 更长的等待时间
+                wait_time = 15 * attempt
                 logger.warning(f'❌【连接池】[{exchange_name}] DDoS保护触发，{wait_time}秒后重试')
+                
+                # ✅ 异常时也要关闭连接
+                if exchange:
+                    await self._safe_close_exchange(exchange, exchange_name)
+                    
                 await asyncio.sleep(wait_time)
                 
             except Exception as e:
                 last_error = str(e)
+                
+                # ✅ 异常时也要关闭连接
+                if exchange:
+                    await self._safe_close_exchange(exchange, exchange_name)
+                    
                 if attempt < max_retries:
                     wait_time = 5 * attempt
                     logger.warning(f'❌【连接池】[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {last_error}')
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error(f'❌【连接池】[{exchange_name}] 所有尝试均失败: {last_error}')
-            finally:
-                # 确保在异常时也尝试关闭
-                if exchange:
-                    try:
-                        await exchange.close()
-                    except:
-                        pass
         
         logger.error(f'❌【连接池】[{exchange_name}] 所有尝试均失败，最后错误: {last_error}')
         return []
     
+    async def _safe_close_exchange(self, exchange, exchange_name: str):
+        """安全关闭交易所实例，防止连接泄漏"""
+        try:
+            if exchange and hasattr(exchange, 'close'):
+                await exchange.close()
+                logger.debug(f"[{exchange_name}] ✅ 交易所实例已正确关闭")
+        except Exception as e:
+            logger.warning(f"[{exchange_name}] ⚠️ 关闭交易所实例时出错: {e}")
+    
     def _create_exchange_instance(self, exchange_name: str):
-        """安全创建交易所实例 - 修复版"""
+        """安全创建交易所实例 - 修正版"""
         exchange_class = getattr(ccxt_async, exchange_name)
         
         # 基础配置
         config = {
             'enableRateLimit': True,  # 🚀 关键：启用内置频率限制
             'timeout': 30000,         # 30秒超时
-            'rateLimit': 3000,        # ✅ 修改为3000ms：更保守的频率限制
+            'rateLimit': 2000,        # 降低频率限制，更保守
         }
         
-        # 交易所特定配置
+        # 交易所特定配置 - ✅ 修正币安配置
         if exchange_name == "binance":
             config.update({
                 'options': {
                     'defaultType': 'swap',  # ✅ 修正：使用'swap'获取永续合约
-                    'defaultSubType': 'linear',  # ✅ 线性合约
-                    'adjustedForTimeDifference': True,  # ✅ 修正拼写
+                    'defaultSubType': 'linear',  # ✅ 明确指定线性合约
+                    'adjustedForTimeDifference': True,  # ✅ 修正拼写错误
                     'warnOnFetchOHLCVLimitArgument': False,
                     'recvWindow': 60000,  # ✅ 添加接收窗口
+                    'cacheMarkets': True,  # ✅ 启用缓存减少API调用
+                    'cacheTime': 1800,     # ✅ 30分钟缓存
                 }
             })
         elif exchange_name == "okx":
             config.update({
                 'options': {
-                    'defaultType': 'swap',  # ✅ 确保只获取永续合约
+                    'defaultType': 'swap',
                     'adjustedForTimeDifference': True,  # ✅ 统一参数名
+                    'fetchMarketDataRateLimit': 3000,  # 降低频率
                 }
             })
         
@@ -309,7 +329,7 @@ class WebSocketPoolManager:
             return None
     
     def _filter_and_format_symbols(self, exchange_name: str, markets: dict) -> List[str]:
-        """统一的合约筛选与格式化逻辑"""
+        """统一的合约筛选与格式化逻辑 - 支持1000开头合约"""
         all_usdt_symbols = []
         logger.info(f"🤔【连接池】[{exchange_name}] 分析市场中...")
         
@@ -318,30 +338,42 @@ class WebSocketPoolManager:
                 symbol_upper = symbol.upper()
                 
                 if exchange_name == "binance":
-                    # 币安合约转换 - 简化版（已经通过defaultType: 'swap'过滤）
+                    # 币安合约转换 - 保持完整的过滤条件
+                    is_perpetual = market.get('swap', False) or market.get('linear', False) or market.get('future', False)
                     is_active = market.get('active', False)
                     is_usdt = '/USDT' in symbol_upper
                     
-                    if is_active and is_usdt:
-                        # 直接提取基础币种
-                        base_symbol = symbol_upper.split('/')[0]
+                    # ✅ 保持所有三个过滤条件
+                    if is_perpetual and is_active and is_usdt:
+                        # 🚨 改进：更健壮的合约名提取逻辑
+                        # 处理格式: BTC/USDT, BTC/USDT:USDT, 1000SHIB/USDT:USDT
                         
-                        # 清理可能的:USDT后缀
-                        if ':USDT' in base_symbol:
-                            base_symbol = base_symbol.split(':')[0]
+                        # 1. 先去掉可能的:USDT后缀
+                        clean_symbol = symbol_upper.replace(':USDT', '')
                         
-                        # 组成最终合约名
-                        clean_symbol = f"{base_symbol}USDT"
-                        
-                        # 避免重复USDT
-                        if clean_symbol.endswith('USDTUSDT'):
-                            clean_symbol = clean_symbol[:-4]
-                        
-                        all_usdt_symbols.append(clean_symbol)
-                        
-                        # 调试：记录前几个合约的转换
-                        if len(all_usdt_symbols) <= 3:
-                            logger.info(f"🤔【连接池】币安合约转换示例: {symbol} → {clean_symbol}")
+                        # 2. 确保格式是 XXX/USDT
+                        if '/USDT' in clean_symbol:
+                            # 提取基础币种
+                            base_part = clean_symbol.split('/USDT')[0]
+                            
+                            # 3. 如果base_part包含斜杠（异常情况），取最后一部分
+                            if '/' in base_part:
+                                base_part = base_part.split('/')[-1]
+                            
+                            # 4. 组成最终合约名
+                            final_symbol = f"{base_part}USDT"
+                            
+                            # 5. 最终清理：确保没有重复USDT
+                            if final_symbol.endswith('USDTUSDT'):
+                                final_symbol = final_symbol[:-4]  # 去掉一个USDT
+                            
+                            # 6. 验证：确保不是空的和合理长度
+                            if final_symbol and len(final_symbol) >= 4:
+                                all_usdt_symbols.append(final_symbol)
+                                
+                                # 调试：记录前几个合约的转换
+                                if len(all_usdt_symbols) <= 5:
+                                    logger.info(f"🤔【连接池】币安合约转换: {symbol} → {final_symbol}")
                         
                 elif exchange_name == "okx":
                     # OKX合约转换 - 更稳健的判断
@@ -386,6 +418,11 @@ class WebSocketPoolManager:
             
             # 打印前10个合约验证格式
             logger.info(f"🔍【连接池】[{exchange_name}] 前10个合约示例: {symbols[:10]}")
+            
+            # 特别检查1000开头的合约
+            thousand_symbols = [s for s in symbols if s.startswith('1000')]
+            if thousand_symbols:
+                logger.info(f"🔍【连接池】[{exchange_name}] 包含 {len(thousand_symbols)} 个1000开头合约: {thousand_symbols[:5]}...")
         else:
             logger.warning(f"⚠️⚠️⚠️⚠️⚠️【连接池】[{exchange_name}] 未找到USDT永续合约")
             # 打印一些市场信息帮助调试
