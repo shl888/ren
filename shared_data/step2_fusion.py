@@ -1,34 +1,19 @@
 """
-第二步：数据融合（状态机版）
-功能：将Step1提取的数据，按交易所+合约名合并成一条
-核心：历史费率由步骤1控制，这里只做正常融合
-优化：批量日志，避免刷屏
+第二步：数据融合与统一规格
+功能：将Step1提取的5种数据源，按交易所+合约名合并成一条
+输出：每个交易所每个合约一条完整数据
 """
 
 import logging
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from collections import defaultdict
 from dataclasses import dataclass
-import time
 
+# 类型检查时导入，避免循环依赖
 if TYPE_CHECKING:
     from step1_filter import ExtractedData
 
 logger = logging.getLogger(__name__)
-
-def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
-    """统一的数据处理日志格式"""
-    prefix = f"[数据处理][{module}][{action}]"
-    full_message = f"{prefix} {message}"
-    
-    if level == "INFO":
-        logger.info(full_message)
-    elif level == "ERROR":
-        logger.error(full_message)
-    elif level == "WARNING":
-        logger.warning(full_message)
-    elif level == "DEBUG":
-        logger.debug(full_message)
 
 @dataclass 
 class FusedData:
@@ -43,207 +28,142 @@ class FusedData:
     next_settlement_time: Optional[int] = None      # OKX提供
 
 class Step2Fusion:
-    """第二步：数据融合（状态机版）"""
+    """第二步：数据融合"""
     
     def __init__(self):
-        # ✅ 状态缓存：按交易所+symbol缓存不同类型的数据
-        self.state_cache = {}  # key: f"{exchange}_{symbol}" -> {"ticker": item, "funding": item, "last_update": timestamp}
-        
-        # ✅ 按合约统计
-        self.fused_contracts = set()  # 成功融合的合约
-        self.okx_fused = set()  # OKX融合的合约
-        self.binance_fused = set()  # 币安融合的合约
-        self.binance_with_history = set()  # 使用历史费率的合约
-        
-        # ✅ 批量日志统计
-        self.current_batch_fused = []  # 当前批次融合的合约
-        self.batch_start_time = time.time()
-        
-        # ✅ 5分钟统计
-        self.last_report_time = time.time()
-        
-        log_data_process("步骤2", "启动", "Step2Fusion初始化完成（状态机版）")
+        self.stats = defaultdict(int)
     
     def process(self, step1_results: List["ExtractedData"]) -> List[FusedData]:
-        """处理Step1的提取结果（状态机版）"""
-        results = []
+        """
+        处理Step1的提取结果，按交易所+合约名合并
+        """
+        logger.info(f"开始融合 {len(step1_results)} 条Step1数据...")
+        
+        # 按 exchange + symbol 分组
+        grouped = defaultdict(list)
         for item in step1_results:
+            key = f"{item.exchange}_{item.symbol}"
+            grouped[key].append(item)
+        
+        logger.info(f"检测到 {len(grouped)} 个不同的交易所合约")
+        
+        # 合并每组数据
+        results = []
+        for key, items in grouped.items():
             try:
-                # 生成状态键
-                state_key = f"{item.exchange}_{item.symbol}"
-                
-                # 初始化状态
-                if state_key not in self.state_cache:
-                    self.state_cache[state_key] = {
-                        "ticker": None,
-                        "funding": None,
-                        "last_update": time.time()
-                    }
-                
-                state = self.state_cache[state_key]
-                state["last_update"] = time.time()
-                
-                # 根据数据类型存入状态
-                data_type = item.data_type
-                if "ticker" in data_type:
-                    state["ticker"] = item
-                elif "funding" in data_type:  # 包括funding_rate, mark_price, funding_settlement
-                    state["funding"] = item
-                
-                # 检查是否可以融合
-                fused_result = self._check_and_fuse(state_key, state)
-                if fused_result:
-                    results.append(fused_result)
-                    
-                    # ✅ 记录融合的合约
-                    symbol = item.symbol
-                    self.fused_contracts.add(symbol)
-                    self.current_batch_fused.append(symbol)
-                    
-                    if item.exchange == "okx":
-                        self.okx_fused.add(symbol)
-                    elif item.exchange == "binance":
-                        self.binance_fused.add(symbol)
-                        # ✅ 记录是否使用了历史费率
-                        if "funding_settlement" in item.data_type:
-                            self.binance_with_history.add(symbol)
-                    
-                    # ✅ 融合成功后清理状态
-                    del self.state_cache[state_key]
-                    
+                fused = self._merge_group(items)
+                if fused:
+                    results.append(fused)
+                    self.stats[fused.exchange] += 1
+                else:
+                    logger.debug(f"融合返回空结果: {key}")
             except Exception as e:
-                log_data_process("步骤2", "错误", f"处理失败: {item.exchange}.{item.symbol} - {e}", "ERROR")
+                logger.error(f"融合失败: {key} - {e}", exc_info=True)
                 continue
         
-        # ✅ 批量打印融合日志
-        self._log_batch_fusion()
-        
-        # ✅ 清理过期状态（防内存泄漏）
-        self._cleanup_stale_states()
-        
-        # ✅ 5分钟统计
-        current_time = time.time()
-        if current_time - self.last_report_time >= 300:
-            okx_count = len(self.okx_fused)
-            binance_count = len(self.binance_fused)
-            history_count = len(self.binance_with_history)
-            
-            log_data_process("步骤2", "统计", f"5分钟融合 {okx_count + binance_count} 个合约")
-            log_data_process("步骤2", "详情", f"OKX: {okx_count}合约 | 币安: {binance_count}合约（含历史费率: {history_count}）")
-            
-            # 重置统计
-            self.last_report_time = current_time
-            self.okx_fused.clear()
-            self.binance_fused.clear()
-            self.binance_with_history.clear()
-        
+        logger.info(f"Step2融合完成: {dict(self.stats)}")
         return results
     
-    def _log_batch_fusion(self):
-        """批量打印融合日志"""
-        if not self.current_batch_fused:
-            return
-        
-        # ✅ 每5秒或每50个合约打印一次
-        current_time = time.time()
-        if len(self.current_batch_fused) >= 50 or current_time - self.batch_start_time >= 5:
-            # 统计不同类型
-            okx_count = sum(1 for s in self.current_batch_fused if s.startswith("okx_"))
-            binance_count = len(self.current_batch_fused) - okx_count
-            
-            log_data_process("步骤2", "融合", f"批量融合 {len(self.current_batch_fused)} 合约 (OKX:{okx_count} 币安:{binance_count})")
-            
-            # 重置当前批次
-            self.current_batch_fused = []
-            self.batch_start_time = current_time
-    
-    def _check_and_fuse(self, state_key: str, state: Dict) -> Optional[FusedData]:
-        """检查状态并融合 - 修复版"""
-        exchange_symbol = state_key.split("_")
-        if len(exchange_symbol) != 2:
+    def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
+        """合并同一组内的所有数据"""
+        if not items:
+            logger.debug("合并组接收空列表")
             return None
         
-        exchange, symbol = exchange_symbol
+        # 取第一条的基础信息
+        first = items[0]
+        exchange = first.exchange
+        symbol = first.symbol
         
+        # 初始化融合结果
+        fused = FusedData(
+            exchange=exchange,
+            symbol=symbol,
+            contract_name=""
+        )
+        
+        # 按交易所分发处理
         if exchange == "okx":
-            # OKX需要ticker和funding_rate
-            if state["ticker"] and state["funding"]:
-                return self._merge_okx_pair(state["ticker"], state["funding"])
-        
+            return self._merge_okx(items, fused)
         elif exchange == "binance":
-            # ✅ 修复：币安需要mark_price（不能是历史费率）
-            if state["funding"] and state["ticker"]:
-                data_type = state["funding"].data_type
-                # 只有mark_price可以立即融合（包含历史费率信息）
-                if "mark_price" in data_type:
-                    return self._merge_binance_pair(symbol, state["funding"], state["ticker"])
-                # 历史费率需要等待mark_price
-                elif "funding_settlement" in data_type:
-                    # 历史费率单独不能融合，需要等待mark_price
-                    return None
-        
-        return None
-    
-    def _merge_binance_pair(self, symbol: str, mark_price_item, ticker_item) -> Optional[FusedData]:
-        """合并币安数据：mark_price + (历史费率，如果有的话)"""
-        try:
-            # 获取历史费率结算时间（如果存在）
-            last_settlement_time = None
-            if mark_price_item.payload.get("last_settlement_time"):
-                last_settlement_time = self._to_int(mark_price_item.payload.get("last_settlement_time"))
-            
-            # 构建融合数据
-            fused = FusedData(
-                exchange="binance",
-                symbol=symbol,
-                contract_name=mark_price_item.payload.get("contract_name", ""),
-                latest_price=ticker_item.payload.get("latest_price") if ticker_item else None,
-                funding_rate=mark_price_item.payload.get("funding_rate"),
-                current_settlement_time=self._to_int(mark_price_item.payload.get("current_settlement_time")),
-                last_settlement_time=last_settlement_time  # 历史费率提供
-            )
-            
-            return fused
-            
-        except Exception as e:
-            log_data_process("步骤2", "错误", f"币安合并失败: {symbol} - {e}", "ERROR")
+            return self._merge_binance(items, fused)
+        else:
+            logger.warning(f"未知交易所: {exchange}，跳过")
             return None
     
-    def _merge_okx_pair(self, ticker_item, funding_item) -> Optional[FusedData]:
-        """合并OKX的ticker和funding_rate数据"""
-        try:
-            symbol = ticker_item.symbol
+    def _merge_okx(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
+        """合并OKX数据：ticker + funding_rate"""
+        
+        for item in items:
+            payload = item.payload
             
-            fused = FusedData(
-                exchange="okx",
-                symbol=symbol,
-                contract_name=ticker_item.payload.get("contract_name", ""),
-                latest_price=ticker_item.payload.get("latest_price"),
-                funding_rate=funding_item.payload.get("funding_rate"),
-                current_settlement_time=self._to_int(funding_item.payload.get("current_settlement_time")),
-                next_settlement_time=self._to_int(funding_item.payload.get("next_settlement_time"))
-            )
+            # 提取合约名（OKX数据里都有）
+            if not fused.contract_name and "contract_name" in payload:
+                fused.contract_name = payload["contract_name"]
             
-            return fused
+            # ticker数据：提取价格
+            if item.data_type == "okx_ticker":
+                fused.latest_price = payload.get("latest_price")
+                logger.debug(f"OKX {fused.symbol} ✓ 提取价格: {fused.latest_price}")
             
-        except Exception as e:
-            log_data_process("步骤2", "错误", f"OKX合并失败: {e}", "ERROR")
+            # funding_rate数据：提取费率和时间
+            elif item.data_type == "okx_funding_rate":
+                fused.funding_rate = payload.get("funding_rate")
+                fused.current_settlement_time = self._to_int(payload.get("current_settlement_time"))
+                fused.next_settlement_time = self._to_int(payload.get("next_settlement_time"))
+                logger.debug(f"OKX {fused.symbol} ✓ 提取费率: {fused.funding_rate}")
+            
+            # OKX没有历史数据，所以last_settlement_time保持None
+        
+        # 验证：至少要有价格或费率之一
+        if not any([fused.latest_price, fused.funding_rate]):
+            logger.debug(f"OKX {fused.symbol} 跳过：无有效数据")
             return None
+        
+        return fused
     
-    def _cleanup_stale_states(self):
-        """清理过期状态（超过30秒未更新）"""
-        current_time = time.time()
-        stale_keys = []
+    def _merge_binance(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
+        """合并币安数据：核心是以mark_price为准"""
         
-        for key, state in self.state_cache.items():
-            if current_time - state["last_update"] > 30:  # 30秒未更新
-                stale_keys.append(key)
+        # 第一步：找mark_price数据（必须有）
+        mark_price_item = None
+        for item in items:
+            if item.data_type == "binance_mark_price":
+                mark_price_item = item
+                break
         
-        for key in stale_keys:
-            del self.state_cache[key]
+        if not mark_price_item:
+            logger.debug(f"币安 {fused.symbol} 跳过：无mark_price数据（必须有实时费率）")
+            return None
         
-        if stale_keys:
-            log_data_process("步骤2", "清理", f"清理 {len(stale_keys)} 个过期状态", "DEBUG")
+        logger.debug(f"币安 {fused.symbol} ✓ 找到mark_price")
+        
+        # 从mark_price提取核心数据
+        mark_payload = mark_price_item.payload
+        fused.contract_name = mark_payload.get("contract_name", fused.symbol)
+        fused.funding_rate = mark_payload.get("funding_rate")
+        fused.current_settlement_time = self._to_int(mark_payload.get("current_settlement_time"))
+        
+        # 验证：mark_price必须有费率
+        if fused.funding_rate is None:
+            logger.warning(f"币安 {fused.symbol} 跳过：mark_price中无费率数据")
+            return None
+        
+        # ticker数据：提取价格
+        for item in items:
+            if item.data_type == "binance_ticker":
+                fused.latest_price = item.payload.get("latest_price")
+                logger.debug(f"币安 {fused.symbol} ✓ 提取价格: {fused.latest_price}")
+                break
+        
+        # funding_settlement数据：填充上次结算时间
+        for item in items:
+            if item.data_type == "binance_funding_settlement":
+                fused.last_settlement_time = self._to_int(item.payload.get("last_settlement_time"))
+                logger.debug(f"币安 {fused.symbol} ✓ 提取上次结算时间")
+                break  # 只取第一个
+        
+        return fused
     
     def _to_int(self, value: Any) -> Optional[int]:
         """安全转换为int"""
@@ -252,16 +172,5 @@ class Step2Fusion:
         try:
             return int(value)
         except (ValueError, TypeError) as e:
-            log_data_process("步骤2", "警告", f"时间戳转换失败: {value} - {e}", "WARNING")
+            logger.warning(f"时间戳转换失败: {value} - {e}")
             return None
-    
-    def get_status(self) -> Dict[str, Any]:
-        """获取状态信息"""
-        return {
-            "active_states": len(self.state_cache),
-            "fused_contracts": len(self.fused_contracts),
-            "current_batch_size": len(self.current_batch_fused),
-            "okx_fused": len(self.okx_fused),
-            "binance_fused": len(self.binance_fused),
-            "binance_with_history": len(self.binance_with_history)
-        }

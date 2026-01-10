@@ -1,38 +1,17 @@
 """
-共享内存数据存储 - 执行者版
-功能：只负责存储 + 执行管理员指令
-所有决策逻辑都在pipeline_manager的FlowInstructions中
-优化：批量日志，避免刷屏
+共享内存数据存储 - 定时全量版
+功能：存储数据 + 按规则执行全量推送
 """
 
 import asyncio
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set
 import logging
-import time
-
-# ✅ 导入管理员指令
-from shared_data.pipeline_manager import FlowInstructions
 
 logger = logging.getLogger(__name__)
 
-# 统一的日志工具函数
-def log_data_process(module: str, action: str, message: str, level: str = "INFO"):
-    """统一的数据处理日志格式"""
-    prefix = f"[数据处理][{module}][{action}]"
-    full_message = f"{prefix} {message}"
-    
-    if level == "INFO":
-        logger.info(full_message)
-    elif level == "ERROR":
-        logger.error(full_message)
-    elif level == "WARNING":
-        logger.warning(full_message)
-    elif level == "DEBUG":
-        logger.debug(full_message)
-
 class DataStore:
-    """共享数据存储 - 只执行，不决策"""
+    """共享数据存储 - 按规则执行推送"""
     
     def __init__(self):
         # 交易所实时数据
@@ -43,19 +22,18 @@ class DataStore:
         
         # 账户数据
         self.account_data = {}
-        # 订单数据
         self.order_data = {}
-        # 连接状态
         self.connection_status = {}
         
         # HTTP服务就绪状态
         self._http_server_ready = False
         
-        # 大脑回调（用于直连）
+        # 大脑回调（备用）
         self.brain_callback = None
         
-        # 流水线管理器（用于流向流水线）
-        self.pipeline_manager = None
+        # 流水线管理员（单例）
+        from shared_data.pipeline_manager import PipelineManager
+        self.pipeline_manager = PipelineManager.instance()
         
         # 锁，确保线程安全
         self.locks = {
@@ -65,31 +43,12 @@ class DataStore:
             'connection_status': asyncio.Lock(),
         }
         
-        # ✅ 批量日志统计
-        self.storage_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
-        self.flow_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
-        self.last_log_time = time.time()
-        
-        log_data_process("数据存储", "启动", "DataStore初始化完成（执行者版）")
-    
-    def set_brain_callback(self, callback):
-        """设置大脑回调函数"""
-        self.brain_callback = callback
-        log_data_process("数据存储", "设置", "大脑回调已设置")
-    
-    def set_pipeline_manager(self, manager):
-        """设置流水线管理器"""
-        self.pipeline_manager = manager
-        log_data_process("数据存储", "设置", "流水线管理器已设置")
+        logger.info("✅ DataStore初始化完成（定时全量执行模式）")
     
     async def update_market_data(self, exchange: str, symbol: str, data: Dict[str, Any]):
         """
-        更新市场数据 → 存储 + 执行管理员指令
-        优化：批量统计日志，避免每条数据都打印
+        更新市场数据（仅存储，不推送）
         """
-        data_type = data.get("data_type", "unknown")
-        
-        # 1. 存储数据
         async with self.locks['market_data']:
             # 初始化数据结构
             if exchange not in self.market_data:
@@ -97,128 +56,59 @@ class DataStore:
             if symbol not in self.market_data[exchange]:
                 self.market_data[exchange][symbol] = {}
             
+            # 获取数据类型
+            data_type = data.get("data_type", "unknown")
+            
             # 存储数据
             self.market_data[exchange][symbol][data_type] = {
                 **data,
                 'store_timestamp': datetime.now().isoformat(),
-                'source': data.get('source', 'websocket')
+                'source': 'websocket'
             }
             
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
-        
-        # ✅ 统计存储数据
-        self.storage_stats["total"] += 1
-        if data_type in self.storage_stats:
-            self.storage_stats[data_type] += 1
-        
-        # 2. ✅ 执行管理员指令：是否应该流出
-        if not FlowInstructions.should_flow_market_data(exchange, symbol, data_type, data):
-            # ✅ 定期打印存储统计
-            self._log_storage_stats_if_needed()
-            return
-        
-        # 3. ✅ 执行管理员指令：流向哪里
-        destination = FlowInstructions.get_flow_destination(data_type)
-        
-        if destination == "pipeline":
-            await self._flow_to_pipeline(exchange, symbol, data_type, data)
-        elif destination == "brain":
-            await self._flow_to_brain(exchange, symbol, data_type, data)
-        
-        # ✅ 统计流出数据
-        self.flow_stats["total"] += 1
-        if data_type in self.flow_stats:
-            self.flow_stats[data_type] += 1
-        
-        # ✅ 定期打印存储和流出统计
-        self._log_storage_stats_if_needed()
+            
+            # 调试日志
+            if data_type in ['funding_rate', 'mark_price']:
+                funding_rate = data.get('funding_rate', 0)
+                logger.debug(f"[DataStore] 存储 {exchange} {symbol} {data_type} = {funding_rate:.6f}")
     
-    def _log_storage_stats_if_needed(self):
-        """定期打印存储和流出统计"""
-        current_time = time.time()
-        if current_time - self.last_log_time >= 5:  # 5秒打印一次
-            if self.storage_stats["total"] > 0 or self.flow_stats["total"] > 0:
-                # 构建存储统计字符串
-                storage_parts = []
-                for key, count in self.storage_stats.items():
-                    if key != "total" and count > 0:
-                        storage_parts.append(f"{key}:{count}")
-                storage_str = f"存储{self.storage_stats['total']}条({','.join(storage_parts)})"
-                
-                # 构建流出统计字符串
-                flow_parts = []
-                for key, count in self.flow_stats.items():
-                    if key != "total" and count > 0:
-                        flow_parts.append(f"{key}:{count}")
-                flow_str = f"流出{self.flow_stats['total']}条({','.join(flow_parts)})" if self.flow_stats["total"] > 0 else ""
-                
-                log_data_process("数据存储", "统计", f"5秒: {storage_str} {flow_str}")
-                
-                # 重置统计
-                self.storage_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
-                self.flow_stats = {"total": 0, "ticker": 0, "funding_rate": 0, "mark_price": 0, "funding_settlement": 0}
-                self.last_log_time = current_time
-    
-    async def update_account_data(self, exchange: str, data: Dict[str, Any]):
+    async def push_all_data_by_rules(self, history_flowed_contracts: Set[str]):
         """
-        更新账户数据 → 存储 + 执行管理员指令
+        按规则推送全量数据（由pipeline_manager定时调用）
+        规则：币安历史费率每个合约只推送1次
         """
-        async with self.locks['account_data']:
-            self.account_data[exchange] = {
-                **data,
-                'timestamp': datetime.now().isoformat()
-            }
+        pushed_count = 0
         
-        data_type = f"account_{data.get('type', 'balance')}"
+        async with self.locks['market_data']:
+            for exchange, symbols in self.market_data.items():
+                for symbol, data_dict in symbols.items():
+                    for data_type, data in data_dict.items():
+                        # 跳过元数据
+                        if data_type in ['latest', 'store_timestamp']:
+                            continue
+                        
+                        # 应用规则：币安历史费率每个合约只推送1次
+                        if exchange == "binance" and data_type == "funding_settlement":
+                            contract_key = f"binance_{symbol}"
+                            if contract_key in history_flowed_contracts:
+                                continue  # 已推送过，跳过
+                        
+                        # 推送数据
+                        await self._push_single_data(exchange, symbol, data_type, data)
+                        pushed_count += 1
         
-        # ✅ 执行管理员指令：是否应该流出
-        if not FlowInstructions.should_flow_account_data(exchange, data_type, data):
-            return
-        
-        # ✅ 执行管理员指令：流向大脑
-        await self._flow_to_brain(exchange, "N/A", data_type, data)
+        if pushed_count > 0:
+            logger.debug(f"📤 定时推送完成: {pushed_count} 条数据")
     
-    async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
-        """
-        更新订单数据 → 存储 + 执行管理员指令
-        """
-        async with self.locks['order_data']:
-            if exchange not in self.order_data:
-                self.order_data[exchange] = {}
-            self.order_data[exchange][order_id] = {
-                **data,
-                'update_time': datetime.now().isoformat()
-            }
-        
-        data_type = "order"
-        
-        # ✅ 执行管理员指令：是否应该流出
-        if not FlowInstructions.should_flow_order_data(exchange, order_id, data):
-            return
-        
-        # ✅ 执行管理员指令：流向大脑
-        await self._flow_to_brain(exchange, data.get('symbol', 'N/A'), data_type, data)
-    
-    async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
-        """更新连接状态（只存储，不流出）"""
-        async with self.locks['connection_status']:
-            if exchange not in self.connection_status:
-                self.connection_status[exchange] = {}
-            self.connection_status[exchange][connection_type] = {
-                **status,
-                'timestamp': datetime.now().isoformat()
-            }
-        
-        log_data_process("连接状态", "更新", f"{exchange} {connection_type}: {status.get('status', 'unknown')}")
-    
-    async def _flow_to_pipeline(self, exchange: str, symbol: str, data_type: str, data: Dict[str, Any]):
-        """流向流水线"""
-        if not self.pipeline_manager:
-            log_data_process("数据存储", "错误", "流水线管理器未设置", "ERROR")
-            return
-        
+    async def _push_single_data(self, exchange: str, symbol: str, data_type: str, data: Dict[str, Any]):
+        """推送单条数据到流水线"""
         try:
+            # 如果是币安历史费率首次流出，通知管理员记录
+            if exchange == "binance" and data_type == "funding_settlement":
+                self.pipeline_manager.mark_history_flowed(exchange, symbol)
+            
             pipeline_data = {
                 "exchange": exchange,
                 "symbol": symbol,
@@ -228,34 +118,83 @@ class DataStore:
                 "priority": 5
             }
             
+            # 推送到流水线
             await self.pipeline_manager.ingest_data(pipeline_data)
-            # ✅ 移除单条日志，使用批量统计
             
         except Exception as e:
-            log_data_process("数据存储", "错误", f"流向流水线失败: {e}", "ERROR")
+            logger.error(f"推送数据失败: {exchange}.{symbol}.{data_type} - {e}")
     
-    async def _flow_to_brain(self, exchange: str, symbol: str, data_type: str, data: Dict[str, Any]):
-        """流向大脑"""
-        if not self.brain_callback:
-            log_data_process("数据存储", "错误", "大脑回调未设置", "ERROR")
-            return
-        
-        try:
-            brain_data = {
-                "exchange": exchange,
-                "symbol": symbol,
-                "data_type": data_type,
-                "payload": data,
-                "timestamp": datetime.now().isoformat()
+    async def update_account_data(self, exchange: str, data: Dict[str, Any]):
+        """
+        更新账户数据 → 直连大脑（立即推送）
+        """
+        async with self.locks['account_data']:
+            self.account_data[exchange] = {
+                **data,
+                'timestamp': datetime.now().isoformat()
             }
-            
-            await self.brain_callback(brain_data)
-            # ✅ 移除单条日志，使用批量统计
-            
+        
+        # 立即推送账户数据
+        try:
+            account_payload = {
+                "exchange": exchange,
+                "data_type": f"account_{data.get('type', 'balance')}",
+                "symbol": "N/A",
+                "payload": data,
+                "timestamp": datetime.now().isoformat(),
+                "priority": 1
+            }
+            await self.pipeline_manager.ingest_data(account_payload)
+            logger.debug(f"📤 账户数据推送: {exchange}")
         except Exception as e:
-            log_data_process("数据存储", "错误", f"流向大脑失败: {e}", "ERROR")
+            logger.error(f"账户数据推送失败: {e}")
     
-    # 其他获取方法保持不变...
+    async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
+        """
+        更新订单数据 → 直连大脑（立即推送）
+        """
+        async with self.locks['order_data']:
+            if exchange not in self.order_data:
+                self.order_data[exchange] = {}
+            self.order_data[exchange][order_id] = {
+                **data,
+                'update_time': datetime.now().isoformat()
+            }
+        
+        # 立即推送订单数据
+        try:
+            order_payload = {
+                "exchange": exchange,
+                "data_type": "order",
+                "symbol": data.get('symbol', 'N/A'),
+                "order_id": order_id,
+                "payload": data,
+                "timestamp": datetime.now().isoformat(),
+                "priority": 2
+            }
+            await self.pipeline_manager.ingest_data(order_payload)
+            logger.debug(f"📤 订单数据推送: {exchange}.{order_id}")
+        except Exception as e:
+            logger.error(f"订单数据推送失败: {e}")
+    
+    # 其他方法保持不变...
+    async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
+        """更新连接状态"""
+        async with self.locks['connection_status']:
+            if exchange not in self.connection_status:
+                self.connection_status[exchange] = {}
+            self.connection_status[exchange][connection_type] = {
+                **status,
+                'timestamp': datetime.now().isoformat()
+            }
+    
+    async def get_connection_status(self, exchange: str = None) -> Dict[str, Any]:
+        """获取连接状态"""
+        async with self.locks['connection_status']:
+            if exchange:
+                return self.connection_status.get(exchange, {}).copy()
+            return self.connection_status.copy()
+    
     async def get_market_data(self, exchange: str, symbol: str = None, 
                              data_type: str = None, get_latest: bool = False) -> Dict[str, Any]:
         async with self.locks['market_data']:
@@ -279,6 +218,7 @@ class DataStore:
                    if k not in ['latest', 'store_timestamp']}
     
     def get_market_data_stats(self) -> Dict[str, Any]:
+        """获取统计数据"""
         stats = {'exchanges': {}, 'total_symbols': 0, 'total_data_types': 0}
         for exchange, symbols in self.market_data.items():
             symbol_count = len(symbols)

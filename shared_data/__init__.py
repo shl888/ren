@@ -7,7 +7,7 @@ shared_data 顶级模块
 from .data_store import data_store  # 全局数据存储
 
 # 管理员（主要接口）
-from .pipeline_manager import PipelineManager, FlowInstructions  # 新增FlowInstructions
+from .pipeline_manager import PipelineManager  # 仅保留PipelineManager
 
 # 5个步骤类（高级调试用）
 from .step1_filter import Step1Filter, ExtractedData
@@ -23,7 +23,6 @@ __all__ = [
     
     # 管理员
     'PipelineManager',
-    'FlowInstructions',  # 新增
     
     # 5个步骤类
     'Step1Filter',
@@ -41,8 +40,8 @@ __all__ = [
 ]
 
 # 版本信息
-__version__ = "3.0.0"
-__description__ = "智能数据处理流水线模块（指令式控制版）"
+__version__ = "3.1.0"
+__description__ = "智能数据处理流水线模块（定时全量版）"
 
 # 初始化日志
 import logging
@@ -50,4 +49,4 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # 模块加载日志
 logger = logging.getLogger(__name__)
-logger.info(f"[数据处理][模块加载] shared_data v{__version__} 加载完成（指令式控制版）")
+logger.info(f"✅ shared_data v{__version__} 加载完成（定时全量版）")
