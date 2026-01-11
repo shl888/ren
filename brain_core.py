@@ -59,7 +59,8 @@ class BrainCore:
         # 数据接收统计
         self.market_data_count = 0  # 当前批次的成品数据数量
         self.last_market_time = None  # 最后收到成品数据的时间
-        self.last_private_time = None  # 最后收到私人数据的时间
+        self.last_account_time = None  # 最后收到账户私人数据的时间
+        self.last_trade_time = None  # 最后收到交易私人数据的时间
         
         # 状态日志定时器
         self.status_log_task = None
@@ -80,12 +81,21 @@ class BrainCore:
             data_type = private_data.get('data_type', 'unknown')
             exchange = private_data.get('exchange', 'unknown')
             
-            # 更新最后接收时间
-            self.last_private_time = datetime.now()
-            
-            # 只记录私人数据到达（可选，根据需求可注释掉）
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"收到私人数据: {exchange}.{data_type}")
+            # 更新对应类型数据的最后接收时间
+            now = datetime.now()
+            if data_type == 'account':
+                self.last_account_time = now
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"收到账户私人数据: {exchange}")
+            elif data_type == 'trade':
+                self.last_trade_time = now
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"收到交易私人数据: {exchange}")
+            else:
+                # 如果没有明确类型，默认认为是账户数据
+                self.last_account_time = now
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"收到未知类型私人数据: {exchange}.{data_type}")
                 
         except Exception as e:
             logger.error(f"接收私人数据错误: {e}")
@@ -112,18 +122,20 @@ class BrainCore:
                 await asyncio.sleep(60)  # 每分钟一次
                 
                 # 准备日志信息
-                market_count = self.market_data_count
+                market_count = self.market_data_count  # 当前批次数，不累计
                 market_time = self._format_time_diff(self.last_market_time)
-                private_time = self._format_time_diff(self.last_private_time)
+                account_time = self._format_time_diff(self.last_account_time)
+                trade_time = self._format_time_diff(self.last_trade_time)
                 
                 # 打印状态日志（合并成一条，使用黑点符号）
                 status_msg = f"""【大脑数据状态】
-• 成品数据: {market_count}条已更新，{market_time}
-• 私人数据已更新，{private_time}"""
+• 成品数据: {market_count}条，{market_time}
+• 私人数据-账户: {account_time}
+• 私人数据-交易: {trade_time}"""
                 
                 logger.info(status_msg)
                 
-                # 重置计数器（只统计当前分钟的数据）
+                # 重置计数器（准备记录下一分钟的数据）
                 self.market_data_count = 0
                 
             except asyncio.CancelledError:
