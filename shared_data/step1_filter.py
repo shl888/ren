@@ -53,16 +53,34 @@ class Step1Filter:
             
             # 只统计已知的5种数据类型
             if type_key in self.FIELD_MAP:
-                raw_contract_stats[type_key].add(symbol)
+                # 添加symbol（即使为空也会添加，但我们需要知道有数据存在）
+                raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
         if should_log:
             logger.info(f"🔄【流水线步骤1】开始处理 {len(raw_items)} 条原始数据...")
-            # 输出原始数据合约统计（只显示5种数据类型）
-            logger.info("📊【流水线步骤1】原始数据合约统计:")
-            for type_key in sorted(self.FIELD_MAP.keys()):
-                contract_count = len(raw_contract_stats.get(type_key, set()))
-                if contract_count > 0:
-                    logger.info(f"  • {type_key}: {contract_count} 个合约")
+            
+            # ✅ 修复：将所有统计信息收集到一个字符串中一次性输出
+            stats_lines = []
+            stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
+            
+            # ✅ 固定显示所有5种数据类型
+            type_order = [
+                "binance_ticker",
+                "binance_mark_price", 
+                "binance_funding_settlement",
+                "okx_ticker",
+                "okx_funding_rate"
+            ]
+            
+            for type_key in type_order:
+                # 获取实际合约数（排除空symbol）
+                symbol_set = raw_contract_stats.get(type_key, set())
+                # 计算实际合约数（排除空字符串）
+                actual_count = len([s for s in symbol_set if s and s != "empty"])
+                stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
+            
+            # ✅ 一次性输出所有统计信息
+            logger.info("\n".join(stats_lines))
             
             self.last_log_time = current_time
         
@@ -84,12 +102,19 @@ class Step1Filter:
         
         if should_log:
             logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条数据")
-            # 输出提取后数据合约统计（只显示5种数据类型）
-            logger.info("📊【流水线步骤1】提取数据合约统计:")
-            for type_key in sorted(self.FIELD_MAP.keys()):
-                contract_count = len(extracted_contract_stats.get(type_key, set()))
-                if contract_count > 0:
-                    logger.info(f"  • {type_key}: {contract_count} 个合约")
+            
+            # ✅ 同样修复提取后的统计信息
+            extracted_stats_lines = []
+            extracted_stats_lines.append("📊【流水线步骤1】提取数据合约统计:")
+            
+            for type_key in type_order:
+                # 计算实际提取到的合约数
+                symbol_set = extracted_contract_stats.get(type_key, set())
+                actual_count = len([s for s in symbol_set if s])  # 排除空字符串
+                extracted_stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
+            
+            # ✅ 一次性输出所有提取统计信息
+            logger.info("\n".join(extracted_stats_lines))
             
             # 重置计数（仅用于频率控制）
             self.process_count = 0
@@ -159,3 +184,4 @@ class Step1Filter:
             symbol=symbol,
             payload=extracted_payload
         )
+        

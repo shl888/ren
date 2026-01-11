@@ -50,8 +50,6 @@ class PipelineManager:
             # 币安历史费率特殊规则
             "binance_history": {
                 "max_flows_per_contract": 1,  # 每个合约最多流1次
-                "expected_total_contracts": 600,  # 预计总共600个合约
-                "complete_threshold": 500,    # 收到500个就认为完成了
             },
             
             # 流水线规则

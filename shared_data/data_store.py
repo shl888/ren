@@ -226,14 +226,20 @@ class DataStore:
                                 self.execution_records["binance_history"]["total_flowed"] += 1
                                 self.execution_records["binance_history"]["last_flow_time"] = time.time()
                             
-                            # 按规则：检查是否完成
-                            expected = self.rules["binance_history"]["expected_total_contracts"]
-                            threshold = self.rules["binance_history"]["complete_threshold"]
+                            # ✅ 修改：基于实际合约数判断完成
+                            # 1. 统计当前有多少币安历史费率合约
+                            total_binance_history_contracts = 0
+                            for sym, sym_data in self.market_data.get("binance", {}).items():
+                                if "funding_settlement" in sym_data:
+                                    total_binance_history_contracts += 1
+                            
+                            # 2. 如果所有合约都已流过，标记完成并打印日志
                             flowed_count = len(self.execution_records["binance_history"]["flowed_contracts"])
                             
-                            if flowed_count >= threshold:
+                            if total_binance_history_contracts > 0 and flowed_count >= total_binance_history_contracts:
                                 self.execution_records["binance_history"]["history_complete"] = True
-                                logger.info(f"🎉【数据池】币安历史费率已流过 {flowed_count} 个合约（完成）")
+                                logger.info(f"✅【数据池】币安历史费率已全部流过！共 {flowed_count} 个合约")
+                                logger.info(f"❎【数据池】币安历史费率数据已经全部流过1次，该类数据将不再流出。")
                         
                         # ==================== 修复：构建正确的数据格式 ====================
                         water_item = {
@@ -480,3 +486,4 @@ class DataStore:
 
 # 全局实例
 data_store = DataStore()
+
