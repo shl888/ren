@@ -86,7 +86,7 @@ class PipelineManager:
             # ✅ 新增：私人数据统计
             "private_data": {
                 "account_updates": 0,        # 账户更新次数
-                "order_updates": 0,          # 订单更新次数
+                "order_updates": 0,          # 交易更新次数
                 "last_account_update": 0,
                 "last_order_update": 0,
                 "errors": 0
@@ -269,7 +269,7 @@ class PipelineManager:
                 logger.info(f"📈【数据处理管理员】系统运行报告 - "
                           f"运行时间: {uptime:.0f}秒, "
                           f"市场数据处理: {market_total}条, "
-                          f"私人数据(账户: {private_account}, 订单: {private_order})")
+                          f"私人数据(账户: {private_account}, 交易: {private_order})")
                 
             except asyncio.CancelledError:
                 break
@@ -350,7 +350,7 @@ async def main():
         if data_type == 'account_update':
             print(f"💰 【数据处理管理员】收到账户更新: {data.get('exchange')}")
         elif data_type == 'order_update':
-            print(f"📝 【数据处理管理员】收到订单更新: {data.get('order_id')}")
+            print(f"📝 【数据处理管理员】收到交易更新: {data.get('order_id')}")
     
     # 获取管理员实例
     manager = PipelineManager.instance()

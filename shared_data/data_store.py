@@ -299,7 +299,7 @@ class DataStore:
                 logger.error(f"❌【数据池】私人数据(账户)流出失败: {e}")
     
     async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
-        """✅ 增强：接收订单数据（立即自动流出）"""
+        """✅ 增强：接收交易数据（立即自动流出）"""
         async with self.locks['order_data']:
             if exchange not in self.order_data:
                 self.order_data[exchange] = {}
@@ -328,7 +328,7 @@ class DataStore:
                     self.execution_records["private_flows"]["last_order_update"] = time.time()
                     
             except Exception as e:
-                logger.error(f"❌【数据池】私人数据(订单)流出失败: {e}")
+                logger.error(f"❌【数据池】私人数据(交易)流出失败: {e}")
     
     async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
         """更新连接状态"""
@@ -373,7 +373,7 @@ class DataStore:
             return self.account_data.copy()
     
     async def get_order_data(self, exchange: str = None) -> Dict[str, Any]:
-        """获取订单数据"""
+        """获取交易数据"""
         async with self.locks['order_data']:
             if exchange:
                 return self.order_data.get(exchange, {}).copy()
