@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 PipelineManager - 管理员/立法者
 功能：1. 制定规则 2. 启动系统 3. 监督运行
@@ -209,8 +208,9 @@ class PipelineManager:
             
             # 给大脑
             if self.brain_callback:
-                for result in step5_results:
-                    await self.brain_callback(result.__dict__)
+                # ✅ 一次性发送整个列表
+                all_results = [result.__dict__ for result in step5_results]
+                await self.brain_callback(all_results)
             
         except Exception as e:
             logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
@@ -373,4 +373,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
