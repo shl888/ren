@@ -87,11 +87,6 @@ class BrainCore:
             # 更新最后接收时间
             self.last_market_time = datetime.now()
             
-            # 记录接收情况（简化日志，避免太频繁）
-            if self.last_market_count > 0:
-                if logger.isEnabledFor(logging.INFO):
-                    logger.info(f"📥 收到市场数据: {self.last_market_count}条合约数据")
-                
         except Exception as e:
             logger.error(f"接收数据错误: {e}")
     
@@ -338,4 +333,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    main()更新最后接收时间
