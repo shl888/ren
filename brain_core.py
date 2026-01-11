@@ -57,10 +57,11 @@ class BrainCore:
         signal.signal(signal.SIGTERM, self.handle_signal)
         
         # 数据接收统计
-        self.market_data_count = 0  # 当前批次的成品数据数量
         self.last_market_time = None  # 最后收到成品数据的时间
+        self.last_market_count = 0    # 最后一次收到的合约数量
+        
         self.last_account_time = None  # 最后收到账户私人数据的时间
-        self.last_trade_time = None  # 最后收到交易私人数据的时间
+        self.last_trade_time = None   # 最后收到交易私人数据的时间
         
         # 状态日志定时器
         self.status_log_task = None
@@ -68,8 +69,16 @@ class BrainCore:
     async def receive_market_data(self, processed_data):
         """接收成品数据"""
         try:
-            # 统计当前批次数据数量
-            self.market_data_count += 1
+            # processed_data 是 List[CrossPlatformData]
+            # 每个CrossPlatformData代表一个合约的双平台数据
+            
+            # 记录最后一次收到的数据
+            if isinstance(processed_data, list):
+                self.last_market_count = len(processed_data)
+            else:
+                self.last_market_count = 1
+            
+            # 更新最后接收时间
             self.last_market_time = datetime.now()
             
         except Exception as e:
@@ -122,21 +131,22 @@ class BrainCore:
                 await asyncio.sleep(60)  # 每分钟一次
                 
                 # 准备日志信息
-                market_count = self.market_data_count  # 当前批次数，不累计
+                # 使用最后一次收到的合约数量（不是累计）
+                market_count = self.last_market_count  
                 market_time = self._format_time_diff(self.last_market_time)
                 account_time = self._format_time_diff(self.last_account_time)
                 trade_time = self._format_time_diff(self.last_trade_time)
                 
-                # 打印状态日志（合并成一条，使用黑点符号）
+                # 打印状态日志 - 严格按照要求格式
                 status_msg = f"""【大脑数据状态】
-• 成品数据: {market_count}条，{market_time}
-• 私人数据-账户: {account_time}
-• 私人数据-交易: {trade_time}"""
+成品数据，{market_count}条，已更新。{market_time}
+私人数据-账户：已更新，{account_time}
+私人数据-交易：已更新，{trade_time}"""
                 
                 logger.info(status_msg)
                 
-                # 重置计数器（准备记录下一分钟的数据）
-                self.market_data_count = 0
+                # ✅ 注意：这里不重置任何计数器，保持最后一次的值
+                # 只有当再次收到新数据时，last_market_count才会被更新
                 
             except asyncio.CancelledError:
                 break
