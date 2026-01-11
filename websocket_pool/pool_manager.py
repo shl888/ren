@@ -54,7 +54,7 @@ async def default_data_callback(data):
         if current_count >= 3000000:
             default_data_callback.counter = 0
             current_count = 0
-            logger.info(f"🫗【数据回调阈值重置】达到500万条，计数器清零重新开始")
+            logger.info(f"🫗【数据回调阈值重置】达到300万条，计数器清零重新开始")
         
         # 1. 第一条数据（重要） - 确认系统启动
         if current_count == 1:
