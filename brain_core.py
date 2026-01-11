@@ -333,4 +333,4 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
-    main()更新最后接收时间
+    main()
