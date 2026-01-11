@@ -39,7 +39,7 @@ class Step2Fusion:
             "failed_groups": 0
         }
         self.last_log_time = 0
-        self.log_interval = 180  # 3分钟，单位：秒
+        self.log_interval = 600  # 10分钟，单位：秒
         self.process_count = 0
     
     def process(self, step1_results: List["ExtractedData"]) -> List[FusedData]:
