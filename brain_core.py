@@ -57,11 +57,11 @@ class BrainCore:
         signal.signal(signal.SIGTERM, self.handle_signal)
         
         # 数据接收统计
-        self.last_market_time = None  # 最后收到成品数据的时间
-        self.last_market_count = 0    # 最后一次收到的合约数量
+        self.last_market_time = None      # 最后收到成品数据的时间
+        self.last_market_count = 0        # 最后一次收到的合约数量
         
-        self.last_account_time = None  # 最后收到账户私人数据的时间
-        self.last_trade_time = None   # 最后收到交易私人数据的时间
+        self.last_account_time = None     # 最后收到账户私人数据的时间
+        self.last_trade_time = None       # 最后收到交易私人数据的时间
         
         # 状态日志定时器
         self.status_log_task = None
@@ -69,18 +69,29 @@ class BrainCore:
     async def receive_market_data(self, processed_data):
         """接收成品数据"""
         try:
-            # processed_data 是 List[CrossPlatformData]
-            # 每个CrossPlatformData代表一个合约的双平台数据
-            
-            # 记录最后一次收到的数据
+            # 现在processed_data应该是一个列表（包含所有合约数据）
             if isinstance(processed_data, list):
+                # ✅ 正确：记录列表长度作为合约数量
                 self.last_market_count = len(processed_data)
+                
+                # 可选：记录调试信息
+                if logger.isEnabledFor(logging.DEBUG):
+                    if processed_data and len(processed_data) > 0:
+                        symbol = processed_data[0].get('symbol', 'unknown')
+                        logger.debug(f"收到批量数据: {len(processed_data)}条, 第一个合约: {symbol}")
             else:
-                self.last_market_count = 1
+                # ❌ 如果不是列表，记录警告
+                logger.warning(f"⚠️ 收到非列表类型市场数据: {type(processed_data)}")
+                self.last_market_count = 1  # 备用逻辑
             
             # 更新最后接收时间
             self.last_market_time = datetime.now()
             
+            # 记录接收情况（简化日志，避免太频繁）
+            if self.last_market_count > 0:
+                if logger.isEnabledFor(logging.INFO):
+                    logger.info(f"📥 收到市场数据: {self.last_market_count}条合约数据")
+                
         except Exception as e:
             logger.error(f"接收数据错误: {e}")
     
@@ -92,19 +103,18 @@ class BrainCore:
             
             # 更新对应类型数据的最后接收时间
             now = datetime.now()
-            if data_type == 'account':
+            
+            # 匹配PipelineManager的数据类型
+            if data_type == 'account_update' or data_type == 'account':
                 self.last_account_time = now
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"收到账户私人数据: {exchange}")
-            elif data_type == 'trade':
+                logger.info(f"💰 收到账户私人数据: {exchange}")
+            elif data_type == 'order_update' or data_type == 'trade':
                 self.last_trade_time = now
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"收到交易私人数据: {exchange}")
+                logger.info(f"📝 收到交易私人数据: {exchange}")
             else:
                 # 如果没有明确类型，默认认为是账户数据
                 self.last_account_time = now
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"收到未知类型私人数据: {exchange}.{data_type}")
+                logger.info(f"📨 收到未知类型私人数据: {exchange}.{data_type}")
                 
         except Exception as e:
             logger.error(f"接收私人数据错误: {e}")
@@ -131,22 +141,27 @@ class BrainCore:
                 await asyncio.sleep(60)  # 每分钟一次
                 
                 # 准备日志信息
-                # 使用最后一次收到的合约数量（不是累计）
-                market_count = self.last_market_count  
+                market_count = self.last_market_count
                 market_time = self._format_time_diff(self.last_market_time)
-                account_time = self._format_time_diff(self.last_account_time)
-                trade_time = self._format_time_diff(self.last_trade_time)
                 
-                # 打印状态日志 - 严格按照要求格式
+                # 私人数据状态
+                if self.last_account_time:
+                    account_status = f"已更新，{self._format_time_diff(self.last_account_time)}"
+                else:
+                    account_status = "从未收到"
+                    
+                if self.last_trade_time:
+                    trade_status = f"已更新，{self._format_time_diff(self.last_trade_time)}"
+                else:
+                    trade_status = "从未收到"
+                
+                # 打印状态日志
                 status_msg = f"""【大脑数据状态】
 成品数据，{market_count}条，已更新。{market_time}
-私人数据-账户：已更新，{account_time}
-私人数据-交易：已更新，{trade_time}"""
+私人数据-账户：{account_status}
+私人数据-交易：{trade_status}"""
                 
                 logger.info(status_msg)
-                
-                # ✅ 注意：这里不重置任何计数器，保持最后一次的值
-                # 只有当再次收到新数据时，last_market_count才会被更新
                 
             except asyncio.CancelledError:
                 break
@@ -308,7 +323,7 @@ def main():
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-d %H:%M:%S'
     )
     
     brain = BrainCore()
