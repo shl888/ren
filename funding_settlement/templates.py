@@ -3,6 +3,8 @@
 """
 import datetime
 from typing import Any
+from typing import Dict, Any
+
 
 def get_html_page(manager: Any, contracts: Dict[str, Any]) -> str:
     """生成资金费率结算HTML页面（从contracts参数读取）"""
