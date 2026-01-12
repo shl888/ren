@@ -52,22 +52,15 @@ async def get_settlement_public(request: web.Request) -> web.Response:
         for symbol, data_dict in funding_data.items():
             # ✅ 正确解析结构：data_dict = {"funding_settlement": {...}}
             funding_info = data_dict.get('funding_settlement', {})
+            raw_data = funding_info.get('raw_data', {})  # ⚠️ 关键：从raw_data获取
+            
             
             # ✅ 统一为raw_data格式
             formatted_data.append({
                 "exchange": "binance",
                 "symbol": symbol,
                 "data_type": "funding_settlement",
-                "raw_data": {
-                    "symbol": symbol,
-                    "fundingTime": funding_info.get('funding_time'),
-                    "fundingRate": str(funding_info.get('funding_rate', '0')),
-                    "funding_time": funding_info.get('funding_time'),
-                    "funding_rate": funding_info.get('funding_rate'),
-                    "next_funding_time": funding_info.get('next_funding_time'),
-                    "timestamp": funding_info.get('timestamp'),
-                    "source": funding_info.get('source', 'api')
-                },
+                "raw_data": raw_data,  # ✅ 直接使用存储的raw_data
                 "timestamp": datetime.now().isoformat(),
                 "source": "api"
             })
