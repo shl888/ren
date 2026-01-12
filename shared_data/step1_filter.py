@@ -101,20 +101,20 @@ class Step1Filter:
                 continue
         
         if should_log:
-            logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条数据")
+#            logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条数据")
             
             # ✅ 同样修复提取后的统计信息
-            extracted_stats_lines = []
-            extracted_stats_lines.append("📊【流水线步骤1】提取数据合约统计:")
+#            extracted_stats_lines = []
+#            extracted_stats_lines.append("📊【流水线步骤1】提取数据合约统计:")
             
-            for type_key in type_order:
+#            for type_key in type_order:
                 # 计算实际提取到的合约数
-                symbol_set = extracted_contract_stats.get(type_key, set())
-                actual_count = len([s for s in symbol_set if s])  # 排除空字符串
-                extracted_stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
+#                symbol_set = extracted_contract_stats.get(type_key, set())
+#                actual_count = len([s for s in symbol_set if s])  # 排除空字符串
+#                extracted_stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
             
             # ✅ 一次性输出所有提取统计信息
-            logger.info("\n".join(extracted_stats_lines))
+#            logger.info("\n".join(extracted_stats_lines))
             
             # 重置计数（仅用于频率控制）
             self.process_count = 0

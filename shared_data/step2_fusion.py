@@ -46,6 +46,14 @@ class Step2Fusion:
         """
         处理Step1的提取结果，按交易所+合约名合并
         """
+        # 重置统计，避免累积
+        self.fusion_stats = {
+            "total_groups": 0,
+            "success_groups": 0,
+            "failed_groups": 0
+        }
+        self.stats.clear()
+        
         # 频率控制：只偶尔显示处理日志
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
@@ -100,10 +108,10 @@ class Step2Fusion:
             logger.info(f"  • 总计: {total_contracts} 个合约")
             
             # 融合过程统计（合约组数）
-            logger.info(f"📊【流水线步骤2】融合过程统计:")
-            logger.info(f"  • 检测到合约组数: {self.fusion_stats['total_groups']} 组")
-            logger.info(f"  • 成功融合: {self.fusion_stats['success_groups']} 组")
-            logger.info(f"  • 失败/跳过: {self.fusion_stats['failed_groups']} 组")
+#            logger.info(f"📊【流水线步骤2】融合过程统计:")
+#            logger.info(f"  • 检测到合约组数: {self.fusion_stats['total_groups']} 组")
+#            logger.info(f"  • 成功融合: {self.fusion_stats['success_groups']} 组")
+#            logger.info(f"  • 失败/跳过: {self.fusion_stats['failed_groups']} 组")
             
             # 验证字段完整性（只针对成功融合的结果）
             if results:

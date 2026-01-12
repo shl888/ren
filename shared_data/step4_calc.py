@@ -64,7 +64,7 @@ class Step4Calc:
             "binance_complete_contracts": 0, # 币安数据完整的合约数
             "both_platform_contracts": 0,    # 双平台都完整的合约数
             "calculation_errors": 0,         # 计算失败的合约数
-            "binance_rollovers": 0,          # 币安时间滚动次数
+            "binance_rollovers": 0,          # 币安时间滚动次数（修复点1：初始化）
             
             # 计算成功率统计
             "okx_period_success": 0,         # OKX周期计算成功
@@ -78,7 +78,8 @@ class Step4Calc:
         for item in aligned_results:
             try:
                 okx_data = self._calc_okx(item)
-                binance_data = self._calc_binance(item)
+                # 修复点2：传递 batch_stats 参数
+                binance_data = self._calc_binance(item, batch_stats)
                 
                 # 统计每个合约的平台数据完整情况
                 has_okx = okx_data is not None
@@ -136,8 +137,8 @@ class Step4Calc:
         
         logger.info(f"  • 总合约数: {total_contracts} 个")
         logger.info(f"  • 双平台完整: {batch_stats['both_platform_contracts']} 个")
-        logger.info(f"  • 仅OKX完整: {batch_stats['okx_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
-        logger.info(f"  • 仅币安完整: {batch_stats['binance_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
+#        logger.info(f"  • 仅OKX完整: {batch_stats['okx_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
+#        logger.info(f"  • 仅币安完整: {batch_stats['binance_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
         logger.info(f"  • 计算失败: {batch_stats['calculation_errors']} 个")
         
         # 完整性统计
@@ -168,9 +169,11 @@ class Step4Calc:
             logger.info(f"  • 币安周期计算: {batch_stats['binance_period_success']}/{batch_stats['binance_complete_contracts']} ({period_rate:.1f}%)")
             logger.info(f"  • 币安倒计时: {batch_stats['binance_countdown_success']}/{batch_stats['binance_complete_contracts']} ({countdown_rate:.1f}%)")
         
-        # 币安时间滚动统计
+        # 币安时间滚动统计 - 现在会正常显示了
         if batch_stats["binance_rollovers"] > 0:
             logger.info(f"🔄【流水线步骤4】币安时间滚动: {batch_stats['binance_rollovers']} 次")
+        else:
+            logger.info(f"🔵【流水线步骤4】币安时间滚动: 0 次（或未发生）")
     
     def _log_cache_report(self, binance_contracts: int):
         """打印币安缓存详细报告"""
@@ -230,7 +233,7 @@ class Step4Calc:
         
         return data
     
-    def _calc_binance(self, aligned_item) -> Optional[PlatformData]:
+    def _calc_binance(self, aligned_item, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
         """计算币安数据（时间滚动）"""
         
         if not aligned_item.binance_current_ts:
@@ -252,7 +255,8 @@ class Step4Calc:
         
         # 时间滚动逻辑
         if T2 and T3 != T2:
-            # 移除单个合约的滚动日志，只保留统计
+            # 修复点3：增加滚动计数
+            batch_stats["binance_rollovers"] += 1  # 这一行是关键修复！
             T1 = T2
             T2 = T3
             cache["last_ts"] = T1

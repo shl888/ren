@@ -121,13 +121,21 @@ class Step5CrossCalc:
     
     def _log_batch_statistics(self, total_contracts: int, actual_contracts: int, results: List[CrossPlatformData]):
         """打印当前批次的统计结果"""
-        logger.info("📝【流水线步骤5】当前批次合约统计:")
+#        logger.info("📝【流水线步骤5】当前批次合约统计:")
         
-        if total_contracts == actual_contracts:
-            logger.info(f"✅【流水线步骤5】合约数据完美匹配: {actual_contracts}/{total_contracts} 个合约")
-        else:
-            missing_count = total_contracts - actual_contracts
-            logger.warning(f"⚠️【流水线步骤5】合约数据不完整: {actual_contracts}/{total_contracts} 个合约，缺失 {missing_count} 个合约")
+            # 缺少的部分（需要添加）：
+#        logger.info(f"  • 检测到合约数: {total_contracts} 个")
+#        logger.info(f"  • 成功合并数: {actual_contracts} 个")
+#        if total_contracts > actual_contracts:
+#            missing_count = total_contracts - actual_contracts
+#            logger.info(f"  • 无法合并数: {missing_count} 个")
+        
+        
+#        if total_contracts == actual_contracts:
+#            logger.info(f"✅【流水线步骤5】合约数据完美匹配: {actual_contracts}/{total_contracts} 个合约")
+#        else:
+#            missing_count = total_contracts - actual_contracts
+#            logger.warning(f"⚠️【流水线步骤5】合约数据不完整: {actual_contracts}/{total_contracts} 个合约，缺失 {missing_count} 个合约")
         
         # 数据处理结果验证
         if results:
