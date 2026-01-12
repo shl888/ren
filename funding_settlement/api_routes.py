@@ -44,7 +44,7 @@ async def _startup_auto_fetch(app: web.Application):
     asyncio.create_task(background_fetch_task())
 
 async def get_settlement_public(request: web.Request) -> web.Response:
-    """获取所有历史资金费率结算数据（从market_data读取）"""
+    """获取所有历史资金费率结算数据（从market_data读取，raw_data格式）"""
     try:
         funding_data = await data_store.get_market_data(exchange="binance", data_type="funding_settlement")
         
@@ -53,13 +53,21 @@ async def get_settlement_public(request: web.Request) -> web.Response:
             # ✅ 正确解析结构：data_dict = {"funding_settlement": {...}}
             funding_info = data_dict.get('funding_settlement', {})
             
+            # ✅ 统一为raw_data格式
             formatted_data.append({
                 "exchange": "binance",
                 "symbol": symbol,
                 "data_type": "funding_settlement",
-                "funding_rate": funding_info.get('funding_rate'),
-                "funding_time": funding_info.get('funding_time'),
-                "next_funding_time": funding_info.get('next_funding_time'),
+                "raw_data": {
+                    "symbol": symbol,
+                    "fundingTime": funding_info.get('funding_time'),
+                    "fundingRate": str(funding_info.get('funding_rate', '0')),
+                    "funding_time": funding_info.get('funding_time'),
+                    "funding_rate": funding_info.get('funding_rate'),
+                    "next_funding_time": funding_info.get('next_funding_time'),
+                    "timestamp": funding_info.get('timestamp'),
+                    "source": funding_info.get('source', 'api')
+                },
                 "timestamp": datetime.now().isoformat(),
                 "source": "api"
             })

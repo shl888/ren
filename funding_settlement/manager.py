@@ -253,22 +253,26 @@ class FundingSettlementManager:
         ✅ 推送到共享数据模块：统一存储到market_data（正规化改造）
         """
         try:
-            logger.info("🔂【历史费率】清空旧数据...")
-            logger.info("   🔂【历史费率】推送新数据...")
+            logger.info("🔂【历史费率】推送新数据...")
             
             for symbol, data in filtered_data.items():
                 await data_store.update_market_data(
                     exchange="binance",
                     symbol=symbol,
                     data={
+                        "exchange": "binance",  # ✅ 加上exchange
+                        "symbol": symbol,
                         "data_type": "funding_settlement",
-                        **data
+                        "funding_rate": data.get('funding_rate'),
+                        "funding_time": data.get('funding_time'),
+                        "next_funding_time": data.get('next_funding_time'),
+                        "source": "api"  # ⚠️ 关键：这里指定source="api"
                     }
                 )
             
-            logger.info(f"【历史费率】 ✅ 推送完成: {len(filtered_data)} 个合约")
+            logger.info(f"✅【历史费率】推送完成: {len(filtered_data)} 个合约")
         except Exception as e:
-            logger.error(f"【历史费率】❌ 推送失败: {e}")
+            logger.error(f"❌【历史费率】推送失败: {e}")
             raise
     
     def can_manually_fetch(self) -> tuple[bool, Optional[str]]:

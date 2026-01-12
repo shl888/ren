@@ -16,8 +16,12 @@ def get_html_page(manager: Any, contracts: Dict[str, Any]) -> str:
         # ✅ 正确解析：先获取funding_settlement内部数据
         funding_info = data_dict.get('funding_settlement', {})
         
-        funding_rate = funding_info.get('funding_rate', 0)
-        funding_time = funding_info.get('funding_time', 0)
+        # ✅ 兼容raw_data格式和简洁格式
+        raw_data = funding_info.get('raw_data', {})
+        
+        # 优先从raw_data中获取，如果没有则从funding_info中获取
+        funding_rate = raw_data.get('funding_rate') or funding_info.get('funding_rate', 0)
+        funding_time = raw_data.get('funding_time') or funding_info.get('funding_time', 0)
         
         # 计算数据年龄
         if funding_time:
