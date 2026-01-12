@@ -5,7 +5,7 @@ from aiohttp import web
 import logging
 import os
 import sys
-import asyncio  # ✅ 加上这行！
+import asyncio
 from datetime import datetime
 from typing import Dict, Any
 
@@ -49,14 +49,17 @@ async def get_settlement_public(request: web.Request) -> web.Response:
         funding_data = await data_store.get_market_data(exchange="binance", data_type="funding_settlement")
         
         formatted_data = []
-        for symbol, data in funding_data.items():
+        for symbol, data_dict in funding_data.items():
+            # ✅ 正确解析结构：data_dict = {"funding_settlement": {...}}
+            funding_info = data_dict.get('funding_settlement', {})
+            
             formatted_data.append({
                 "exchange": "binance",
                 "symbol": symbol,
                 "data_type": "funding_settlement",
-                "funding_rate": data.get('funding_rate'),
-                "funding_time": data.get('funding_time'),
-                "next_funding_time": data.get('next_funding_time'),
+                "funding_rate": funding_info.get('funding_rate'),
+                "funding_time": funding_info.get('funding_time'),
+                "next_funding_time": funding_info.get('next_funding_time'),
                 "timestamp": datetime.now().isoformat(),
                 "source": "api"
             })
