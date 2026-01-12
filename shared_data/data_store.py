@@ -264,7 +264,7 @@ class DataStore:
                         self.execution_records["binance_history"]["history_complete"] = True
                     
                     logger.info(f"✅【数据池】币安历史费率已全部流过！共 {flowed_count} 个合约")
-                    logger.info(f"❎【数据池】币安历史费率数据已经全部流过1次，该类数据将不再流出。")
+                    logger.info(f"❎【数据池】币安历史费率数据已全部流过1次，该类数据将不再流出。")
         
         return water
     
