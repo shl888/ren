@@ -1,25 +1,32 @@
+#!/usr/bin/env python3
 """
 资金费率结算页面模板（正规化改造版）
 """
 import datetime
-from typing import Any
-from typing import Dict, Any
-
+from typing import Any, Dict  # ✅ 修复导入
 
 def get_html_page(manager: Any, contracts: Dict[str, Any]) -> str:
-    """生成资金费率结算HTML页面（从contracts参数读取）"""
+    """
+    生成资金费率结算HTML页面（从market_data结构解析）
+    contracts结构: {"BTCUSDT": {"funding_settlement": {...}, "latest": "funding_settlement"}, ...}
+    """
     
     contracts_html = ""
-    for symbol, data in sorted(contracts.items()):
-        funding_rate = data.get('funding_rate', 0)
-        funding_time = data.get('funding_time', 0)
+    for symbol, data_dict in sorted(contracts.items()):
+        # ✅ 正确解析：先获取funding_settlement内部数据
+        funding_info = data_dict.get('funding_settlement', {})
         
+        funding_rate = funding_info.get('funding_rate', 0)
+        funding_time = funding_info.get('funding_time', 0)
+        
+        # 计算数据年龄
         if funding_time:
             age_seconds = (datetime.datetime.now().timestamp() * 1000 - funding_time) / 1000
             age_str = f"{int(age_seconds)}秒" if age_seconds < 3600 else f"{int(age_seconds / 3600)}小时"
         else:
             age_str = "未知"
         
+        # 格式化费率
         rate_color = "#28a745" if funding_rate >= 0 else "#dc3545"
         rate_str = f"{funding_rate:.6f}"
         time_str = datetime.datetime.fromtimestamp(funding_time / 1000).strftime('%Y-%m-%d %H:%M:%S') if funding_time else 'N/A'
@@ -33,6 +40,7 @@ def get_html_page(manager: Any, contracts: Dict[str, Any]) -> str:
         </tr>
         """
     
+    # 如果没有数据
     if not contracts_html:
         contracts_html = """
         <tr>
@@ -44,6 +52,7 @@ def get_html_page(manager: Any, contracts: Dict[str, Any]) -> str:
         </tr>
         """
     
+    # 获取状态
     status = manager.get_status()
     last_fetch = status.get('last_fetch_time', '从未')
     is_fetched = status.get('is_auto_fetched', False)
