@@ -285,69 +285,53 @@ async def get_websocket_status(request: web.Request) -> web.Response:
 
 async def get_funding_rates(request: web.Request) -> web.Response:
     """
-    【新增接口】获取所有资金费率数据
+    【调试接口】获取资金费率数据（修复版：从market_data读取）
     地址：GET /api/debug/funding_rates
     """
     try:
         # 获取查询参数
         query = request.query
-        exchange = query.get('exchange', '').lower() or None
-        min_rate = float(query.get('min_rate', 0)) if query.get('min_rate') else None
-        max_rate = float(query.get('max_rate', 0)) if query.get('max_rate') else None
-        show_all = query.get('show_all', '').lower() == 'true'
-        sort_by = query.get('sort_by', 'rate')  # rate, abs_rate, symbol
+        sort_by = query.get('sort_by', 'rate')
         
-        # 获取资金费率数据
-        funding_rates = await data_store.get_funding_rates(
-            exchange=exchange,
-            min_rate=min_rate,
-            max_rate=max_rate
-        )
+        # ✅ 从market_data获取资金费率数据
+        funding_data = await data_store.get_market_data(exchange="binance", data_type="funding_settlement")
+        
+        # 转换为旧格式兼容
+        binance_data = {
+            "count": len(funding_data),
+            "data": {}
+        }
+        
+        for symbol, data_dict in funding_data.items():
+            funding_info = data_dict.get('funding_settlement', {})
+            if funding_info:
+                binance_data["data"][symbol] = {
+                    "funding_rate": funding_info.get('funding_rate', 0),
+                    "funding_time": funding_info.get('funding_time'),
+                    "symbol": symbol,
+                    "age_seconds": float('inf')
+                }
+        
+        funding_rates = {"binance": binance_data}
         
         # 如果有排序要求
-        if sort_by and funding_rates:
-            for exch, data in funding_rates.items():
-                if 'data' in data:
-                    sorted_data = dict(sorted(
-                        data['data'].items(),
-                        key=lambda x: _get_sort_key(x[1], sort_by)
-                    ))
-                    data['data'] = sorted_data
+        if sort_by and binance_data["data"]:
+            sorted_items = sorted(
+                binance_data["data"].items(),
+                key=lambda x: _get_sort_key(x[1], sort_by)
+            )
+            binance_data["data"] = dict(sorted_items)
         
-        # 准备响应
-        response = {
+        return web.json_response({
             "success": True,
             "timestamp": datetime.datetime.now().isoformat(),
-            "query": {
-                "exchange": exchange or "all",
-                "min_rate": min_rate,
-                "max_rate": max_rate,
-                "sort_by": sort_by
-            },
-            "funding_rates": funding_rates
-        }
-        
-        # 添加统计信息
-        total_symbols = 0
-        for exch, data in funding_rates.items():
-            total_symbols += data.get('count', 0)
-        
-        response['summary'] = {
-            "total_exchanges": len(funding_rates),
-            "total_symbols": total_symbols,
-            "exchanges": list(funding_rates.keys())
-        }
-        
-        # 添加提示
-        if not show_all and total_symbols > 50:
-            response['hint'] = f"找到 {total_symbols} 个资金费率数据，只显示前50个。如需查看全部，请添加参数 ?show_all=true"
-            # 限制返回数量
-            for exch, data in funding_rates.items():
-                if 'data' in data and len(data['data']) > 50:
-                    data['data'] = dict(list(data['data'].items())[:50])
-                    data['count'] = len(data['data'])
-        
-        return web.json_response(response)
+            "funding_rates": funding_rates,
+            "summary": {
+                "total_exchanges": 1,
+                "total_symbols": binance_data["count"],
+                "exchanges": ["binance"]
+            }
+        })
         
     except Exception as e:
         logger.error(f"获取资金费率数据失败: {e}")
