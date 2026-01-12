@@ -57,7 +57,7 @@ class Step1Filter:
                 raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
         if should_log:
-            logger.info(f"🔄【流水线步骤1】开始处理 {len(raw_items)} 条原始数据...")
+            logger.info(f"🔄【流水线步骤1】开始处理data_store流入的 {len(raw_items)} 条原始数据...")
             
             # ✅ 修复：将所有统计信息收集到一个字符串中一次性输出
             stats_lines = []
@@ -101,9 +101,9 @@ class Step1Filter:
                 continue
         
         if should_log:
-#            logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条数据")
+            logger.info(f"✅【流水线步骤1】Step1过滤完成，共提取 {len(results)} 条精简数据")
             
-            # ✅ 同样修复提取后的统计信息
+            # ✅ 提取后的统计信息
 #            extracted_stats_lines = []
 #            extracted_stats_lines.append("📊【流水线步骤1】提取数据合约统计:")
             

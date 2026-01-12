@@ -107,7 +107,7 @@ class Step3Align:
                     continue
         
         if should_log:
-            logger.info(f"🔄【流水线步骤3】开始对齐 {len(fused_results)} 条融合数据...")
+            logger.info(f"🔄【流水线步骤3】开始对齐step2输出的 {len(fused_results)} 条融合数据...")
             
             # 正确的合约分布统计
             logger.info(f"📊【流水线步骤3】合约分布统计:")
@@ -116,7 +116,7 @@ class Step3Align:
             logger.info(f"  • 仅币安: {binance_only_contracts} 个")
             logger.info(f"  • 双平台: {both_platform_contracts} 个")
             
-            logger.info(f"✅【流水线步骤3】Step3对齐完成，共生成 {len(align_results)} 条对齐数据")
+            logger.info(f"✅【流水线步骤3】Step3对齐完成，共生成 {len(align_results)} 条双平台合约的对齐数据")
             
             # 时间转换统计
             if time_conversion_errors == 0:

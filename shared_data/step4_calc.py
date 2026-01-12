@@ -55,7 +55,7 @@ class Step4Calc:
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
         if should_log:
-            logger.info(f"🔄【流水线步骤4】开始单平台计算 {len(aligned_results)} 个合约...")
+            logger.info(f"🔄【流水线步骤4】开始单平台计算Step3输出的 {len(aligned_results)} 个双平台合约的对齐数据...")
         
         # 当前批次统计（按合约计数）
         batch_stats = {

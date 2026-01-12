@@ -67,7 +67,7 @@ class Step2Fusion:
         self.fusion_stats["total_groups"] = len(grouped)
         
         if should_log:
-            logger.info(f"🔄【流水线步骤2】开始融合 {len(step1_results)} 条Step1数据...")
+            logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
             logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
         
         # 合并每组数据

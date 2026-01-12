@@ -70,7 +70,7 @@ class Step5CrossCalc:
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
         if should_log:
-            logger.info(f"✅【流水线步骤5】开始跨平台计算 {len(platform_results)} 条单平台数据...")
+            logger.info(f"✅【流水线步骤5】开始跨平台计算Step4输出的 {len(platform_results)} 条单平台数据...")
         
         if not platform_results:
             if should_log:
@@ -107,7 +107,7 @@ class Step5CrossCalc:
             # 处理完成后，打印统计结果
             actual_contracts = len(cross_results)
             
-            logger.info(f"✅【流水线步骤5】Step5计算完成，共生成 {actual_contracts} 条跨平台数据")
+            logger.info(f"✅【流水线步骤5】Step5计算完成，共生成 {actual_contracts} 个合约的跨平台数据")
             
             # 只显示当前批次的统计
             self._log_batch_statistics(total_contracts, actual_contracts, cross_results)
@@ -145,6 +145,7 @@ class Step5CrossCalc:
             success_rate = (actual_contracts / total_contracts) * 100
             logger.info(f"🎉【流水线步骤5】当前批次完成率: {success_rate:.1f}%")
             logger.info(f"✅【流水线步骤5】成功计算 {actual_contracts} 个合约的跨平台数据")
+            logger.info(f"✅【流水线步骤5】成功生成 {actual_contracts} 个双平台合约的{actual_contracts}条成品数据")
     
     def _validate_data_quality(self, results: List[CrossPlatformData]):
         """验证数据处理结果（只做统计，不做过滤）"""
