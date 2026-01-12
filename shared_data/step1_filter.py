@@ -43,7 +43,7 @@ class Step1Filter:
         },
         # ✅ 修正：币安历史费率数据
         "binance_funding_settlement": {
-            "path": ["data"],  # 直接从data字段获取
+            "path": ["raw_data"],  # 直接从raw_data字段获取
             "fields": {
                 "contract_name": "symbol", 
                 "funding_rate": "funding_rate", 
