@@ -251,26 +251,38 @@ class FundingSettlementManager:
     async def _push_to_data_store(self, filtered_data: Dict[str, Dict]):
         """
         ✅ 推送到共享数据模块：统一存储到market_data（正规化改造）
+        使用与WebSocket数据一致的raw_data格式
         """
         try:
-            logger.info("🔂【历史费率】推送新数据...")
+            logger.info("🔂【历史费率】推送新数据（raw_data格式）...")
+            
+            current_timestamp = datetime.now().isoformat()
             
             for symbol, data in filtered_data.items():
+                # ✅ 直接构建data，包含raw_data字段
                 await data_store.update_market_data(
                     exchange="binance",
                     symbol=symbol,
                     data={
-                        "exchange": "binance",  # ✅ 加上exchange
+                        "exchange": "binance",
                         "symbol": symbol,
                         "data_type": "funding_settlement",
-                        "funding_rate": data.get('funding_rate'),
-                        "funding_time": data.get('funding_time'),
-                        "next_funding_time": data.get('next_funding_time'),
-                        "source": "api"  # ⚠️ 关键：这里指定source="api"
+                        "raw_data": {  # ✅ 关键修改：直接定义raw_data字段
+                            "symbol": symbol,
+                            "fundingTime": data.get('funding_time'),
+                            "fundingRate": str(data.get('funding_rate', '0')),
+                            "funding_time": data.get('funding_time'),
+                            "funding_rate": data.get('funding_rate'),
+                            "next_funding_time": data.get('next_funding_time'),
+                            "timestamp": current_timestamp,
+                            "source": "api"
+                        },
+                        "timestamp": current_timestamp,
+                        "source": "api"
                     }
                 )
             
-            logger.info(f"✅【历史费率】推送完成: {len(filtered_data)} 个合约")
+            logger.info(f"✅【历史费率】推送完成: {len(filtered_data)} 个合约（raw_data格式）")
         except Exception as e:
             logger.error(f"❌【历史费率】推送失败: {e}")
             raise
