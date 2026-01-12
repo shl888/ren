@@ -43,7 +43,7 @@ class DataStore:
         self.private_water_callback = None  # 私人数据→管理员
         self.private_flowing = True         # 私人管道默认常开
         
-        # 规则执行记录（移除历史费率的特殊记录）
+        # 规则执行记录
         self.execution_records = {
             "total_flows": 0,                   # 总共放水次数
             "last_flow_time": 0,
@@ -200,12 +200,12 @@ class DataStore:
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ✅ 统一构建 water_item - 所有数据类型同样处理
+                        # ✅ 关键修改：直接传数据，不包装！
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'raw_data': data.get('raw_data', data),  # 统一处理
+                            'data': data,  # ⚠️ 直接传数据，不包装！
                             'timestamp': data.get('timestamp'),
                             'priority': 5
                         }

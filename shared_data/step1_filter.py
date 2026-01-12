@@ -20,13 +20,30 @@ class ExtractedData:
 
 class Step1Filter:
     FIELD_MAP = {
-        "okx_ticker": {"path": ["raw_data", "data", 0], "fields": {"contract_name": "instId", "latest_price": "last"}},
-        "okx_funding_rate": {"path": ["raw_data", "data", 0], "fields": {"contract_name": "instId", "funding_rate": "fundingRate", "current_settlement_time": "fundingTime", "next_settlement_time": "nextFundingTime"}},
-        "binance_ticker": {"path": ["raw_data"], "fields": {"contract_name": "s", "latest_price": "c"}},
-        "binance_mark_price": {"path": ["raw_data"], "fields": {"contract_name": "s", "funding_rate": "r", "current_settlement_time": "T"}},
-        # ✅ 修复：币安历史费率数据，path改为空列表，直接使用raw_item
+        "okx_ticker": {
+            "path": ["data", "raw_data", "data", 0], 
+            "fields": {"contract_name": "instId", "latest_price": "last"}
+        },
+        "okx_funding_rate": {
+            "path": ["data", "raw_data", "data", 0], 
+            "fields": {
+                "contract_name": "instId", 
+                "funding_rate": "fundingRate", 
+                "current_settlement_time": "fundingTime", 
+                "next_settlement_time": "nextFundingTime"
+            }
+        },
+        "binance_ticker": {
+            "path": ["data", "raw_data"], 
+            "fields": {"contract_name": "s", "latest_price": "c"}
+        },
+        "binance_mark_price": {
+            "path": ["data", "raw_data"], 
+            "fields": {"contract_name": "s", "funding_rate": "r", "current_settlement_time": "T"}
+        },
+        # ✅ 修正：币安历史费率数据
         "binance_funding_settlement": {
-            "path": [],  # ✅ 关键修复：改为空列表
+            "path": ["data"],  # 直接从data字段获取
             "fields": {
                 "contract_name": "symbol", 
                 "funding_rate": "funding_rate", 
@@ -175,6 +192,7 @@ class Step1Filter:
         
         if is_binance_history:
             logger.debug(f"🔍【步骤1详细调试】开始处理币安历史费率: {exchange}.{symbol}.{data_type}")
+            logger.debug(f"🔍【步骤1详细调试】raw_item keys: {list(raw_item.keys())}")
         
         # ✅ 修复：正确处理币安历史费率数据类型
         if exchange == "binance" and data_type == "funding_settlement":
@@ -200,7 +218,7 @@ class Step1Filter:
             logger.debug(f"  • path: {path}")
             logger.debug(f"  • fields: {fields}")
         
-        # ✅ 修复：统一处理逻辑，移除特殊判断
+        # ✅ 修复：统一处理逻辑
         if path and len(path) > 0:
             # 有路径配置：遍历路径获取数据
             data_source = self._traverse_path(raw_item, path)
@@ -211,7 +229,7 @@ class Step1Filter:
         if is_binance_history:
             logger.debug(f"🔍【步骤1详细调试】data_source 类型: {type(data_source)}")
             if isinstance(data_source, dict):
-                logger.debug(f"🔍【步骤1详细调试】data_source keys: {list(data_source.keys())[:10]}")  # 只显示前10个
+                logger.debug(f"🔍【步骤1详细调试】data_source keys: {list(data_source.keys())}")
             else:
                 logger.debug(f"🔍【步骤1详细调试】data_source: {data_source}")
         
@@ -260,13 +278,6 @@ class Step1Filter:
                 if isinstance(data_source, dict):
                     available_keys = list(data_source.keys())
                     logger.warning(f"⚠️【步骤1调试】data_source中可用字段: {available_keys}")
-                    
-                    # 检查是否有其他可能的字段名
-                    for key in available_keys:
-                        if 'funding' in key.lower() or 'rate' in key.lower():
-                            logger.warning(f"⚠️【步骤1调试】发现可能的费率字段: {key} = {data_source[key]}")
-                        if 'time' in key.lower() and 'funding' in key.lower():
-                            logger.warning(f"⚠️【步骤1调试】发现可能的时间字段: {key} = {data_source[key]}")
             else:
                 logger.info(f"✅【步骤1调试】币安历史费率数据提取成功: {symbol}")
                 logger.info(f"  • 费率: {extracted_payload.get('funding_rate')}")
