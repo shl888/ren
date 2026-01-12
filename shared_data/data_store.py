@@ -188,27 +188,23 @@ class DataStore:
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """按规则收集水 - ✅ 修复币安历史费率逻辑"""
+        """按规则收集水 - ✅ 修复：正确的四步流程"""
         if not self.rules:
             return []
         
         water = []
         
         async with self.locks['market_data']:
-
             # ==================== 第一步：检查开关状态 ====================
-            # 如果历史费率已完成，直接跳过所有历史费率数据
             history_complete = self.execution_records["binance_history"]["history_complete"]
-          
-          
+            
             # ==================== 第二步：统计币安历史费率数据 ====================
             total_binance_history_contracts = 0
             for sym, sym_data in self.market_data.get("binance", {}).items():
                 if "funding_settlement" in sym_data:
                     total_binance_history_contracts += 1
-
             
-            # ==================== 第三步步：遍历处理数据 ====================
+            # ==================== 第三步：遍历处理所有数据 ====================
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
@@ -219,29 +215,38 @@ class DataStore:
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ==================== 币安历史费率特殊规则 ====================
+                        # ==================== 币安历史费率特殊规则处理 ====================
                         if exchange == "binance" and data_type == "funding_settlement":
-                            # ✅ 修复：如果已完成，跳过所有历史费率（不只是当前这个）
+                            # 如果已完成，跳过所有历史费率
                             if history_complete:
-                                # 直接跳过这个数据，不添加到water中
-#                                logger.debug(f"⏭️【数据池】跳过历史费率 {symbol}，已完成")
-                                continue
+                                continue  # 跳过这个数据，不添加到water
                             
                             # 检查这个合约是否已流过
                             if symbol in self.execution_records["binance_history"]["flowed_contracts"]:
-#                                logger.debug(f"⏭️【数据池】跳过历史费率 {symbol}，已流过")
-                                continue
+                                continue  # 已流过，跳过
                             
-                            # ✅ 这个合约没流过，准备流出
-#                            logger.info(f"🚰【数据池】流出币安历史费率: {symbol}")
-                            
-                            # 标记为已流过
+                            # ✅ 这个合约没流过，标记为已流过
                             async with self.locks['execution_records']:
                                 self.execution_records["binance_history"]["flowed_contracts"].add(symbol)
                                 self.execution_records["binance_history"]["total_flowed"] += 1
                                 self.execution_records["binance_history"]["last_flow_time"] = time.time()
+                            
+                            # ✅ 构建数据并添加到water
+                            water_item = {
+                                'exchange': exchange,
+                                'symbol': symbol,
+                                'data_type': data_type,
+                                'raw_data': data.get('raw_data', data),
+                                'timestamp': data.get('timestamp'),
+                                'priority': 5
+                            }
+                            
+                            water.append(water_item)
+                            
+                            # ✅ 重要：跳过下面的通用构建代码
+                            continue
                         
-                        # ==================== 构建数据格式 ====================
+                        # ==================== 其他数据类型处理 ====================
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
@@ -254,7 +259,7 @@ class DataStore:
                         water.append(water_item)
             
             # ==================== 第四步：检查是否全部完成 ====================
-            # 只有有历史费率数据时才检查
+            # 只有有历史费率数据且开关未关闭时才检查
             if total_binance_history_contracts > 0 and not history_complete:
                 flowed_count = len(self.execution_records["binance_history"]["flowed_contracts"])
                 
