@@ -55,7 +55,7 @@ class Step1Filter:
     def __init__(self):
         self.stats = defaultdict(int)
         self.last_log_time = 0
-        self.log_interval = 120  # 2分钟
+        self.log_interval = 60  # 1分钟
         self.process_count = 0
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
@@ -89,10 +89,10 @@ class Step1Filter:
             
             type_order = [
                 "okx_ticker",
-                "okx_funding_rate"
+                "okx_funding_rate",
                 "binance_ticker",
                 "binance_mark_price", 
-                "binance_funding_settlement",
+                "binance_funding_settlement"
                 
             ]
             
