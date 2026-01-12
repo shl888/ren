@@ -188,7 +188,7 @@ class DataStore:
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """按规则收集水 - ✅ 修复：正确的四步流程"""
+        """按规则收集水 - 统一化处理所有数据类型"""
         if not self.rules:
             return []
         
@@ -215,7 +215,12 @@ class DataStore:
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ==================== 币安历史费率特殊规则处理 ====================
+                        # ==================== 统一构建逻辑 ====================
+                        # ✅ 关键修复：所有数据类型使用相同的构建逻辑
+                        # 对于历史费率数据，data 本身就是包含 funding_rate、funding_time 的字典
+                        # 对于其他数据，data.get('raw_data', data) 也能正确处理
+                        
+                        # 检查这个合约是否已流过（仅针对币安历史费率）
                         if exchange == "binance" and data_type == "funding_settlement":
                             # 如果已完成，跳过所有历史费率
                             if history_complete:
@@ -225,33 +230,18 @@ class DataStore:
                             if symbol in self.execution_records["binance_history"]["flowed_contracts"]:
                                 continue  # 已流过，跳过
                             
-                            # ✅ 这个合约没流过，标记为已流过
+                            # ✅ 标记为已流过
                             async with self.locks['execution_records']:
                                 self.execution_records["binance_history"]["flowed_contracts"].add(symbol)
                                 self.execution_records["binance_history"]["total_flowed"] += 1
                                 self.execution_records["binance_history"]["last_flow_time"] = time.time()
-                            
-                            # ✅ 构建数据并添加到water
-                            water_item = {
-                                'exchange': exchange,
-                                'symbol': symbol,
-                                'data_type': data_type,
-                                'raw_data': data.get('raw_data', data),
-                                'timestamp': data.get('timestamp'),
-                                'priority': 5
-                            }
-                            
-                            water.append(water_item)
-                            
-                            # ✅ 重要：跳过下面的通用构建代码
-                            continue
                         
-                        # ==================== 其他数据类型处理 ====================
+                        # ✅ 统一构建 water_item
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'raw_data': data.get('raw_data', data),
+                            'raw_data': data.get('raw_data', data),  # 统一处理
                             'timestamp': data.get('timestamp'),
                             'priority': 5
                         }
