@@ -5,6 +5,7 @@ from aiohttp import web
 import logging
 import os
 import sys
+import asyncio  # ✅ 加上这行！
 from datetime import datetime
 from typing import Dict, Any
 
