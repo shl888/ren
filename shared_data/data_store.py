@@ -224,11 +224,14 @@ class DataStore:
             
             data_type = data.get("data_type", "unknown")
             
-            # 存储数据（新数据覆盖旧数据）
+            # ✅ 使用传入的source，如果没有则默认websocket
+            source = data.get("source", "websocket")
+            
+            # 存储数据
             self.market_data[exchange][symbol][data_type] = {
                 **data,
                 'store_timestamp': datetime.now().isoformat(),
-                'source': 'websocket'
+                'source': source  # ✅ 保留传入的source
             }
             
             # 存储最新引用
