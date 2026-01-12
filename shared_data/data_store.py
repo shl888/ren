@@ -43,14 +43,8 @@ class DataStore:
         self.private_water_callback = None  # 私人数据→管理员
         self.private_flowing = True         # 私人管道默认常开
         
-        # 规则执行记录
+        # 规则执行记录（移除历史费率的特殊记录）
         self.execution_records = {
-            "binance_history": {
-                "flowed_contracts": set(),      # 已流过的合约
-                "total_flowed": 0,              # 总共流过多少次
-                "history_complete": False,      # 是否已完成
-                "last_flow_time": 0
-            },
             "total_flows": 0,                   # 总共放水次数
             "last_flow_time": 0,
             # ✅ 新增：私人数据执行记录
@@ -195,16 +189,7 @@ class DataStore:
         water = []
         
         async with self.locks['market_data']:
-            # ==================== 第一步：检查开关状态 ====================
-            history_complete = self.execution_records["binance_history"]["history_complete"]
-            
-            # ==================== 第二步：统计币安历史费率数据 ====================
-            total_binance_history_contracts = 0
-            for sym, sym_data in self.market_data.get("binance", {}).items():
-                if "funding_settlement" in sym_data:
-                    total_binance_history_contracts += 1
-            
-            # ==================== 第三步：遍历处理所有数据 ====================
+            # ==================== 简化：所有数据类型统一处理 ====================
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
@@ -215,28 +200,7 @@ class DataStore:
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ==================== 统一构建逻辑 ====================
-                        # ✅ 关键修复：所有数据类型使用相同的构建逻辑
-                        # 对于历史费率数据，data 本身就是包含 funding_rate、funding_time 的字典
-                        # 对于其他数据，data.get('raw_data', data) 也能正确处理
-                        
-                        # 检查这个合约是否已流过（仅针对币安历史费率）
-                        if exchange == "binance" and data_type == "funding_settlement":
-                            # 如果已完成，跳过所有历史费率
-                            if history_complete:
-                                continue  # 跳过这个数据，不添加到water
-                            
-                            # 检查这个合约是否已流过
-                            if symbol in self.execution_records["binance_history"]["flowed_contracts"]:
-                                continue  # 已流过，跳过
-                            
-                            # ✅ 标记为已流过
-                            async with self.locks['execution_records']:
-                                self.execution_records["binance_history"]["flowed_contracts"].add(symbol)
-                                self.execution_records["binance_history"]["total_flowed"] += 1
-                                self.execution_records["binance_history"]["last_flow_time"] = time.time()
-                        
-                        # ✅ 统一构建 water_item
+                        # ✅ 统一构建 water_item - 所有数据类型同样处理
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
@@ -247,19 +211,6 @@ class DataStore:
                         }
                         
                         water.append(water_item)
-            
-            # ==================== 第四步：检查是否全部完成 ====================
-            # 只有有历史费率数据且开关未关闭时才检查
-            if total_binance_history_contracts > 0 and not history_complete:
-                flowed_count = len(self.execution_records["binance_history"]["flowed_contracts"])
-                
-                if flowed_count >= total_binance_history_contracts:
-                    # ✅ 标记为已完成
-                    async with self.locks['execution_records']:
-                        self.execution_records["binance_history"]["history_complete"] = True
-                    
-                    logger.info(f"✅【数据池】币安历史费率已全部流过！共 {flowed_count} 个合约")
-                    logger.info(f"❎【数据池】币安历史费率数据已全部流过1次，该类数据将不再流出。")
         
         return water
     
@@ -420,13 +371,9 @@ class DataStore:
     # ==================== 状态查询 ====================
     
     async def get_execution_status(self) -> Dict[str, Any]:
-        """✅ 增强：获取规则执行状态（包含私人数据）"""
+        """✅ 增强：获取规则执行状态"""
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
-            # 转换set为list以便序列化
-            records["binance_history"]["flowed_contracts"] = list(
-                records["binance_history"]["flowed_contracts"]
-            )
         
         return {
             "flowing": self.flowing,

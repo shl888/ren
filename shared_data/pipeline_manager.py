@@ -39,7 +39,7 @@ class PipelineManager:
         self.brain_callback = brain_callback           # 市场数据回调
         self.private_data_callback = private_data_callback  # ✅ 私人数据回调
         
-        # 立法：制定核心规则
+        # 立法：制定核心规则（移除币安历史费率特殊规则）
         self.rules = {
             # 放水规则
             "flow": {
@@ -47,10 +47,7 @@ class PipelineManager:
                 "enabled": True,              # 是否放水
             },
             
-            # 币安历史费率特殊规则
-            "binance_history": {
-                "max_flows_per_contract": 1,  # 每个合约最多流1次
-            },
+            # ✅ 移除：不再有币安历史费率特殊规则
             
             # 流水线规则
             "pipeline": {
