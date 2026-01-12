@@ -1,5 +1,5 @@
 """
-资金费率结算管理器 - 带显微镜日志版
+资金费率结算管理器 - 带显微镜日志版（正规化改造）
 """
 import asyncio
 import logging
@@ -33,16 +33,9 @@ class FundingSettlementManager:
         self.last_manual_fetch_hour: Optional[int] = None
         self.is_auto_fetched: bool = False
         
-        # 初始化data_store存储结构
-        if not hasattr(data_store, 'funding_settlement'):
-            data_store.funding_settlement = {}
-        if 'binance' not in data_store.funding_settlement:
-            data_store.funding_settlement['binance'] = {}
-        
         logger.info("=" * 60)
         logger.info("✅【历史费率】 FundingSettlementManager 初始化完成")
         logger.info(f"【历史费率】 API端点: {self.BINANCE_FUNDING_RATE_URL}")
-        logger.info(f"【历史费率】存储路径: data_store.funding_settlement['binance']")
         logger.info("=" * 60)
     
     async def fetch_funding_settlement(self, max_retries: int = 3) -> Dict[str, Any]:
@@ -115,7 +108,7 @@ class FundingSettlementManager:
                             elif response.status == 403:
                                 logger.error(" ❌【历史费率】  原因: IP被封禁")
                             else:
-                                logger.error(f" ❌【历史费率】 原因: 未知HTTP错误")
+                                logger.error(f" ❌【历史费率】原因: 未知HTTP错误")
                             
                             result["error"] = f"HTTP {response.status}: {error_text[:100]}"
                             continue  # 重试
@@ -257,15 +250,21 @@ class FundingSettlementManager:
     
     async def _push_to_data_store(self, filtered_data: Dict[str, Dict]):
         """
-        推送到共享数据模块
+        ✅ 推送到共享数据模块：统一存储到market_data（正规化改造）
         """
         try:
-            logger.info(" 🔂【历史费率】清空旧数据...")
-            data_store.funding_settlement['binance'].clear()
-            
+            logger.info("🔂【历史费率】清空旧数据...")
             logger.info("   🔂【历史费率】推送新数据...")
+            
             for symbol, data in filtered_data.items():
-                data_store.funding_settlement['binance'][symbol] = data
+                await data_store.update_market_data(
+                    exchange="binance",
+                    symbol=symbol,
+                    data={
+                        "data_type": "funding_settlement",
+                        **data
+                    }
+                )
             
             logger.info(f"【历史费率】 ✅ 推送完成: {len(filtered_data)} 个合约")
         except Exception as e:
@@ -328,6 +327,5 @@ class FundingSettlementManager:
             "last_fetch_time": datetime.fromtimestamp(self.last_fetch_time).isoformat() if self.last_fetch_time else None,
             "is_auto_fetched": self.is_auto_fetched,
             "manual_fetch_count": manual_count_str,
-            "usdt_contracts_count": len(data_store.funding_settlement.get('binance', {})),
             "api_weight_per_request": self.API_WEIGHT_PER_REQUEST
         }
