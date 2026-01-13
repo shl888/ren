@@ -41,9 +41,8 @@ class Step1Filter:
             "path": ["data", "raw_data"], 
             "fields": {"contract_name": "s", "funding_rate": "r", "current_settlement_time": "T"}
         },
-        # ✅ 币安历史费率数据（统一格式）
         "binance_funding_settlement": {
-            "path": ["data", "raw_data"],  # 与其他数据格式统一
+            "path": ["data", "raw_data"],
             "fields": {
                 "contract_name": "symbol", 
                 "funding_rate": "funding_rate", 
@@ -55,58 +54,37 @@ class Step1Filter:
     def __init__(self):
         self.stats = defaultdict(int)
         self.last_log_time = 0
-        self.log_interval = 60  # 1分钟
+        self.log_interval = 60
         self.process_count = 0
+        # ✅ DEBUG: 每种类型的打印计数器
+        self.debug_print_counters = defaultdict(int)
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
         """处理原始数据"""
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
-        # 统计原始数据
         raw_contract_stats = defaultdict(set)
-        
         for item in raw_items:
             exchange = item.get("exchange", "unknown")
             data_type = item.get("data_type", "unknown")
             symbol = item.get("symbol", "")
-            
-            # 生成类型键
-            if exchange == "binance" and data_type == "funding_settlement":
-                type_key = "binance_funding_settlement"
-            else:
-                type_key = f"{exchange}_{data_type}"
-            
+            type_key = "binance_funding_settlement" if exchange == "binance" and data_type == "funding_settlement" else f"{exchange}_{data_type}"
             if type_key in self.FIELD_MAP:
                 raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
-        # 定期日志输出
         if should_log:
             logger.info(f"🔄【流水线步骤1】开始处理 data_store流入的{len(raw_items)} 条原始数据...")
-            
-            stats_lines = []
-            stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
-            
-            type_order = [
-                "okx_ticker",
-                "okx_funding_rate",
-                "binance_ticker",
-                "binance_mark_price", 
-                "binance_funding_settlement"
-                
-            ]
-            
+            stats_lines = ["📊【流水线步骤1】原始数据合约统计:"]
+            type_order = ["okx_ticker", "okx_funding_rate", "binance_ticker", "binance_mark_price", "binance_funding_settlement"]
             for type_key in type_order:
                 symbol_set = raw_contract_stats.get(type_key, set())
                 actual_count = len([s for s in symbol_set if s and s != "empty"])
                 stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
-            
             logger.info("\n".join(stats_lines))
             self.last_log_time = current_time
         
-        # 提取数据
         results = []
-        
         for item in raw_items:
             try:
                 extracted = self._extract_item(item)
@@ -117,20 +95,17 @@ class Step1Filter:
                 logger.error(f"❌【流水线步骤1】提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
                 continue
         
-        # 定期日志输出结果
         if should_log:
             logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
-            
-            # 统计每种数据类型的提取数量
             if self.stats:
                 logger.info("📊【流水线步骤1】提取数据统计:")
                 for data_type, count in sorted(self.stats.items()):
                     logger.info(f"  • {data_type}: {count} 条")
-            
             self.process_count = 0
         
         self.process_count += 1
-        
+        # ✅ DEBUG: 重置打印计数器
+        self.debug_print_counters.clear()
         return results
     
     def _traverse_path(self, data: Any, path: List[Any]) -> Any:
@@ -153,46 +128,41 @@ class Step1Filter:
         exchange = raw_item.get("exchange")
         data_type = raw_item.get("data_type")
         symbol = raw_item.get("symbol", "")
-        
-        # 生成类型键
-        if exchange == "binance" and data_type == "funding_settlement":
-            type_key = "binance_funding_settlement"
-        else:
-            type_key = f"{exchange}_{data_type}"
+        type_key = "binance_funding_settlement" if exchange == "binance" and data_type == "funding_settlement" else f"{exchange}_{data_type}"
         
         if type_key not in self.FIELD_MAP:
-            # logger.debug(f"⚠️ 未知数据类型: {type_key}")  # 调试日志注释掉
             return None
         
         config = self.FIELD_MAP[type_key]
         path = config["path"]
         fields = config["fields"]
         
-        # 遍历路径获取数据源
-        if path and len(path) > 0:
-            data_source = self._traverse_path(raw_item, path)
-        else:
-            data_source = raw_item
+        data_source = self._traverse_path(raw_item, path) if path and len(path) > 0 else raw_item
         
         if data_source is None:
-            # logger.debug(f"⚠️ 数据源为空: {type_key}, path={path}")  # 调试日志注释掉
             return None
         
-        # 提取字段
         extracted_payload = {}
         for output_key, input_key in fields.items():
             value = data_source.get(input_key) if isinstance(data_source, dict) else None
             extracted_payload[output_key] = value
         
-        # 获取 symbol
         if not symbol and "contract_name" in extracted_payload:
             symbol = extracted_payload["contract_name"]
         
-        # 对于币安历史费率，检查必要字段
-        if type_key == "binance_funding_settlement":
-            if extracted_payload.get('funding_rate') is None:
-                # logger.debug(f"⚠️ 币安历史费率数据funding_rate为空: {symbol}")  # 调试日志注释掉
-                return None
+        # ✅ DEBUG: 打印前2条币安历史数据
+        if type_key == "binance_funding_settlement" and self.debug_print_counters[type_key] < 2:
+            logger.warning(f"【DEBUG-Step1-币安历史】{symbol} 原始data_source={data_source}")
+            logger.warning(f"【DEBUG-Step1-币安历史】{symbol} 提取payload={extracted_payload}")
+            self.debug_print_counters[type_key] += 1
+        
+        # ✅ DEBUG: 打印前2条其他类型数据
+        if type_key != "binance_funding_settlement" and self.debug_print_counters[type_key] < 2:
+            logger.warning(f"【DEBUG-Step1-{type_key}】{symbol} payload={extracted_payload}")
+            self.debug_print_counters[type_key] += 1
+        
+        if type_key == "binance_funding_settlement" and extracted_payload.get('funding_rate') is None:
+            return None
         
         return ExtractedData(
             data_type=type_key,
