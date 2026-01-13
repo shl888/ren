@@ -69,18 +69,19 @@ class Step2Fusion:
         
         self.fusion_stats["total_groups"] = len(grouped)
         
-        if should_log:
-            logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
-            logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
-            
-            # 统计每个交易所的合约组数
-            exchange_groups = defaultdict(list)
-            for key in grouped:
-                exchange = key.split("_")[0] if "_" in key else "unknown"
-                exchange_groups[exchange].append(key)
-            
-            for exchange, groups in exchange_groups.items():
-                logger.info(f"【流水线步骤2】  {exchange}: {len(groups)} 个合约")
+        # 处理日志 - 暂时关闭
+        # if should_log:
+        #     logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
+        #     logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
+        #     
+        #     # 统计每个交易所的合约组数
+        #     exchange_groups = defaultdict(list)
+        #     for key in grouped:
+        #         exchange = key.split("_")[0] if "_" in key else "unknown"
+        #         exchange_groups[exchange].append(key)
+        #     
+        #     for exchange, groups in exchange_groups.items():
+        #         logger.info(f"【流水线步骤2】  {exchange}: {len(groups)} 个合约")
         
         # 合并每组数据
         results = []
@@ -102,7 +103,8 @@ class Step2Fusion:
             if exchange not in exchange_groups:
                 continue
                 
-            logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
+            # 处理日志 - 暂时关闭
+            # logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
             
             for key, items in exchange_groups[exchange]:
                 try:
@@ -113,96 +115,97 @@ class Step2Fusion:
                         self.stats[fused.exchange] += 1
                         self.fusion_stats["success_groups"] += 1
                         
-                        # 打印详细融合结果（每个交易所最多2条）
-                        if exchange == "okx" and self.okx_log_counter < 2:
-                            self._log_fused_data(fused, key, items, self.okx_log_counter + 1)
-                            self.okx_log_counter += 1
-                        elif exchange == "binance" and self.binance_log_counter < 2:
-                            self._log_fused_data(fused, key, items, self.binance_log_counter + 1)
-                            self.binance_log_counter += 1
+                        # 打印详细融合结果（每个交易所最多2条）- 暂时关闭
+                        # if exchange == "okx" and self.okx_log_counter < 2:
+                        #     self._log_fused_data(fused, key, items, self.okx_log_counter + 1)
+                        #     self.okx_log_counter += 1
+                        # elif exchange == "binance" and self.binance_log_counter < 2:
+                        #     self._log_fused_data(fused, key, items, self.binance_log_counter + 1)
+                        #     self.binance_log_counter += 1
                             
                     else:
                         self.fusion_stats["failed_groups"] += 1
-                        # 打印融合失败信息（每个交易所最多2条）
-                        if exchange == "okx" and self.okx_log_counter < 2:
-                            logger.warning(f"⚠️【流水线步骤2】OKX融合失败详情 {self.okx_log_counter + 1}:")
-                            logger.warning(f"   合约组: {key}")
-                            logger.warning(f"   源数据数量: {len(items)} 条")
-                            logger.warning(f"   源数据类型: {[item.data_type for item in items]}")
-                            logger.warning(f"   失败原因: 缺少必要字段或数据不完整")
-                            self.okx_log_counter += 1
-                        elif exchange == "binance" and self.binance_log_counter < 2:
-                            logger.warning(f"⚠️【流水线步骤2】币安融合失败详情 {self.binance_log_counter + 1}:")
-                            logger.warning(f"   合约组: {key}")
-                            logger.warning(f"   源数据数量: {len(items)} 条")
-                            logger.warning(f"   源数据类型: {[item.data_type for item in items]}")
-                            logger.warning(f"   失败原因: 缺少必要字段或数据不完整")
-                            self.binance_log_counter += 1
+                        # 打印融合失败信息（每个交易所最多2条）- 暂时关闭
+                        # if exchange == "okx" and self.okx_log_counter < 2:
+                        #     logger.warning(f"⚠️【流水线步骤2】OKX融合失败详情 {self.okx_log_counter + 1}:")
+                        #     logger.warning(f"   合约组: {key}")
+                        #     logger.warning(f"   源数据数量: {len(items)} 条")
+                        #     logger.warning(f"   源数据类型: {[item.data_type for item in items]}")
+                        #     logger.warning(f"   失败原因: 缺少必要字段或数据不完整")
+                        #     self.okx_log_counter += 1
+                        # elif exchange == "binance" and self.binance_log_counter < 2:
+                        #     logger.warning(f"⚠️【流水线步骤2】币安融合失败详情 {self.binance_log_counter + 1}:")
+                        #     logger.warning(f"   合约组: {key}")
+                        #     logger.warning(f"   源数据数量: {len(items)} 条")
+                        #     logger.warning(f"   源数据类型: {[item.data_type for item in items]}")
+                        #     logger.warning(f"   失败原因: 缺少必要字段或数据不完整")
+                        #     self.binance_log_counter += 1
                 except Exception as e:
                     self.fusion_stats["failed_groups"] += 1
-                    # 打印异常失败信息
-                    if exchange == "okx" and self.okx_log_counter < 2:
-                        logger.error(f"❌【流水线步骤2】OKX融合异常 {self.okx_log_counter + 1}:")
-                        logger.error(f"   合约组: {key}")
-                        logger.error(f"   源数据数量: {len(items)} 条")
-                        logger.error(f"   错误信息: {e}")
-                        self.okx_log_counter += 1
-                    elif exchange == "binance" and self.binance_log_counter < 2:
-                        logger.error(f"❌【流水线步骤2】币安融合异常 {self.binance_log_counter + 1}:")
-                        logger.error(f"   合约组: {key}")
-                        logger.error(f"   源数据数量: {len(items)} 条")
-                        logger.error(f"   错误信息: {e}")
-                        self.binance_log_counter += 1
-                    # 只在日志频率控制时打印错误
-                    if should_log:
-                        logger.error(f"❌【流水线步骤2】融合失败: {key} - {e}")
+                    # 打印异常失败信息 - 暂时关闭
+                    # if exchange == "okx" and self.okx_log_counter < 2:
+                    #     logger.error(f"❌【流水线步骤2】OKX融合异常 {self.okx_log_counter + 1}:")
+                    #     logger.error(f"   合约组: {key}")
+                    #     logger.error(f"   源数据数量: {len(items)} 条")
+                    #     logger.error(f"   错误信息: {e}")
+                    #     self.okx_log_counter += 1
+                    # elif exchange == "binance" and self.binance_log_counter < 2:
+                    #     logger.error(f"❌【流水线步骤2】币安融合异常 {self.binance_log_counter + 1}:")
+                    #     logger.error(f"   合约组: {key}")
+                    #     logger.error(f"   源数据数量: {len(items)} 条")
+                    #     logger.error(f"   错误信息: {e}")
+                    #     self.binance_log_counter += 1
+                    # 只在日志频率控制时打印错误 - 暂时关闭
+                    # if should_log:
+                    #     logger.error(f"❌【流水线步骤2】融合失败: {key} - {e}")
                     continue
         
-        if should_log:
-            # 处理完成后，打印统计结果
-            logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
-            
-            # 按交易所统计合约数
-            okx_contracts = len(exchange_contracts.get("okx", set()))
-            binance_contracts = len(exchange_contracts.get("binance", set()))
-            total_contracts = okx_contracts + binance_contracts
-            
-            logger.info("📊【流水线步骤2】融合结果合约统计:")
-            if okx_contracts > 0:
-                logger.info(f"  • OKX合约数: {okx_contracts} 个")
-                if okx_contracts < 2:
-                    logger.warning(f"⚠️【流水线步骤2】OKX只有 {okx_contracts} 个合约，少于预期2个")
-            if binance_contracts > 0:
-                logger.info(f"  • 币安合约数: {binance_contracts} 个")
-                if binance_contracts < 2:
-                    logger.warning(f"⚠️【流水线步骤2】币安只有 {binance_contracts} 个合约，少于预期2个")
-            
-            # 如果没有某个交易所的数据
-            if okx_contracts == 0:
-                logger.warning(f"⚠️【流水线步骤2】本次没有OKX融合数据")
-            if binance_contracts == 0:
-                logger.warning(f"⚠️【流水线步骤2】本次没有币安融合数据")
-            
-            logger.info(f"  • 总计: {total_contracts} 个合约")
-            
-            # 融合过程统计（合约组数）
-            logger.info(f"📊【流水线步骤2】融合过程统计:")
-            logger.info(f"  • 检测到合约组数: {self.fusion_stats['total_groups']} 组")
-            logger.info(f"  • 成功融合: {self.fusion_stats['success_groups']} 组")
-            logger.info(f"  • 失败/跳过: {self.fusion_stats['failed_groups']} 组")
-            
-            # 详细日志统计
-            logger.info("📊【流水线步骤2】详细日志统计:")
-            logger.info(f"  • OKX显示 {self.okx_log_counter} 条详细结果")
-            logger.info(f"  • 币安显示 {self.binance_log_counter} 条详细结果")
-            
-            # 验证字段完整性（只针对成功融合的结果）
-            if results:
-                self._validate_fields(results)
-            
-            self.last_log_time = current_time
-            # 重置计数（仅用于频率控制）
-            self.process_count = 0
+        # 处理完成后日志 - 暂时关闭
+        # if should_log:
+        #     # 处理完成后，打印统计结果
+        #     logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
+        #     
+        #     # 按交易所统计合约数
+        #     okx_contracts = len(exchange_contracts.get("okx", set()))
+        #     binance_contracts = len(exchange_contracts.get("binance", set()))
+        #     total_contracts = okx_contracts + binance_contracts
+        #     
+        #     logger.info("📊【流水线步骤2】融合结果合约统计:")
+        #     if okx_contracts > 0:
+        #         logger.info(f"  • OKX合约数: {okx_contracts} 个")
+        #         if okx_contracts < 2:
+        #             logger.warning(f"⚠️【流水线步骤2】OKX只有 {okx_contracts} 个合约，少于预期2个")
+        #     if binance_contracts > 0:
+        #         logger.info(f"  • 币安合约数: {binance_contracts} 个")
+        #         if binance_contracts < 2:
+        #             logger.warning(f"⚠️【流水线步骤2】币安只有 {binance_contracts} 个合约，少于预期2个")
+        #     
+        #     # 如果没有某个交易所的数据
+        #     if okx_contracts == 0:
+        #         logger.warning(f"⚠️【流水线步骤2】本次没有OKX融合数据")
+        #     if binance_contracts == 0:
+        #         logger.warning(f"⚠️【流水线步骤2】本次没有币安融合数据")
+        #     
+        #     logger.info(f"  • 总计: {total_contracts} 个合约")
+        #     
+        #     # 融合过程统计（合约组数）
+        #     logger.info(f"📊【流水线步骤2】融合过程统计:")
+        #     logger.info(f"  • 检测到合约组数: {self.fusion_stats['total_groups']} 组")
+        #     logger.info(f"  • 成功融合: {self.fusion_stats['success_groups']} 组")
+        #     logger.info(f"  • 失败/跳过: {self.fusion_stats['failed_groups']} 组")
+        #     
+        #     # 详细日志统计
+        #     logger.info("📊【流水线步骤2】详细日志统计:")
+        #     logger.info(f"  • OKX显示 {self.okx_log_counter} 条详细结果")
+        #     logger.info(f"  • 币安显示 {self.binance_log_counter} 条详细结果")
+        #     
+        #     # 验证字段完整性（只针对成功融合的结果）
+        #     if results:
+        #         self._validate_fields(results)
+        #     
+        #     self.last_log_time = current_time
+        #     # 重置计数（仅用于频率控制）
+        #     self.process_count = 0
         
         self.process_count += 1
         

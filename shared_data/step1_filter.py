@@ -81,28 +81,28 @@ class Step1Filter:
             if type_key in self.FIELD_MAP:
                 raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
-        # 定期日志输出
-        if should_log:
-            logger.info(f"🔄【流水线步骤1】开始处理 data_store流入的{len(raw_items)} 条原始数据...")
-            
-            stats_lines = []
-            stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
-            
-            type_order = [
-                "okx_ticker",
-                "okx_funding_rate",
-                "binance_ticker",
-                "binance_mark_price", 
-                "binance_funding_settlement"
-            ]
-            
-            for type_key in type_order:
-                symbol_set = raw_contract_stats.get(type_key, set())
-                actual_count = len([s for s in symbol_set if s and s != "empty"])
-                stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
-            
-            logger.info("\n".join(stats_lines))
-            self.last_log_time = current_time
+        # 定期日志输出 - 暂时关闭
+        # if should_log:
+        #     logger.info(f"🔄【流水线步骤1】开始处理 data_store流入的{len(raw_items)} 条原始数据...")
+        #     
+        #     stats_lines = []
+        #     stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
+        #     
+        #     type_order = [
+        #         "okx_ticker",
+        #         "okx_funding_rate",
+        #         "binance_ticker",
+        #         "binance_mark_price", 
+        #         "binance_funding_settlement"
+        #     ]
+        #     
+        #     for type_key in type_order:
+        #         symbol_set = raw_contract_stats.get(type_key, set())
+        #         actual_count = len([s for s in symbol_set if s and s != "empty"])
+        #         stats_lines.append(f"  • {type_key}: {actual_count} 个合约")
+        #     
+        #     logger.info("\n".join(stats_lines))
+        #     self.last_log_time = current_time
         
         # 提取数据
         results = []
@@ -115,44 +115,45 @@ class Step1Filter:
                     results.append(extracted)
                     self.stats[extracted.data_type] += 1
                     
-                    # 打印前2条提取结果的详细信息
-                    if self.log_detail_counter < 2:
-                        logger.info(f"📝【流水线步骤1】详细提取结果 {self.log_detail_counter + 1}:")
-                        logger.info(f"   数据类型: {extracted.data_type}")
-                        logger.info(f"   交易所: {extracted.exchange}")
-                        logger.info(f"   交易对: {extracted.symbol}")
-                        logger.info(f"   提取内容: {extracted.payload}")
-                        logger.info(f"   原始数据ID: {item.get('id', 'N/A')}")
-                        logger.info(f"   原始数据时间戳: {item.get('timestamp', 'N/A')}")
-                        self.log_detail_counter += 1
+                    # 打印前2条提取结果的详细信息 - 暂时关闭
+                    # if self.log_detail_counter < 2:
+                    #     logger.info(f"📝【流水线步骤1】详细提取结果 {self.log_detail_counter + 1}:")
+                    #     logger.info(f"   数据类型: {extracted.data_type}")
+                    #     logger.info(f"   交易所: {extracted.exchange}")
+                    #     logger.info(f"   交易对: {extracted.symbol}")
+                    #     logger.info(f"   提取内容: {extracted.payload}")
+                    #     logger.info(f"   原始数据ID: {item.get('id', 'N/A')}")
+                    #     logger.info(f"   原始数据时间戳: {item.get('timestamp', 'N/A')}")
+                    #     self.log_detail_counter += 1
                         
             except Exception as e:
+                # 错误日志仍然保留，但减少详细输出
                 logger.error(f"❌【流水线步骤1】提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
-                # 打印前2条失败数据的详细信息
-                if self.log_detail_counter < 2:
-                    logger.error(f"📝【流水线步骤1】失败数据详情 {self.log_detail_counter + 1}:")
-                    logger.error(f"   数据类型: {item.get('data_type', 'unknown')}")
-                    logger.error(f"   交易所: {item.get('exchange', 'unknown')}")
-                    logger.error(f"   交易对: {item.get('symbol', 'unknown')}")
-                    logger.error(f"   原始数据ID: {item.get('id', 'N/A')}")
-                    self.log_detail_counter += 1
+                # 打印前2条失败数据的详细信息 - 暂时关闭
+                # if self.log_detail_counter < 2:
+                #     logger.error(f"📝【流水线步骤1】失败数据详情 {self.log_detail_counter + 1}:")
+                #     logger.error(f"   数据类型: {item.get('data_type', 'unknown')}")
+                #     logger.error(f"   交易所: {item.get('exchange', 'unknown')}")
+                #     logger.error(f"   交易对: {item.get('symbol', 'unknown')}")
+                #     logger.error(f"   原始数据ID: {item.get('id', 'N/A')}")
+                #     self.log_detail_counter += 1
                 continue
         
-        # 定期日志输出结果
-        if should_log:
-            logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
-            
-            # 统计每种数据类型的提取数量
-            if self.stats:
-                logger.info("📊【流水线步骤1】提取数据统计:")
-                for data_type, count in sorted(self.stats.items()):
-                    logger.info(f"  • {data_type}: {count} 条")
-            
-            # 如果总数据量少于2条，补充说明
-            if len(results) < 2 and self.log_detail_counter < len(results):
-                logger.info(f"⚠️【流水线步骤1】注意: 本次仅提取到 {len(results)} 条数据，少于预期2条")
-            
-            self.process_count = 0
+        # 定期日志输出结果 - 暂时关闭
+        # if should_log:
+        #     logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
+        #     
+        #     # 统计每种数据类型的提取数量
+        #     if self.stats:
+        #         logger.info("📊【流水线步骤1】提取数据统计:")
+        #         for data_type, count in sorted(self.stats.items()):
+        #             logger.info(f"  • {data_type}: {count} 条")
+        #     
+        #     # 如果总数据量少于2条，补充说明
+        #     if len(results) < 2 and self.log_detail_counter < len(results):
+        #         logger.info(f"⚠️【流水线步骤1】注意: 本次仅提取到 {len(results)} 条数据，少于预期2条")
+        #     
+        #     self.process_count = 0
         
         self.process_count += 1
         
