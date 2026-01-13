@@ -292,69 +292,70 @@ class Step4Calc:
         return data
     
     def _calc_binance(self, aligned_item, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
-        """计算币安数据（修复版：确保正确接收T1数据）"""
+        """计算币安数据（直接修复版）"""
         
-        # 必须要有当前时间戳
         if not aligned_item.binance_current_ts:
             return None
         
         symbol = aligned_item.symbol
         
-        # 关键修复：优先使用步骤3传来的原始数据
-        last_ts_from_aligned = aligned_item.binance_last_ts  # T1数据源
-        current_ts_from_aligned = aligned_item.binance_current_ts  # T3_new
+        # 🔥 直接调试：查看步骤3到底传了什么
+        logger.debug(f"🔍 币安数据调试 - {symbol}:")
+        logger.debug(f"  binance_last_ts: {aligned_item.binance_last_ts}")
+        logger.debug(f"  binance_current_ts: {aligned_item.binance_current_ts}")
+        logger.debug(f"  binance_last_settlement: {aligned_item.binance_last_settlement}")
         
-        # 初始化或获取缓存
-        if symbol not in self.binance_cache:
-            # 第一次处理该合约：初始化缓存
-            self.binance_cache[symbol] = {
-                "last_ts": last_ts_from_aligned,  # 直接使用步骤3的T1数据
-                "current_ts": current_ts_from_aligned
-            }
-            logger.debug(f"首次初始化币安缓存 {symbol}: last_ts={last_ts_from_aligned}, current_ts={current_ts_from_aligned}")
-        else:
-            # 已有缓存：执行时间滚动逻辑
-            cache = self.binance_cache[symbol]
-            cached_last_ts = cache["last_ts"]  # T1_last
-            cached_current_ts = cache["current_ts"]  # T2_current
-            
-            # 检查是否需要时间滚动
-            if cached_current_ts and current_ts_from_aligned != cached_current_ts:
-                # 时间滚动：T2_current → T1_last, T3_new → T2_current
-                cache["last_ts"] = cached_current_ts  # 旧的本次变成新的上次
-                cache["current_ts"] = current_ts_from_aligned  # 新的本次覆盖旧的
-                
-                batch_stats["binance_rollovers"] += 1
-                logger.debug(f"币安时间滚动 {symbol}: {cached_current_ts}→last_ts, {current_ts_from_aligned}→current_ts")
+        # 🔥 关键修复：直接使用步骤3的数据，不依赖缓存逻辑
+        last_ts = aligned_item.binance_last_ts  # 直接从步骤3获取
+        current_ts = aligned_item.binance_current_ts
         
-        # 获取当前缓存状态（滚动后）
-        cache = self.binance_cache[symbol]
-        current_cache_last_ts = cache["last_ts"]
-        current_cache_current_ts = cache["current_ts"]
-        
-        # 构建数据对象
+        # 🔥 构建数据对象 - 直接使用步骤3的时间戳
         data = PlatformData(
             symbol=symbol,
             exchange="binance",
             contract_name=aligned_item.binance_contract_name or "",
             latest_price=aligned_item.binance_price,
             funding_rate=aligned_item.binance_funding_rate,
-            last_settlement_time=aligned_item.binance_last_settlement,  # 字符串格式
+            last_settlement_time=aligned_item.binance_last_settlement,
             current_settlement_time=aligned_item.binance_current_settlement,
             next_settlement_time=aligned_item.binance_next_settlement,
             
-            # 关键修复：时间戳来自缓存（滚动后的状态）
-            last_settlement_ts=current_cache_last_ts,    # 可能是None，也可能是滚动后的值
-            current_settlement_ts=current_cache_current_ts,
+            # 🔥 直接使用步骤3的时间戳
+            last_settlement_ts=last_ts,      # 直接使用，不为空就是1768291200009
+            current_settlement_ts=current_ts,  # 直接使用，就是1768305600000
         )
         
-        # 计算费率周期（有上次时间戳才计算）
+        # 🔥 然后执行缓存逻辑（不影响计算）
+        if symbol not in self.binance_cache:
+            self.binance_cache[symbol] = {
+                "last_ts": last_ts,
+                "current_ts": current_ts
+            }
+        else:
+            cache = self.binance_cache[symbol]
+            cached_current_ts = cache["current_ts"]
+            
+            # 时间滚动逻辑
+            if cached_current_ts and current_ts != cached_current_ts:
+                # 滚动：T2_current → T1_last, T3_new → T2_current
+                cache["last_ts"] = cached_current_ts
+                cache["current_ts"] = current_ts
+                batch_stats["binance_rollovers"] += 1
+        
+        # 🔥 计算费率周期（有上次时间戳才计算）
         if data.current_settlement_ts and data.last_settlement_ts:
             data.period_seconds = (data.current_settlement_ts - data.last_settlement_ts) // 1000
-        # else: 无历史数据，period_seconds保持None
+            logger.debug(f"✅ 币安费率周期计算成功: {symbol}, {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
+        else:
+            logger.debug(f"⚠️ 币安费率周期无法计算: {symbol}, last_ts={data.last_settlement_ts}, current_ts={data.current_settlement_ts}")
         
-        # 计算倒计时
-        data.countdown_seconds = self._calc_countdown(data.current_settlement_ts)
+        # 🔥 计算倒计时（基于当前时间戳）
+        if data.current_settlement_ts:
+            data.countdown_seconds = self._calc_countdown(data.current_settlement_ts)
+            # 验证倒计时
+            logger.debug(f"✅ 币安倒计时计算: {symbol}, 目标时间戳={data.current_settlement_ts}, 倒计时={data.countdown_seconds}秒")
+        else:
+            logger.debug(f"⚠️ 币安倒计时无法计算: {symbol}, current_settlement_ts为空")
         
         return data
     
