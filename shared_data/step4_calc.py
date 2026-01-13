@@ -93,6 +93,15 @@ class Step4Calc:
                 has_okx = okx_data is not None
                 has_binance = binance_data is not None
                 
+                # 打印详细计算结果（每个合约只打印一次）- 暂时关闭
+                # if has_okx and self.log_detail_counter < 2:
+                #     self._log_calc_result(okx_data, "OKX", batch_stats.get("binance_rollovers", 0), item)
+                #     self.log_detail_counter += 1
+                
+                # if has_binance and self.log_detail_counter < 2:
+                #     self._log_calc_result(binance_data, "币安", batch_stats.get("binance_rollovers", 0), item)
+                #     self.log_detail_counter += 1
+                
                 # 更新统计
                 if has_okx:
                     all_results.append(okx_data)
@@ -146,6 +155,8 @@ class Step4Calc:
     
     def _log_calc_result(self, data: PlatformData, exchange_name: str, rollover_count: int, source_item: Any):
         """记录计算结果的详细日志 - 暂时关闭"""
+        # logger.info(f"📝【流水线步骤4】{exchange_name}计算结果 {counter}:")
+        # ... 所有日志代码保留，但注释掉 ...
         pass
     
     def _log_batch_statistics(self, batch_stats: Dict[str, int]):
@@ -251,10 +262,13 @@ class Step4Calc:
         # 1. 先把步骤3的数据存入缓存
         current_ts = aligned_item.binance_current_ts
         
+        # 🔥 修复：获取步骤3的历史数据
+        last_ts_from_step3 = aligned_item.binance_last_ts
+        
         if symbol not in self.binance_cache:
-            # 第一次：初始化缓存，没有历史数据
+            # 🔥 修复：第一次初始化缓存时，保存步骤3的历史数据
             self.binance_cache[symbol] = {
-                "last_ts": None,
+                "last_ts": last_ts_from_step3,  # 用步骤3的历史数据
                 "current_ts": current_ts
             }
         else:
