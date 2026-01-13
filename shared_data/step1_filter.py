@@ -57,6 +57,7 @@ class Step1Filter:
         self.last_log_time = 0
         self.log_interval = 60  # 1分钟
         self.process_count = 0
+        self.log_detail_counter = 0  # 用于记录详细日志的计数器
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
         """处理原始数据"""
@@ -93,7 +94,6 @@ class Step1Filter:
                 "binance_ticker",
                 "binance_mark_price", 
                 "binance_funding_settlement"
-                
             ]
             
             for type_key in type_order:
@@ -106,6 +106,7 @@ class Step1Filter:
         
         # 提取数据
         results = []
+        self.log_detail_counter = 0  # 重置详细日志计数器
         
         for item in raw_items:
             try:
@@ -113,8 +114,28 @@ class Step1Filter:
                 if extracted:
                     results.append(extracted)
                     self.stats[extracted.data_type] += 1
+                    
+                    # 打印前2条提取结果的详细信息
+                    if self.log_detail_counter < 2:
+                        logger.info(f"📝【流水线步骤1】详细提取结果 {self.log_detail_counter + 1}:")
+                        logger.info(f"   数据类型: {extracted.data_type}")
+                        logger.info(f"   交易所: {extracted.exchange}")
+                        logger.info(f"   交易对: {extracted.symbol}")
+                        logger.info(f"   提取内容: {extracted.payload}")
+                        logger.info(f"   原始数据ID: {item.get('id', 'N/A')}")
+                        logger.info(f"   原始数据时间戳: {item.get('timestamp', 'N/A')}")
+                        self.log_detail_counter += 1
+                        
             except Exception as e:
                 logger.error(f"❌【流水线步骤1】提取失败: {item.get('exchange')}.{item.get('symbol')} - {e}")
+                # 打印前2条失败数据的详细信息
+                if self.log_detail_counter < 2:
+                    logger.error(f"📝【流水线步骤1】失败数据详情 {self.log_detail_counter + 1}:")
+                    logger.error(f"   数据类型: {item.get('data_type', 'unknown')}")
+                    logger.error(f"   交易所: {item.get('exchange', 'unknown')}")
+                    logger.error(f"   交易对: {item.get('symbol', 'unknown')}")
+                    logger.error(f"   原始数据ID: {item.get('id', 'N/A')}")
+                    self.log_detail_counter += 1
                 continue
         
         # 定期日志输出结果
@@ -122,10 +143,14 @@ class Step1Filter:
             logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
             
             # 统计每种数据类型的提取数量
-#            if self.stats:
-#                logger.info("📊【流水线步骤1】提取数据统计:")
-#                for data_type, count in sorted(self.stats.items()):
-#                    logger.info(f"  • {data_type}: {count} 条")
+            if self.stats:
+                logger.info("📊【流水线步骤1】提取数据统计:")
+                for data_type, count in sorted(self.stats.items()):
+                    logger.info(f"  • {data_type}: {count} 条")
+            
+            # 如果总数据量少于2条，补充说明
+            if len(results) < 2 and self.log_detail_counter < len(results):
+                logger.info(f"⚠️【流水线步骤1】注意: 本次仅提取到 {len(results)} 条数据，少于预期2条")
             
             self.process_count = 0
         

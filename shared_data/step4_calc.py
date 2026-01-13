@@ -45,6 +45,9 @@ class Step4Calc:
         self.last_log_time = 0
         self.log_interval = 180  # 3分钟，单位：秒
         self.process_count = 0
+        self.log_detail_counter = 0  # 用于记录详细日志的计数器
+        self.logged_okx_symbols = set()  # 记录已打印的OKX交易对
+        self.logged_binance_symbols = set()  # 记录已打印的币安交易对
     
     def process(self, aligned_results: List) -> List[PlatformData]:
         """
@@ -74,6 +77,10 @@ class Step4Calc:
         }
         
         all_results = []
+        # 重置详细日志计数器（每个批次重新开始）
+        self.log_detail_counter = 0
+        self.logged_okx_symbols.clear()
+        self.logged_binance_symbols.clear()
         
         for item in aligned_results:
             try:
@@ -84,6 +91,17 @@ class Step4Calc:
                 # 统计每个合约的平台数据完整情况
                 has_okx = okx_data is not None
                 has_binance = binance_data is not None
+                
+                # 打印详细计算结果（每个交易所最多2条，且不重复）
+                if has_okx and self.log_detail_counter < 2 and item.symbol not in self.logged_okx_symbols:
+                    self._log_calc_result(okx_data, "OKX", batch_stats.get("binance_rollovers", 0), item)
+                    self.logged_okx_symbols.add(item.symbol)
+                    self.log_detail_counter += 1
+                
+                if has_binance and self.log_detail_counter < 2 and item.symbol not in self.logged_binance_symbols:
+                    self._log_calc_result(binance_data, "币安", batch_stats.get("binance_rollovers", 0), item)
+                    self.logged_binance_symbols.add(item.symbol)
+                    self.log_detail_counter += 1
                 
                 if has_okx:
                     all_results.append(okx_data)
@@ -108,6 +126,12 @@ class Step4Calc:
                 
             except Exception as e:
                 batch_stats["calculation_errors"] += 1
+                # 打印前2条计算失败的信息
+                if self.log_detail_counter < 2:
+                    logger.error(f"❌【流水线步骤4】计算失败详情 {self.log_detail_counter + 1}:")
+                    logger.error(f"   交易对: {item.symbol}")
+                    logger.error(f"   错误信息: {e}")
+                    self.log_detail_counter += 1
                 if should_log:
                     logger.error(f"❌【流水线步骤4】合约计算失败: {item.symbol} - {e}")
                 continue
@@ -122,12 +146,89 @@ class Step4Calc:
             # 添加缓存报告
             self._log_cache_report(batch_stats["binance_complete_contracts"])
             
+            # 如果总数据量少于预期，补充说明
+            if len(aligned_results) > 0:
+                okx_actual = len(self.logged_okx_symbols)
+                binance_actual = len(self.logged_binance_symbols)
+                logger.info(f"📊【流水线步骤4】详细日志统计:")
+                logger.info(f"  • OKX显示 {okx_actual} 条详细结果")
+                logger.info(f"  • 币安显示 {binance_actual} 条详细结果")
+                
+                if okx_actual < 2 and batch_stats["okx_complete_contracts"] >= 2:
+                    logger.info(f"ℹ️【流水线步骤4】OKX有 {batch_stats['okx_complete_contracts']} 条完整数据，已显示 {okx_actual} 条")
+                if binance_actual < 2 and batch_stats["binance_complete_contracts"] >= 2:
+                    logger.info(f"ℹ️【流水线步骤4】币安有 {batch_stats['binance_complete_contracts']} 条完整数据，已显示 {binance_actual} 条")
+            
             self.last_log_time = current_time
             self.process_count = 0
         
         self.process_count += 1
         
         return all_results
+    
+    def _log_calc_result(self, data: PlatformData, exchange_name: str, rollover_count: int, source_item: Any):
+        """记录计算结果的详细日志"""
+        logger.info(f"📝【流水线步骤4】{exchange_name}计算结果 {len(self.logged_okx_symbols) + len(self.logged_binance_symbols)}:")
+        logger.info(f"   交易对: {data.symbol}")
+        logger.info(f"   合约名称: {data.contract_name}")
+        logger.info(f"   基础数据:")
+        logger.info(f"     • 最新价格: {data.latest_price}")
+        logger.info(f"     • 资金费率: {data.funding_rate}")
+        
+        # 时间字段显示
+        if exchange_name == "OKX":
+            logger.info(f"   时间字段:")
+            logger.info(f"     • 当前结算时间: {data.current_settlement_time} (时间戳: {data.current_settlement_ts})")
+            logger.info(f"     • 下次结算时间: {data.next_settlement_time} (时间戳: {data.next_settlement_ts})")
+            logger.info(f"     • 上次结算时间: {data.last_settlement_time} (OKX应为None)")
+        else:  # 币安
+            logger.info(f"   时间字段:")
+            logger.info(f"     • 上次结算时间: {data.last_settlement_time} (时间戳: {data.last_settlement_ts})")
+            logger.info(f"     • 当前结算时间: {data.current_settlement_time} (时间戳: {data.current_settlement_ts})")
+            logger.info(f"     • 下次结算时间: {data.next_settlement_time} (币安应为None)")
+            
+            # 显示缓存状态
+            if data.symbol in self.binance_cache:
+                cache = self.binance_cache[data.symbol]
+                logger.info(f"   币安缓存状态:")
+                logger.info(f"     • 上次缓存时间戳: {cache.get('last_ts')}")
+                logger.info(f"     • 当前缓存时间戳: {cache.get('current_ts')}")
+                if cache.get('last_ts'):
+                    logger.info(f"     • 上次缓存时间: {self._ts_to_str(cache.get('last_ts'))}")
+                if cache.get('current_ts'):
+                    logger.info(f"     • 当前缓存时间: {self._ts_to_str(cache.get('current_ts'))}")
+        
+        # 计算结果
+        logger.info(f"   计算结果:")
+        if data.period_seconds is not None:
+            hours = data.period_seconds // 3600
+            minutes = (data.period_seconds % 3600) // 60
+            seconds = data.period_seconds % 60
+            logger.info(f"     • 费率周期: {data.period_seconds}秒 ({hours}小时{minutes}分钟{seconds}秒)")
+        else:
+            logger.info(f"     • 费率周期: None (计算失败)")
+        
+        if data.countdown_seconds is not None:
+            hours = data.countdown_seconds // 3600
+            minutes = (data.countdown_seconds % 3600) // 60
+            seconds = data.countdown_seconds % 60
+            logger.info(f"     • 倒计时: {data.countdown_seconds}秒 ({hours}小时{minutes}分钟{seconds}秒)")
+        else:
+            logger.info(f"     • 倒计时: None (计算失败)")
+        
+        # 币安特定信息
+        if exchange_name == "币安":
+            logger.info(f"   币安特定信息:")
+            logger.info(f"     • 时间滚动次数: {rollover_count}")
+            
+            # 显示时间滚动详情
+            if source_item.binance_current_ts and source_item.binance_last_ts:
+                if source_item.binance_current_ts == source_item.binance_last_ts:
+                    logger.info(f"     • 时间滚动状态: 未滚动 (当前时间戳 = 上次时间戳)")
+                else:
+                    logger.info(f"     • 时间滚动状态: 已滚动 (当前时间戳 ≠ 上次时间戳)")
+                    time_diff = (source_item.binance_current_ts - source_item.binance_last_ts) / 1000
+                    logger.info(f"     • 滚动时间差: {time_diff}秒")
     
     def _log_batch_statistics(self, batch_stats: Dict[str, int]):
         """打印当前批次的合约统计结果"""
@@ -137,8 +238,6 @@ class Step4Calc:
         
         logger.info(f"  • 总合约数: {total_contracts} 个")
         logger.info(f"  • 双平台完整: {batch_stats['both_platform_contracts']} 个")
-#        logger.info(f"  • 仅OKX完整: {batch_stats['okx_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
-#        logger.info(f"  • 仅币安完整: {batch_stats['binance_complete_contracts'] - batch_stats['both_platform_contracts']} 个")
         logger.info(f"  • 计算失败: {batch_stats['calculation_errors']} 个")
         
         # 完整性统计
