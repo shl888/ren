@@ -259,6 +259,11 @@ class FundingSettlementManager:
             current_timestamp = datetime.now().isoformat()
             
             for symbol, data in filtered_data.items():
+                # ✅ 清洗 funding_time（毫秒部分归零）
+                funding_time = data.get('funding_time')
+                if funding_time:
+                    funding_time = funding_time // 1000 * 1000
+                
                 # ✅ 直接构建data，包含raw_data字段
                 await data_store.update_market_data(
                     exchange="binance",
@@ -269,9 +274,9 @@ class FundingSettlementManager:
                         "data_type": "funding_settlement",
                         "raw_data": {  # ✅ 关键修改：直接定义raw_data字段
                             "symbol": symbol,
-                            "fundingTime": data.get('funding_time'),
+                            "fundingTime": funding_time,  # ✅ 使用清洗后的值
                             "fundingRate": str(data.get('funding_rate', '0')),
-                            "funding_time": data.get('funding_time'),
+                            "funding_time": funding_time,  # ✅ 使用清洗后的值
                             "funding_rate": data.get('funding_rate'),
                             "next_funding_time": data.get('next_funding_time'),
                             "timestamp": current_timestamp,
