@@ -122,10 +122,10 @@ class Step1Filter:
             logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
             
             # 统计每种数据类型的提取数量
-#            if self.stats:
-#                logger.info("📊【流水线步骤1】提取数据统计:")
-#                for data_type, count in sorted(self.stats.items()):
-#                    logger.info(f"  • {data_type}: {count} 条")
+            if self.stats:
+                logger.info("📊【流水线步骤1】提取数据统计:")
+                for data_type, count in sorted(self.stats.items()):
+                    logger.info(f"  • {data_type}: {count} 条")
             
             self.process_count = 0
         
