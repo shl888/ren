@@ -122,7 +122,6 @@ class Step2Fusion:
             self.process_count = 0
         
         self.process_count += 1
-        # ✅ DEBUG: 重置计数器
         self.debug_print_counters = {"okx": 0, "binance": 0}
         return results
     
@@ -215,7 +214,7 @@ class Step2Fusion:
         
         # ✅ DEBUG: 打印前2条OKX融合数据
         if self.debug_print_counters["okx"] < 2:
-            logger.warning(f"【DEBUG-Step2-OKX】{fused.symbol} latest_price={fused.latest_price} funding_rate={fused.funding_rate} next_settlement={fused.next_settlement_time}")
+            logger.error(f"【DEBUG-Step2-OKX】{fused.symbol} latest_price={fused.latest_price} funding_rate={fused.funding_rate} next_settlement={fused.next_settlement_time}")
             self.debug_print_counters["okx"] += 1
         
         return fused
@@ -255,9 +254,9 @@ class Step2Fusion:
         else:
             stats["missing_history"] += 1
         
-        # ✅ 关键调试：打印历史数据提取结果
+        # ✅ DEBUG: 打印前2条币安融合数据
         if self.debug_print_counters["binance"] < 2:
-            logger.warning(f"【DEBUG-Step2-币安】{fused.symbol} has_history={history_item is not None} last_settlement_time={fused.last_settlement_time} (raw={history_item.payload if history_item else None})")
+            logger.error(f"【DEBUG-Step2-币安】{fused.symbol} last_settlement_time={fused.last_settlement_time} (raw={history_item.payload if history_item else None})")
             self.debug_print_counters["binance"] += 1
         
         required_fields = [fused.latest_price, fused.funding_rate, fused.current_settlement_time]

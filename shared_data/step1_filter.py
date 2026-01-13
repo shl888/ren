@@ -56,11 +56,10 @@ class Step1Filter:
         self.last_log_time = 0
         self.log_interval = 60
         self.process_count = 0
-        # ✅ DEBUG: 每种类型的打印计数器
+        # ✅ DEBUG: 打印计数器
         self.debug_print_counters = defaultdict(int)
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
-        """处理原始数据"""
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
@@ -104,12 +103,10 @@ class Step1Filter:
             self.process_count = 0
         
         self.process_count += 1
-        # ✅ DEBUG: 重置打印计数器
         self.debug_print_counters.clear()
         return results
     
     def _traverse_path(self, data: Any, path: List[Any]) -> Any:
-        """遍历路径获取数据"""
         result = data
         for key in path:
             if isinstance(key, int) and isinstance(result, list):
@@ -124,7 +121,6 @@ class Step1Filter:
         return result
     
     def _extract_item(self, raw_item: Dict[str, Any]) -> Optional[ExtractedData]:
-        """提取单个数据项"""
         exchange = raw_item.get("exchange")
         data_type = raw_item.get("data_type")
         symbol = raw_item.get("symbol", "")
@@ -152,13 +148,12 @@ class Step1Filter:
         
         # ✅ DEBUG: 打印前2条币安历史数据
         if type_key == "binance_funding_settlement" and self.debug_print_counters[type_key] < 2:
-            logger.warning(f"【DEBUG-Step1-币安历史】{symbol} 原始data_source={data_source}")
-            logger.warning(f"【DEBUG-Step1-币安历史】{symbol} 提取payload={extracted_payload}")
+            logger.error(f"【DEBUG-Step1-币安历史】{symbol} 提取payload={extracted_payload}")
             self.debug_print_counters[type_key] += 1
         
         # ✅ DEBUG: 打印前2条其他类型数据
         if type_key != "binance_funding_settlement" and self.debug_print_counters[type_key] < 2:
-            logger.warning(f"【DEBUG-Step1-{type_key}】{symbol} payload={extracted_payload}")
+            logger.error(f"【DEBUG-Step1-{type_key}】{symbol} payload={extracted_payload}")
             self.debug_print_counters[type_key] += 1
         
         if type_key == "binance_funding_settlement" and extracted_payload.get('funding_rate') is None:

@@ -224,7 +224,7 @@ class Step4Calc:
         
         # ✅ DEBUG: 打印前2条币安计算数据
         if self.debug_print_counter < 2:
-            logger.warning(f"【DEBUG-Step4-币安】{symbol} last_ts={T1} current_ts={T2} last_settlement_str={data.last_settlement_time}")
+            logger.error(f"【DEBUG-Step4-币安】{symbol} last_ts={T1} current_ts={T2} last_settlement_str={data.last_settlement_time}")
             self.debug_print_counter += 1
         
         if data.current_settlement_ts and data.last_settlement_ts:

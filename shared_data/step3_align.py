@@ -76,7 +76,6 @@ class Step3Align:
             logger.error(f"❌【流水线步骤3】统计错误: 总合约数 {total_contracts} != 各部分之和 {expected_total}")
         
         align_results = []
-        time_conversion_errors = 0
         
         for symbol, data in grouped.items():
             if data["okx"] and data["binance"]:
@@ -84,10 +83,6 @@ class Step3Align:
                     aligned = self._align_item(symbol, data["okx"], data["binance"])
                     if aligned:
                         align_results.append(aligned)
-                        # ✅ DEBUG: 打印前2条对齐数据
-                        if self.debug_print_counter < 2:
-                            logger.warning(f"【DEBUG-Step3】{symbol} last_settlement_ts={aligned.binance_last_ts} -> last_settlement_str={aligned.binance_last_settlement}")
-                            self.debug_print_counter += 1
                 except Exception as e:
                     if should_log:
                         logger.error(f"❌【流水线步骤3】对齐失败: {symbol} - {e}")
@@ -127,6 +122,11 @@ class Step3Align:
             aligned.binance_current_ts = binance_item.current_settlement_time
             aligned.binance_last_settlement = self._ts_to_str(binance_item.last_settlement_time, symbol, "binance_last")
             aligned.binance_current_settlement = self._ts_to_str(binance_item.current_settlement_time, symbol, "binance_current")
+            
+            # ✅ DEBUG: 打印前2条币安对齐数据
+            if self.debug_print_counter < 2:
+                logger.error(f"【DEBUG-Step3】{symbol} last_settlement_ts={aligned.binance_last_ts} -> last_settlement_str={aligned.binance_last_settlement}")
+                self.debug_print_counter += 1
         
         return aligned
     
