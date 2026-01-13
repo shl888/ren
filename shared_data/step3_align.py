@@ -44,7 +44,7 @@ class Step3Align:
     
     def __init__(self):
         self.last_log_time = 0
-        self.log_interval = 60  # 1分钟，单位：秒
+        self.log_interval = 360  # 6分钟，单位：秒
         self.process_count = 0
         self.log_detail_counter = 0  # 用于记录详细日志的计数器
     
@@ -104,20 +104,20 @@ class Step3Align:
                            (data["binance"].current_settlement_time and not aligned.binance_current_settlement):
                             time_conversion_errors += 1
                         
-                        # 打印前2条对齐结果的详细信息 - 暂时关闭
-                        # if self.log_detail_counter < 2:
-                        #     self._log_aligned_data(aligned, data, self.log_detail_counter + 1)
-                        #     self.log_detail_counter += 1
+                        # 打印前2条对齐结果的详细信息
+                        if self.log_detail_counter < 2:
+                            self._log_aligned_data(aligned, data, self.log_detail_counter + 1)
+                            self.log_detail_counter += 1
                             
                 except Exception as e:
-                    # 打印前2条对齐失败的信息 - 暂时关闭
-                    # if self.log_detail_counter < 2:
-                    #     logger.error(f"❌【流水线步骤3】对齐失败详情 {self.log_detail_counter + 1}:")
-                    #     logger.error(f"   交易对: {symbol}")
-                    #     logger.error(f"   OKX数据: {'有' if data['okx'] else '无'}")
-                    #     logger.error(f"   币安数据: {'有' if data['binance'] else '无'}")
-                    #     logger.error(f"   错误信息: {e}")
-                    #     self.log_detail_counter += 1
+                    # 打印前2条对齐失败的信息
+                    if self.log_detail_counter < 2:
+                        logger.error(f"❌【流水线步骤3】对齐失败详情 {self.log_detail_counter + 1}:")
+                        logger.error(f"   交易对: {symbol}")
+                        logger.error(f"   OKX数据: {'有' if data['okx'] else '无'}")
+                        logger.error(f"   币安数据: {'有' if data['binance'] else '无'}")
+                        logger.error(f"   错误信息: {e}")
+                        self.log_detail_counter += 1
                     # 只在频率控制时打印错误
                     if should_log:
                         logger.error(f"❌【流水线步骤3】对齐失败: {symbol} - {e}")
@@ -141,13 +141,13 @@ class Step3Align:
             else:
                 logger.warning(f"⚠️【流水线步骤3】时间转换: {time_conversion_errors} 个合约存在转换错误")
             
-            # 验证时间格式 - 暂时关闭
-            # if align_results:
-            #     self._validate_time_formats(align_results)
+            # 验证时间格式
+            if align_results:
+                self._validate_time_formats(align_results)
             
-            # 如果总数据量少于2条，补充说明 - 暂时关闭
-            # if len(align_results) < 2 and self.log_detail_counter < len(align_results):
-            #     logger.info(f"⚠️【流水线步骤3】注意: 本次仅对齐到 {len(align_results)} 条数据，少于预期2条")
+            # 如果总数据量少于2条，补充说明
+            if len(align_results) < 2 and self.log_detail_counter < len(align_results):
+                logger.info(f"⚠️【流水线步骤3】注意: 本次仅对齐到 {len(align_results)} 条数据，少于预期2条")
             
             self.last_log_time = current_time
             # 重置计数（仅用于频率控制）
