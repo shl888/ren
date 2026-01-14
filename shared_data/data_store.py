@@ -80,8 +80,6 @@ class DataStore:
         """设置市场数据回调"""
         self.water_callback = callback
         logger.info("【数据池】市场数据管道已连接")
-        logger.info(f"【数据池】回调函数对象: {callback}")
-        logger.info(f"【数据池】回调是否可调用: {callable(callback)}")
     
     def set_private_water_callback(self, callback: Callable):
         """设置私人数据回调"""
@@ -134,10 +132,6 @@ class DataStore:
             logger.error("【数据池】没有接收到规则，无法开始放水")
             return
         
-        if not self.water_callback:
-            logger.error("【数据池】致命错误：water_callback 未设置！")
-            return
-        
         self.flowing = True
         logger.info("【数据池】开始按规则放水...")
         
@@ -162,16 +156,31 @@ class DataStore:
         logger.info("【数据池】放水已停止")
     
     async def _flow_loop(self):
-        """放水循环 - 强制诊断版"""
+        """放水循环 - 强制验证版"""
         while self.flowing:
             try:
                 if not self.rules["flow"]["enabled"]:
                     await asyncio.sleep(1)
                     continue
                 
-                # 强制检查回调
-                if self.water_callback is None:
-                    logger.error("【数据池】致命错误：water_callback 为 None！放水系统停止！")
+                water = await self._collect_water_by_rules()
+                
+                # 强制验证1：water列表内容
+                logger.info(f"【数据池】收集完成，准备调用回调，water条数: {len(water)}")
+                funding_count = sum(1 for item in water if item.get('exchange') == 'binance' and item.get('data_type') == 'funding_settlement')
+                logger.info(f"【数据池】其中币安费率数据条数: {funding_count}")
+                
+                if water:
+                    logger.info(f"【数据池】water第1条样本: {water[0]}")
+                    logger.info(f"【数据池】water最后1条样本: {water[-1]}")
+                else:
+                    logger.debug("【数据池】water为空，跳过回调")
+                    await asyncio.sleep(self.rules["flow"]["interval_seconds"])
+                    continue
+                
+                # 强制验证2：回调函数
+                if not self.water_callback:
+                    logger.error("【数据池】致命错误：water_callback 为 None！")
                     self.flowing = False
                     break
                 
@@ -180,36 +189,17 @@ class DataStore:
                     self.flowing = False
                     break
                 
-                water = await self._collect_water_by_rules()
-                
-                # 强制验证：water列表内容
-                logger.info(f"【数据池】准备调用回调，water条数: {len(water)}")
-                logger.info(f"【数据池】water中币安费率数据条数: {sum(1 for item in water if item.get('exchange') == 'binance' and item.get('data_type') == 'funding_settlement')}")
-                
-                if water:
-                    logger.info(f"【数据池】water第1条样本: {water[0]}")
-                    logger.info(f"【数据池】water最后1条样本: {water[-1]}")
-                else:
-                    logger.debug("【数据池】water为空，跳过回调")
-                    interval = self.rules["flow"]["interval_seconds"]
-                    await asyncio.sleep(interval)
-                    continue
-                
-                # 执行回调并捕获异常
-                try:
-                    result = await self.water_callback(water)
-                    logger.info(f"【数据池】回调执行成功，返回: {result}")
-                except Exception as e:
-                    logger.error(f"【数据池】回调执行失败: {e}", exc_info=True)
-                    # 继续循环，不中断
+                # 执行回调
+                logger.info(f"【数据池】正在调用回调函数...")
+                await self.water_callback(water)
+                logger.info("【数据池】回调执行完成")
                 
                 # 记录
                 async with self.locks['execution_records']:
                     self.execution_records["total_flows"] += 1
                     self.execution_records["last_flow_time"] = time.time()
                 
-                interval = self.rules["flow"]["interval_seconds"]
-                await asyncio.sleep(interval)
+                await asyncio.sleep(self.rules["flow"]["interval_seconds"])
                 
             except asyncio.CancelledError:
                 break
@@ -218,79 +208,81 @@ class DataStore:
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """按规则收集水 - 强制诊断版"""
+        """按规则收集水 - 完美7步方案"""
         if not self.rules:
-            logger.warning("【数据池】无规则，返回空列表")
             return []
         
         water = []
         controller = self._binance_funding_controller
         
-        logger.debug(f"【数据池】收集开始，控制器状态: enabled={controller['enabled']}, init_done={controller['init_done']}, flowed={len(controller['flowed_contracts'])}")
-        
-        # ===== 第1步：检查总开关状态 =====
-        if not controller["enabled"]:
-            logger.info("【数据池】闸门已关闭，跳过费率逻辑")
-        
-        # ===== 第2-4步：统计合约数（只执行1次）=====
-        if controller["enabled"] and not controller["init_done"]:
-            # 检查是否有费率数据
-            funding_symbols = [
-                sym for sym, data_dict in self.market_data.get("binance", {}).items()
-                if "funding_settlement" in data_dict
-            ]
-            logger.info(f"【数据池】扫描到的费率合约: {len(funding_symbols)}个")
+        async with self.locks['market_data']:
+            # ===== 第1步：检查总开关状态 =====
+            if not controller["enabled"]:
+                logger.debug("【数据池】闸门已关闭，跳过费率逻辑")
             
-            if funding_symbols:
-                logger.info(f"【数据池】费率合约示例: {funding_symbols[:5]}")
-                controller["init_done"] = True
-            else:
-                logger.debug("【数据池】等待币安历史费率数据...")
-        
-        # ===== 第5步：收集所有数据（闸门只在此处拦截）=====
-        for exchange in ["binance", "okx"]:
-            if exchange not in self.market_data:
-                continue
+            # ===== 第2-4步：统计合约数（只执行1次）=====
+            if controller["enabled"] and not controller["init_done"]:
+                # 检查是否有费率数据
+                funding_symbols = [
+                    sym for sym, data_dict in self.market_data.get("binance", {}).items()
+                    if "funding_settlement" in data_dict
+                ]
+                logger.info(f"【数据池】扫描费率合约: {len(funding_symbols)}个")
+                
+                if funding_symbols:
+                    logger.info(f"【数据池】费率合约示例: {funding_symbols[:5]}")
+                    controller["init_done"] = True
+                else:
+                    logger.debug("【数据池】等待币安历史费率数据...")
             
-            for symbol, data_dict in self.market_data[exchange].items():
-                for data_type, data in data_dict.items():
-                    if data_type in ['latest', 'store_timestamp']:
-                        continue
-                    
-                    # 闸门逻辑：只针对币安费率数据
-                    if exchange == "binance" and data_type == "funding_settlement":
-                        # 开关关闭或已流出 → 跳过
-                        if not controller["enabled"] or symbol in controller["flowed_contracts"]:
+            # ===== 第5步：收集所有数据（闸门只在此处拦截）=====
+            for exchange in ["binance", "okx"]:
+                if exchange not in self.market_data:
+                    continue
+                
+                for symbol, data_dict in self.market_data[exchange].items():
+                    for data_type, data in data_dict.items():
+                        if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # 标记已流出
-                        controller["flowed_contracts"].add(symbol)
-                        logger.info(f"【数据池】币安费率数据流出: {symbol} (累计已流出: {len(controller['flowed_contracts'])}个)")
-                    
-                    # 所有数据（包括第一次的费率）都添加到water
-                    water_item = {
-                        'exchange': exchange,
-                        'symbol': symbol,
-                        'data_type': data_type,
-                        'data': data,
-                        'timestamp': data.get('timestamp'),
-                        'priority': 5
-                    }
-                    water.append(water_item)
-        
-        # ===== 第6-7步：关闭闸门 =====
-        if controller["enabled"] and controller["init_done"]:
-            total_symbols = len([
-                sym for sym, data_dict in self.market_data["binance"].items()
-                if "funding_settlement" in data_dict
-            ])
-            flowed_count = len(controller["flowed_contracts"])
+                        # ✅ 闸门逻辑：只针对币安费率数据
+                        is_funding = (exchange == "binance" and data_type == "funding_settlement")
+                        
+                        if is_funding:
+                            # 开关关闭 → 跳过
+                            if not controller["enabled"]:
+                                continue
+                            # 已流出 → 跳过
+                            if symbol in controller["flowed_contracts"]:
+                                continue
+                            # 第一次流出，标记
+                            controller["flowed_contracts"].add(symbol)
+                            logger.info(f"【数据池】币安费率数据流出: {symbol} (累计: {len(controller['flowed_contracts'])}个)")
+                        
+                        # ✅ 所有数据（包括第一次的费率数据）都添加到water
+                        water_item = {
+                            'exchange': exchange,
+                            'symbol': symbol,
+                            'data_type': data_type,
+                            'data': data,
+                            'timestamp': data.get('timestamp'),
+                            'priority': 5
+                        }
+                        water.append(water_item)
             
-            logger.info(f"【数据池】流出进度: {flowed_count}/{total_symbols}")
-            
-            if flowed_count >= total_symbols and total_symbols > 0:
-                controller["enabled"] = False
-                logger.info(f"【数据池】币安费率数据全部流出，闸门关闭")
+            # ===== 第6-7步：关闭闸门 =====
+            if controller["enabled"] and controller["init_done"]:
+                total_symbols = len([
+                    sym for sym, data_dict in self.market_data["binance"].items()
+                    if "funding_settlement" in data_dict
+                ])
+                flowed_count = len(controller["flowed_contracts"])
+                
+                logger.info(f"【数据池】流出进度: {flowed_count}/{total_symbols}")
+                
+                if flowed_count >= total_symbols and total_symbols > 0:
+                    controller["enabled"] = False
+                    logger.info(f"【数据池】币安费率数据全部流出，闸门关闭")
         
         logger.info(f"【数据池】收集完成，返回water列表，共{len(water)}条")
         return water
@@ -316,7 +308,7 @@ class DataStore:
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
             
-            # 记录币安费率数据接收
+            # ✅ 记录币安费率数据接收
             if exchange == "binance" and data_type == "funding_settlement":
                 logger.info(f"【数据池】收到币安历史费率数据: {symbol}")
     
