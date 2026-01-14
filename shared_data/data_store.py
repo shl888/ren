@@ -65,14 +65,6 @@ class DataStore:
             'execution_records': asyncio.Lock(),
         }
         
-        # ✅ 核心：币安历史费率数据7步方案控制器
-        self._binance_funding_controller = {
-            "enabled": True,           # 第1/7步：总开关，默认开启
-            "total_contracts": 0,      # 第4步：统计合约数量
-            "flowed_contracts": set(), # 第5步：已流出合约记录
-            "init_done": False         # 标记是否已经初始化统计
-        }
-        
         logger.info("✅【数据池】初始化完成")
     
     # ==================== 管道设置方法 ====================
@@ -197,37 +189,7 @@ class DataStore:
         water = []
         
         async with self.locks['market_data']:
-            # ==================== 7步方案：币安历史费率数据处理 ====================
-            # 第1步：检查总开关状态 - 这个必须最前面！
-            controller = self._binance_funding_controller
-            if not controller["enabled"]:
-                # 总开关关闭，直接跳过所有后续处理
-                logger.debug("🛑【数据池】币安历史费率总开关关闭，直接跳过")
-            else:
-                # 第2步：检查币安历史费率数据，有没有存入data
-                has_funding_data = False
-                for symbol, data_dict in self.market_data["binance"].items():
-                    if "funding_settlement" in data_dict:
-                        has_funding_data = True
-                        break
-                
-                # 第3步：要是没有这个数据，就不用往下进行，就等待
-                if not has_funding_data:
-                    logger.debug("⏳【数据池】等待币安历史费率数据存入...")
-                else:
-                    # 第4步：统计币安历史费率数据里面的数据数量，也就是合约数
-                    if not controller["init_done"]:
-                        valid_symbols = set()
-                        for sym, data_dict in self.market_data["binance"].items():
-                            if "funding_settlement" in data_dict:
-                                valid_symbols.add(sym)
-                        
-                        controller["total_contracts"] = len(valid_symbols)
-                        controller["init_done"] = True
-                        
-                        logger.info(f"📊【数据池】统计到币安历史费率数据合约数: {len(valid_symbols)}")
-            
-            # ==================== 所有数据类型统一收集 ====================
+            # ==================== 简化：所有数据类型统一处理 ====================
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
@@ -238,48 +200,17 @@ class DataStore:
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ✅ 第5步：放行流入流水线，哪个合约流出了，就标记已流出
-                        # 只对币安的funding_settlement数据应用流出控制
-                        if exchange == "binance" and data_type == "funding_settlement":
-                            # 再次检查总开关（因为开关可能在循环中被关闭）
-                            if not controller["enabled"]:
-                                continue  # 开关关闭，跳过这个数据
-                            
-                            # 检查是否已流出过
-                            if symbol in controller["flowed_contracts"]:
-                                continue  # 已流出，跳过
-                            
-                            # 标记已流出
-                            controller["flowed_contracts"].add(symbol)
-                            flowed_count = len(controller["flowed_contracts"])
-                            total_count = controller["total_contracts"]
-                            
-                            logger.info(f"📤【数据池】币安费率数据流出: {symbol} ({flowed_count}/{total_count})")
-                            
-                            # ✅ 第6步：当被标记已流出的合约数量，与第4步统计的合约数量相同时
-                            # 注意：这里先收集数据，循环结束后再检查是否关闭
-                        
-                        # ✅ 直接传数据，不包装！
+                        # ✅ 关键修改：直接传数据，不包装！
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'data': data,
+                            'data': data,  # ⚠️ 直接传数据，不包装！
                             'timestamp': data.get('timestamp'),
                             'priority': 5
                         }
                         
                         water.append(water_item)
-            
-            # ✅ 第6步：循环结束后检查是否全部流出
-            if controller["enabled"] and controller["total_contracts"] > 0:
-                flowed_count = len(controller["flowed_contracts"])
-                total_count = controller["total_contracts"]
-                
-                if flowed_count >= total_count:
-                    # 第7步：关闭总开关
-                    controller["enabled"] = False
-                    logger.info(f"🛑【数据池】币安历史费率数据已全部流出 ({flowed_count}/{total_count})，关闭总开关")
         
         return water
     
@@ -305,10 +236,6 @@ class DataStore:
             
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
-            
-            # 如果是币安历史费率数据，记录日志
-            if exchange == "binance" and data_type == "funding_settlement":
-                logger.info(f"📥【数据池】收到币安历史费率数据: {symbol}")
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
         """✅ 增强：接收账户数据（立即自动流出）"""
@@ -451,9 +378,6 @@ class DataStore:
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
         
-        # 获取币安费率数据状态
-        binance_funding_stats = self._get_binance_funding_stats()
-        
         return {
             "flowing": self.flowing,
             "has_rules": self.rules is not None,
@@ -463,46 +387,8 @@ class DataStore:
                 "flowing": self.private_flowing,
                 "stats": records["private_flows"]
             },
-            "binance_funding_controller": binance_funding_stats,
             "timestamp": datetime.now().isoformat()
         }
-    
-    def _get_binance_funding_stats(self) -> Dict[str, Any]:
-        """获取币安费率数据状态"""
-        controller = self._binance_funding_controller
-        funding_contracts = []
-        
-        # 统计当前实际有多少个有费率数据的合约
-        for symbol, data_dict in self.market_data.get("binance", {}).items():
-            if "funding_settlement" in data_dict:
-                funding_contracts.append(symbol)
-        
-        return {
-            "enabled": controller["enabled"],
-            "total_contracts": controller["total_contracts"],
-            "current_actual_contracts": len(funding_contracts),
-            "flowed_count": len(controller["flowed_contracts"]),
-            "init_done": controller["init_done"],
-            "remaining": max(0, controller["total_contracts"] - len(controller["flowed_contracts"])),
-            "contracts_list": funding_contracts[:10],  # 只显示前10个
-            "flowed_contracts_list": list(controller["flowed_contracts"])[:10]
-        }
-    
-    # ==================== 币安费率数据控制方法 ====================
-    
-    async def get_binance_funding_status(self) -> Dict[str, Any]:
-        """✅ 新增：获取币安费率数据流出状态"""
-        return self._get_binance_funding_stats()
-    
-    async def reset_binance_funding_controller(self):
-        """✅ 新增：重置币安费率数据流出控制器"""
-        self._binance_funding_controller = {
-            "enabled": True,
-            "total_contracts": 0,
-            "flowed_contracts": set(),
-            "init_done": False
-        }
-        logger.info("🔄【数据池】重置币安费率数据流出控制器")
     
     async def force_one_flow(self):
         """强制放水一次（测试用）"""
@@ -533,7 +419,6 @@ class DataStore:
         健康检查
         """
         stats = self.get_market_data_stats()
-        binance_funding_stats = self._get_binance_funding_stats()
         
         return {
             "status": "healthy",
@@ -554,11 +439,6 @@ class DataStore:
             "private_pipeline": {
                 "connected": self.private_water_callback is not None,
                 "flowing": self.private_flowing
-            },
-            "binance_funding_controller": {
-                "enabled": binance_funding_stats["enabled"],
-                "progress": f"{binance_funding_stats['flowed_count']}/{binance_funding_stats['total_contracts']}",
-                "remaining": binance_funding_stats["remaining"]
             }
         }
 
