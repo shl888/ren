@@ -190,27 +190,16 @@ class DataStore:
         
         async with self.locks['market_data']:
             # ==================== 币安历史费率数据控制逻辑 ====================
-            # 币安历史费率数据类型
             BINANCE_FUNDING_SETTLEMENT = "funding_settlement"
             
-            # 第一步：全局开关检查（放在最前面，性能最优）
+            # 第一步：全局开关检查
             if getattr(self, '_binance_funding_settlement_closed', False):
-                # 如果币安历史费率数据流已关闭，直接跳过相关处理
+                # 已关闭，跳过所有币安历史费率数据处理
                 pass
             else:
                 # 初始化已流过合约集合（只在第一次运行时）
                 if not hasattr(self, '_binance_funding_settlement_flowed'):
                     self._binance_funding_settlement_flowed = set()
-                
-                # 统计总合约数（只在第一次运行时）
-                if not hasattr(self, '_binance_funding_settlement_total'):
-                    total_symbols = set()
-                    for symbol, data_dict in self.market_data.get("binance", {}).items():
-                        if BINANCE_FUNDING_SETTLEMENT in data_dict:
-                            total_symbols.add(symbol)
-                    self._binance_funding_settlement_total = len(total_symbols)
-                    if total_symbols:
-                        logger.info(f"📊【数据池】检测到币安历史费率数据({BINANCE_FUNDING_SETTLEMENT}): {len(total_symbols)}个合约")
             
             # ==================== 遍历所有数据 ====================
             for exchange in ["binance", "okx"]:
@@ -227,22 +216,40 @@ class DataStore:
                         if exchange == "binance" and data_type == BINANCE_FUNDING_SETTLEMENT:
                             # 1. 检查全局开关是否已关闭
                             if getattr(self, '_binance_funding_settlement_closed', False):
-                                continue  # 已关闭，跳过所有币安历史费率数据
+                                continue
                             
                             # 2. 检查该合约是否已流过
                             if symbol in getattr(self, '_binance_funding_settlement_flowed', set()):
-                                continue  # 已流过，跳过
+                                continue
                             
-                            # 3. 标记为已流过（先标记，再放水）
+                            # 🔴 关键修正：只在首次遇到数据时才统计总数
+                            if not hasattr(self, '_binance_funding_settlement_total'):
+                                # 首次遇到funding_settlement数据，统计所有合约
+                                total_symbols = set()
+                                for sym, sym_dict in self.market_data.get("binance", {}).items():
+                                    if BINANCE_FUNDING_SETTLEMENT in sym_dict:
+                                        total_symbols.add(sym)
+                                
+                                if total_symbols:
+                                    self._binance_funding_settlement_total = len(total_symbols)
+                                    logger.info(f"📊【数据池】首次检测到币安历史费率数据: {len(total_symbols)}个合约")
+                                else:
+                                    # 理论上不会走到这里，因为当前就是funding_settlement数据
+                                    # 但为了安全起见，先标记当前合约，不统计总数
+                                    self._binance_funding_settlement_flowed.add(symbol)
+                                    continue
+                            
+                            # 3. 标记当前合约为已流过
                             self._binance_funding_settlement_flowed.add(symbol)
                             
                             # 4. 检查是否所有合约都已流过
-                            if (hasattr(self, '_binance_funding_settlement_total') and 
-                                hasattr(self, '_binance_funding_settlement_flowed') and
-                                len(self._binance_funding_settlement_flowed) >= self._binance_funding_settlement_total):
+                            flowed_count = len(self._binance_funding_settlement_flowed)
+                            total_count = self._binance_funding_settlement_total
+                            
+                            if flowed_count >= total_count:
                                 # 所有合约都已流过，永久关闭该类型数据流
                                 self._binance_funding_settlement_closed = True
-                                logger.info(f"🛑【数据池】币安历史费率数据已完成全量流入({self._binance_funding_settlement_total}个合约)，永久关闭该类型数据流出")
+                                logger.info(f"🛑【数据池】币安历史费率数据已完成全量流入({flowed_count}/{total_count}个合约)，永久关闭该类型数据流")
                         
                         # ✅ 关键修改：直接传数据，不包装！
                         water_item = {
