@@ -25,7 +25,7 @@ class Step0RateLimiter:
     - 每次判断都是针对整个数据类型，不是单个合约
     """
     
-    def __init__(self, limit_times: int = 100):
+    def __init__(self, limit_times: int = 10):
         """
         初始化限流器
         
