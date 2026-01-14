@@ -74,29 +74,26 @@ class DataStore:
             "init_done": False
         }
         
-        logger.info("✅【数据池】初始化完成")
-        logger.info(f"🔍【数据池】初始化状态: 市场回调={self.water_callback}, 私人回调={self.private_water_callback}")
+        logger.info("【数据池】初始化完成")
     
     # ==================== 管道设置方法 ====================
     
     def set_water_callback(self, callback: Callable):
         """设置市场数据回调"""
         self.water_callback = callback
-        logger.info("✅【数据池】市场数据管道已连接")
-        logger.info(f"✅【数据池】回调函数对象: {callback}")
-        logger.info(f"✅【数据池】回调函数类型: {type(callback)}")
-        logger.info(f"✅【数据池】是否可调用: {callable(callback)}")
+        logger.info("【数据池】市场数据管道已连接")
+        logger.info(f"【数据池】回调函数对象: {callback}")
     
     def set_private_water_callback(self, callback: Callable):
         """设置私人数据回调"""
         self.private_water_callback = callback
-        logger.info("✅【数据池】私人数据管道已连接")
+        logger.info("【数据池】私人数据管道已连接")
     
     def set_private_flowing(self, flowing: bool):
         """设置私人数据管道开关"""
         self.private_flowing = flowing
         status = "开启" if flowing else "关闭"
-        logger.info(f"✅【数据池】私人数据管道{status}")
+        logger.info(f"【数据池】私人数据管道{status}")
     
     # ==================== HTTP服务相关方法 ====================
     
@@ -114,15 +111,14 @@ class DataStore:
         """接收管理员规则"""
         async with self.rule_lock:
             self.rules = rules
-            logger.info("📋【数据池】已接收管理员规则")
-            logger.debug(f"规则内容: {rules}")
+            logger.info("【数据池】已接收管理员规则")
     
     async def receive_rule_update(self, rule_key: str, rule_value: Any):
         """接收规则更新"""
         async with self.rule_lock:
             if self.rules and rule_key in self.rules:
                 self.rules[rule_key] = rule_value
-                logger.info(f"📋【数据池】规则已更新: {rule_key}")
+                logger.info(f"【数据池】规则已更新: {rule_key}")
     
     # ==================== 市场数据放水系统 ====================
     
@@ -132,25 +128,19 @@ class DataStore:
             self.water_callback = water_callback
             
         if self.flowing:
-            logger.warning("⚠️【数据池】已经在放水中")
+            logger.warning("【数据池】已经在放水中")
             return
         
         if not self.rules:
-            logger.error("❌【数据池】没有接收到规则，无法开始放水")
+            logger.error("【数据池】没有接收到规则，无法开始放水")
             return
         
-        # 强制检查回调
         if not self.water_callback:
-            logger.error("❌【数据池】致命错误：water_callback 未设置！")
-            return
-        
-        if not callable(self.water_callback):
-            logger.error(f"❌【数据池】致命错误：water_callback 不可调用！类型: {type(self.water_callback)}")
+            logger.error("【数据池】致命错误：water_callback 未设置！")
             return
         
         self.flowing = True
-        logger.info("🚰【数据池】开始按规则放水...")
-        logger.info(f"🚰【数据池】回调函数确认: {self.water_callback}")
+        logger.info("【数据池】开始按规则放水...")
         
         # 启动放水任务
         self.flow_task = asyncio.create_task(self._flow_loop())
@@ -160,7 +150,7 @@ class DataStore:
         if not self.flowing:
             return
         
-        logger.info("🛑【数据池】停止放水...")
+        logger.info("【数据池】停止放水...")
         self.flowing = False
         
         if self.flow_task:
@@ -170,67 +160,54 @@ class DataStore:
             except asyncio.CancelledError:
                 pass
         
-        logger.info("✅【数据池】放水已停止")
+        logger.info("【数据池】放水已停止")
     
     async def _flow_loop(self):
-        """放水循环 - 终极调试版"""
+        """放水循环"""
         while self.flowing:
             try:
-                # 检查规则
                 if not self.rules or not self.rules.get("flow", {}).get("enabled", False):
-                    logger.debug("⏳【数据池】放水规则未启用，等待1秒")
                     await asyncio.sleep(1)
                     continue
                 
                 # 强制检查回调
                 if self.water_callback is None:
-                    logger.error("🚨【数据池】致命错误：water_callback 为 None！放水系统停止！")
+                    logger.error("【数据池】致命错误：water_callback 为 None！放水系统停止！")
                     self.flowing = False
                     break
                 
-                if not callable(self.water_callback):
-                    logger.error(f"🚨【数据池】致命错误：water_callback 不可调用！类型: {type(self.water_callback)}")
-                    self.flowing = False
-                    break
-                
-                # 收集数据
                 water = await self._collect_water_by_rules()
-                logger.debug(f"💧【数据池】本次收集到 {len(water)} 条数据")
+                logger.debug(f"【数据池】本次收集到 {len(water)} 条数据")
                 
-                # 放水
                 if water:
-                    logger.info(f"🌊【数据池】正在放水！条数: {len(water)}")
-                    logger.debug(f"🌊【数据池】回调函数: {self.water_callback}")
-                    
                     try:
                         await self.water_callback(water)
-                        logger.info("✅【数据池】回调执行成功")
+                        logger.debug(f"【数据池】放水成功，共 {len(water)} 条")
                         
                         # 记录
                         async with self.locks['execution_records']:
                             self.execution_records["total_flows"] += 1
                             self.execution_records["last_flow_time"] = time.time()
                     except Exception as e:
-                        logger.error(f"❌【数据池】回调执行失败: {e}")
-                        logger.error(traceback.format_exc())
+                        logger.error(f"【数据池】回调执行失败: {e}")
+                        traceback.print_exc()
                 else:
-                    logger.debug("⏳【数据池】本次无数据可放")
+                    logger.debug("【数据池】本次无数据可放")
                 
-                # 等待间隔
+                # 按规则间隔等待
                 interval = self.rules.get("flow", {}).get("interval_seconds", 5)
                 await asyncio.sleep(interval)
                 
             except asyncio.CancelledError:
-                logger.info("🛑【数据池】放水循环被取消")
                 break
             except Exception as e:
-                logger.error(f"❌【数据池】放水循环错误: {e}", exc_info=True)
+                logger.error(f"【数据池】放水循环错误: {e}", exc_info=True)
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """按规则收集水 - 修复版"""
+        """按规则收集水 - 诊断版"""
         if not self.rules:
-            logger.warning("⚠️【数据池】无规则，无法收集水")
+            logger.warning("【数据池】无规则，无法收集水")
             return []
         
         water = []
@@ -240,13 +217,11 @@ class DataStore:
             # ===== 币安费率数据预处理 =====
             funding_ready = False
             if controller["enabled"]:
-                # 探测是否有费率数据
                 for symbol, data_dict in self.market_data.get("binance", {}).items():
                     if "funding_settlement" in data_dict:
                         funding_ready = True
                         break
                 
-                # 统计合约数（仅一次）
                 if funding_ready and not controller["init_done"]:
                     valid_symbols = {
                         sym for sym, data_dict in self.market_data["binance"].items()
@@ -254,7 +229,7 @@ class DataStore:
                     }
                     controller["total_contracts"] = len(valid_symbols)
                     controller["init_done"] = True
-                    logger.info(f"📊【数据池】统计到币安历史费率合约数: {len(valid_symbols)}")
+                    logger.info(f"【数据池】统计到币安历史费率合约数: {len(valid_symbols)}")
             
             # ===== 统一收集所有数据 =====
             for exchange in ["binance", "okx"]:
@@ -263,7 +238,6 @@ class DataStore:
                 
                 for symbol, data_dict in self.market_data[exchange].items():
                     for data_type, data in data_dict.items():
-                        # 跳过内部字段
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
@@ -279,29 +253,25 @@ class DataStore:
                             controller["flowed_contracts"].add(symbol)
                             flowed = len(controller["flowed_contracts"])
                             total = controller["total_contracts"]
-                            logger.info(f"📤【数据池】币安费率数据流出: {symbol} ({flowed}/{total})")
+                            logger.info(f"【数据池】币安费率数据流出: {symbol} ({flowed}/{total})")
                         
-                        # ===== 核心修复：确保在循环内执行 =====
-                        try:
-                            water_item = {
-                                'exchange': exchange,
-                                'symbol': symbol,
-                                'data_type': data_type,
-                                'data': data,
-                                'timestamp': data.get('timestamp'),
-                                'priority': 5
-                            }
-                            water.append(water_item)
-                        except Exception as e:
-                            logger.error(f"❌【数据池】创建水项失败: {e}, exchange={exchange}, symbol={symbol}, data_type={data_type}")
+                        # 添加到water
+                        water_item = {
+                            'exchange': exchange,
+                            'symbol': symbol,
+                            'data_type': data_type,
+                            'data': data,
+                            'timestamp': data.get('timestamp'),
+                            'priority': 5
+                        }
+                        water.append(water_item)
             
-            # ===== 检查是否全部流出 =====
+            # 检查是否全部流出
             if controller["enabled"] and controller["init_done"]:
                 if len(controller["flowed_contracts"]) >= controller["total_contracts"]:
                     controller["enabled"] = False
-                    logger.info(f"🛑【数据池】币安费率数据全部流出，关闭控制器")
+                    logger.info(f"【数据池】币安费率数据全部流出，关闭控制器")
         
-        logger.debug(f"💧【数据池】收集完成，共 {len(water)} 条数据")
         return water
     
     # ==================== 数据接收接口 ====================
@@ -322,8 +292,13 @@ class DataStore:
             }
             self.market_data[exchange][symbol]['latest'] = data_type
             
+            # 记录币安费率数据接收
             if exchange == "binance" and data_type == "funding_settlement":
-                logger.info(f"📥【数据池】收到币安历史费率数据: {symbol}")
+                logger.info(f"【数据池】收到币安历史费率数据: {symbol}")
+            
+            # 诊断：记录实际存入的data_type
+            if exchange == "binance" and "funding" in data_type:
+                logger.info(f"【数据池】费率数据类型诊断: symbol={symbol}, data_type={data_type}")
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
         """接收账户数据（立即自动流出）"""
@@ -348,7 +323,7 @@ class DataStore:
                     self.execution_records["private_flows"]["account_updates"] += 1
                     self.execution_records["private_flows"]["last_account_update"] = time.time()
             except Exception as e:
-                logger.error(f"❌【数据池】私人数据(账户)流出失败: {e}")
+                logger.error(f"【数据池】私人数据(账户)流出失败: {e}")
     
     async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
         """接收交易数据（立即自动流出）"""
@@ -376,7 +351,7 @@ class DataStore:
                     self.execution_records["private_flows"]["order_updates"] += 1
                     self.execution_records["private_flows"]["last_order_update"] = time.time()
             except Exception as e:
-                logger.error(f"❌【数据池】私人数据(交易)流出失败: {e}")
+                logger.error(f"【数据池】私人数据(交易)流出失败: {e}")
     
     async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
         """更新连接状态"""
@@ -490,8 +465,8 @@ class DataStore:
             "flowed_count": len(controller["flowed_contracts"]),
             "init_done": controller["init_done"],
             "remaining": max(0, controller["total_contracts"] - len(controller["flowed_contracts"])),
-            "contracts_list": funding_contracts[:10],
-            "flowed_contracts_list": list(controller["flowed_contracts"])[:10]
+            "contracts_list": funding_contracts[:5],
+            "flowed_contracts_list": list(controller["flowed_contracts"])[:5]
         }
     
     async def get_binance_funding_status(self) -> Dict[str, Any]:
@@ -506,16 +481,16 @@ class DataStore:
             "flowed_contracts": set(),
             "init_done": False
         }
-        logger.info("🔄【数据池】重置币安费率数据流出控制器")
+        logger.info("【数据池】重置币安费率数据流出控制器")
     
     async def force_one_flow(self):
         """强制放水一次（测试用）"""
         if not self.flowing:
-            logger.warning("⚠️【数据池】放水系统未启动")
+            logger.warning("【数据池】放水系统未启动")
             return
         
         water = await self._collect_water_by_rules()
-        logger.info(f"🧪【数据池】强制放水，收集到 {len(water)} 条数据")
+        logger.info(f"【数据池】强制放水，收集到 {len(water)} 条数据")
         if water and self.water_callback:
             await self.water_callback(water)
     
@@ -525,11 +500,11 @@ class DataStore:
             if exchange:
                 if exchange in self.market_data:
                     self.market_data[exchange].clear()
-                    logger.warning(f"⚠️【数据池】已清空 {exchange} 市场数据")
+                    logger.warning(f"【数据池】已清空 {exchange} 市场数据")
             else:
                 self.market_data["binance"].clear()
                 self.market_data["okx"].clear()
-                logger.warning("⚠️【数据池】已清空所有市场数据")
+                logger.warning("【数据池】已清空所有市场数据")
     
     async def health_check(self) -> Dict[str, Any]:
         """健康检查"""
