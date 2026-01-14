@@ -70,18 +70,18 @@ class Step2Fusion:
         self.fusion_stats["total_groups"] = len(grouped)
         
         # 处理日志 - 暂时关闭
-        # if should_log:
-        #     logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
-        #     logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
-        #     
-        #     # 统计每个交易所的合约组数
-        #     exchange_groups = defaultdict(list)
-        #     for key in grouped:
-        #         exchange = key.split("_")[0] if "_" in key else "unknown"
-        #         exchange_groups[exchange].append(key)
-        #     
-        #     for exchange, groups in exchange_groups.items():
-        #         logger.info(f"【流水线步骤2】  {exchange}: {len(groups)} 个合约")
+         if should_log:
+             logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
+             logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
+             
+             # 统计每个交易所的合约组数
+             exchange_groups = defaultdict(list)
+             for key in grouped:
+                 exchange = key.split("_")[0] if "_" in key else "unknown"
+                 exchange_groups[exchange].append(key)
+             
+             for exchange, groups in exchange_groups.items():
+                 logger.info(f"【流水线步骤2】  {exchange}: {len(groups)} 个合约")
         
         # 合并每组数据
         results = []
@@ -104,7 +104,7 @@ class Step2Fusion:
                 continue
                 
             # 处理日志 - 暂时关闭
-            # logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
+             logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
             
             for key, items in exchange_groups[exchange]:
                 try:
@@ -160,16 +160,16 @@ class Step2Fusion:
                     #     logger.error(f"❌【流水线步骤2】融合失败: {key} - {e}")
                     continue
         
-        # 处理完成后日志 - 暂时关闭
-        # if should_log:
-        #     # 处理完成后，打印统计结果
-        #     logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
-        #     
-        #     # 按交易所统计合约数
-        #     okx_contracts = len(exchange_contracts.get("okx", set()))
-        #     binance_contracts = len(exchange_contracts.get("binance", set()))
-        #     total_contracts = okx_contracts + binance_contracts
-        #     
+         处理完成后日志 - 暂时关闭
+         if should_log:
+             # 处理完成后，打印统计结果
+             logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
+             
+             # 按交易所统计合约数
+             okx_contracts = len(exchange_contracts.get("okx", set()))
+             binance_contracts = len(exchange_contracts.get("binance", set()))
+             total_contracts = okx_contracts + binance_contracts
+             
         #     logger.info("📊【流水线步骤2】融合结果合约统计:")
         #     if okx_contracts > 0:
         #         logger.info(f"  • OKX合约数: {okx_contracts} 个")
@@ -215,48 +215,48 @@ class Step2Fusion:
         """记录融合数据的详细日志"""
         exchange_name = "OKX" if fused.exchange == "okx" else "币安"
         logger.info(f"📝【流水线步骤2】{exchange_name}详细融合结果 {counter}:")
-        logger.info(f"   合约组: {key}")
-        logger.info(f"   融合后数据:")
-        logger.info(f"     • 交易所: {fused.exchange}")
-        logger.info(f"     • 交易对: {fused.symbol}")
-        logger.info(f"     • 合约名: {fused.contract_name}")
-        logger.info(f"     • 最新价格: {fused.latest_price}")
-        logger.info(f"     • 资金费率: {fused.funding_rate}")
+        logger.info(f"• 合约组: {key}")
+        logger.info(f"• 融合后数据:")
+        logger.info(f"• 交易所: {fused.exchange}")
+        logger.info(f"• 交易对: {fused.symbol}")
+        logger.info(f"• 合约名: {fused.contract_name}")
+        logger.info(f"• 最新价格: {fused.latest_price}")
+        logger.info(f"• 资金费率: {fused.funding_rate}")
         
         # 根据不同交易所显示不同的时间字段
         if fused.exchange == "okx":
             if fused.current_settlement_time:
-                logger.info(f"     • 当前结算时间: {fused.current_settlement_time} ({self._timestamp_to_str(fused.current_settlement_time)})")
+                logger.info(f"• 本次结算时间: {fused.current_settlement_time} ({self._timestamp_to_str(fused.current_settlement_time)})")
             else:
-                logger.info(f"     • 当前结算时间: None")
+                logger.info(f"• 本次结算时间: None")
             
             if fused.next_settlement_time:
-                logger.info(f"     • 下次结算时间: {fused.next_settlement_time} ({self._timestamp_to_str(fused.next_settlement_time)})")
+                logger.info(f"• 下次结算时间: {fused.next_settlement_time} ({self._timestamp_to_str(fused.next_settlement_time)})")
             else:
-                logger.info(f"     • 下次结算时间: None")
+                logger.info(f"• 下次结算时间: None")
                 
-            logger.info(f"     • 上次结算时间: {fused.last_settlement_time} (OKX应为None)")
+            logger.info(f"• 上次结算时间: {fused.last_settlement_time} (OKX应为None)")
                 
         elif fused.exchange == "binance":
             if fused.last_settlement_time:
-                logger.info(f"     • 上次结算时间: {fused.last_settlement_time} ({self._timestamp_to_str(fused.last_settlement_time)})")
+                logger.info(f"• 上次结算时间: {fused.last_settlement_time} ({self._timestamp_to_str(fused.last_settlement_time)})")
             else:
-                logger.info(f"     • 上次结算时间: None")
+                logger.info(f"• 上次结算时间: None")
             
             if fused.current_settlement_time:
-                logger.info(f"     • 当前结算时间: {fused.current_settlement_time} ({self._timestamp_to_str(fused.current_settlement_time)})")
+                logger.info(f"• 本次结算时间: {fused.current_settlement_time} ({self._timestamp_to_str(fused.current_settlement_time)})")
             else:
-                logger.info(f"     • 当前结算时间: None")
+                logger.info(f"• 本次结算时间: None")
                 
-            logger.info(f"     • 下次结算时间: {fused.next_settlement_time} (币安应为None)")
+            logger.info(f"• 下次结算时间: {fused.next_settlement_time} (币安应为None)")
         
-        logger.info(f"   融合源数据数量: {len(items)} 条")
-        logger.info(f"   源数据类型: {[item.data_type for item in items]}")
+        logger.info(f"• 融合源数据数量: {len(items)} 条")
+        logger.info(f"• 源数据类型: {[item.data_type for item in items]}")
         
         # 显示源数据详情
         if len(items) <= 3:  # 如果源数据不多，显示详情
             for i, item in enumerate(items, 1):
-                logger.info(f"   源数据 {i}: {item.data_type} - {item.payload}")
+                logger.info(f"• 源数据 {i}: {item.data_type} - {item.payload}")
     
     def _timestamp_to_str(self, timestamp: Optional[int]) -> str:
         """将时间戳转换为可读字符串"""
@@ -296,14 +296,14 @@ class Step2Fusion:
         if okx_count > 0:
             validation_rate = (okx_valid / okx_count) * 100
             logger.info(f"📊【流水线步骤2】OKX合约验证:")
-            logger.info(f"  • 验证通过: {okx_valid}/{okx_count} ({validation_rate:.1f}%)")
-            logger.info(f"  • last_settlement_time正确为空: ✓")
+            logger.info(f"• 验证通过: {okx_valid}/{okx_count} ({validation_rate:.1f}%)")
+            logger.info(f"• last_settlement_time正确为空: ✓")
             
         if binance_count > 0:
             validation_rate = (binance_valid / binance_count) * 100
             logger.info(f"📊【流水线步骤2】币安合约验证:")
-            logger.info(f"  • 验证通过: {binance_valid}/{binance_count} ({validation_rate:.1f}%)")
-            logger.info(f"  • next_settlement_time正确为空: ✓")
+            logger.info(f"• 验证通过: {binance_valid}/{binance_count} ({validation_rate:.1f}%)")
+            logger.info(f"• next_settlement_time正确为空: ✓")
     
     def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
         """合并同一组内的所有数据"""
