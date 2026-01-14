@@ -198,10 +198,11 @@ class DataStore:
         
         async with self.locks['market_data']:
             # ==================== 7步方案：币安历史费率数据处理 ====================
-            # 第1步：检查总开关状态
-            if not self._binance_funding_controller["enabled"]:
-                # 总开关关闭，跳过所有币安费率数据处理
-                logger.debug("🛑【数据池】币安历史费率总开关关闭，跳过处理")
+            # 第1步：检查总开关状态 - 这个必须最前面！
+            controller = self._binance_funding_controller
+            if not controller["enabled"]:
+                # 总开关关闭，直接跳过所有后续处理
+                logger.debug("🛑【数据池】币安历史费率总开关关闭，直接跳过")
             else:
                 # 第2步：检查币安历史费率数据，有没有存入data
                 has_funding_data = False
@@ -215,14 +216,14 @@ class DataStore:
                     logger.debug("⏳【数据池】等待币安历史费率数据存入...")
                 else:
                     # 第4步：统计币安历史费率数据里面的数据数量，也就是合约数
-                    if not self._binance_funding_controller["init_done"]:
+                    if not controller["init_done"]:
                         valid_symbols = set()
-                        for symbol, data_dict in self.market_data["binance"].items():
+                        for sym, data_dict in self.market_data["binance"].items():
                             if "funding_settlement" in data_dict:
-                                valid_symbols.add(symbol)
+                                valid_symbols.add(sym)
                         
-                        self._binance_funding_controller["total_contracts"] = len(valid_symbols)
-                        self._binance_funding_controller["init_done"] = True
+                        controller["total_contracts"] = len(valid_symbols)
+                        controller["init_done"] = True
                         
                         logger.info(f"📊【数据池】统计到币安历史费率数据合约数: {len(valid_symbols)}")
             
@@ -239,46 +240,46 @@ class DataStore:
                         
                         # ✅ 第5步：放行流入流水线，哪个合约流出了，就标记已流出
                         # 只对币安的funding_settlement数据应用流出控制
-                        should_collect = True
                         if exchange == "binance" and data_type == "funding_settlement":
-                            controller = self._binance_funding_controller
-                            
-                            # 检查总开关
+                            # 再次检查总开关（因为开关可能在循环中被关闭）
                             if not controller["enabled"]:
-                                should_collect = False
+                                continue  # 开关关闭，跳过这个数据
                             
                             # 检查是否已流出过
-                            elif symbol in controller["flowed_contracts"]:
-                                should_collect = False  # 已流出，跳过
+                            if symbol in controller["flowed_contracts"]:
+                                continue  # 已流出，跳过
                             
-                            else:
-                                # 标记已流出
-                                controller["flowed_contracts"].add(symbol)
-                                flowed_count = len(controller["flowed_contracts"])
-                                total_count = controller["total_contracts"]
-                                
-                                logger.debug(f"📤【数据池】币安费率数据流出: {symbol} ({flowed_count}/{total_count})")
-                                
-                                # ✅ 第6步：当被标记已流出的合约数量，与第4步统计的合约数量相同时
-                                if total_count > 0 and flowed_count >= total_count:
-                                    # 第7步：关闭总开关
-                                    controller["enabled"] = False
-                                    logger.info("🛑【数据池】币安历史费率数据已全部流出，关闭总开关")
-                        
-                        if not should_collect:
-                            continue
+                            # 标记已流出
+                            controller["flowed_contracts"].add(symbol)
+                            flowed_count = len(controller["flowed_contracts"])
+                            total_count = controller["total_contracts"]
+                            
+                            logger.info(f"📤【数据池】币安费率数据流出: {symbol} ({flowed_count}/{total_count})")
+                            
+                            # ✅ 第6步：当被标记已流出的合约数量，与第4步统计的合约数量相同时
+                            # 注意：这里先收集数据，循环结束后再检查是否关闭
                         
                         # ✅ 直接传数据，不包装！
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'data': data,  # ⚠️ 直接传数据，不包装！
+                            'data': data,
                             'timestamp': data.get('timestamp'),
                             'priority': 5
                         }
                         
                         water.append(water_item)
+            
+            # ✅ 第6步：循环结束后检查是否全部流出
+            if controller["enabled"] and controller["total_contracts"] > 0:
+                flowed_count = len(controller["flowed_contracts"])
+                total_count = controller["total_contracts"]
+                
+                if flowed_count >= total_count:
+                    # 第7步：关闭总开关
+                    controller["enabled"] = False
+                    logger.info(f"🛑【数据池】币安历史费率数据已全部流出 ({flowed_count}/{total_count})，关闭总开关")
         
         return water
     
