@@ -39,21 +39,27 @@ class DataStore:
         self.flow_task = None
         self.water_callback = None
         
-        # ✅ 新增：私人数据管道
-        self.private_water_callback = None  # 私人数据→管理员
-        self.private_flowing = True         # 私人管道默认常开
+        # 私人数据管道
+        self.private_water_callback = None
+        self.private_flowing = True
         
         # 规则执行记录
         self.execution_records = {
-            "total_flows": 0,                   # 总共放水次数
+            "total_flows": 0,
             "last_flow_time": 0,
-            # ✅ 新增：私人数据执行记录
             "private_flows": {
                 "account_updates": 0,
                 "order_updates": 0,
                 "last_account_update": 0,
                 "last_order_update": 0
             }
+        }
+        
+        # ✅ 重构：币安历史费率数据控制器（封装所有状态）
+        self._binance_funding_controller = {
+            "enabled": True,          # 总开关
+            "total_contracts": 0,     # 总合约数（0表示未统计）
+            "flowed_contracts": set(), # 已流出合约集合
         }
         
         # 数据锁
@@ -74,12 +80,12 @@ class DataStore:
         self.water_callback = callback
     
     def set_private_water_callback(self, callback: Callable):
-        """✅ 新增：设置私人数据回调"""
+        """设置私人数据回调"""
         self.private_water_callback = callback
         logger.info("✅【数据池】私人数据管道已连接")
     
     def set_private_flowing(self, flowing: bool):
-        """✅ 新增：设置私人数据管道开关"""
+        """设置私人数据管道开关"""
         self.private_flowing = flowing
         status = "开启" if flowing else "关闭"
         logger.info(f"✅【数据池】私人数据管道{status}")
@@ -107,6 +113,60 @@ class DataStore:
         async with self.rule_lock:
             if self.rules and rule_key in self.rules:
                 self.rules[rule_key] = rule_value
+    
+    # ==================== 币安历史费率数据专用控制逻辑 ====================
+    
+    def _should_skip_binance_funding(self, symbol: str) -> bool:
+        """
+        ✅ 核心方法：检查是否应该跳过币安历史费率数据
+        
+        逻辑：
+        1. 如果总开关已关闭 → 跳过
+        2. 如果该合约已流出 → 跳过
+        3. 否则 → 允许流出
+        """
+        controller = self._binance_funding_controller
+        
+        # 总开关已关闭，直接跳过
+        if not controller["enabled"]:
+            return True
+        
+        # 该合约已流出过
+        if symbol in controller["flowed_contracts"]:
+            return True
+        
+        return False
+    
+    def _update_binance_funding_control(self, symbol: str):
+        """
+        ✅ 核心方法：更新币安历史费率控制状态
+        
+        逻辑：
+        1. 首次调用时统计总合约数
+        2. 标记当前合约为已流出
+        3. 检查是否全部流出，如果是则关闭总开关
+        """
+        controller = self._binance_funding_controller
+        
+        # 1. 首次调用：统计总合约数
+        if controller["total_contracts"] == 0:
+            total_symbols = set()
+            for sym, sym_dict in self.market_data.get("binance", {}).items():
+                if "funding_settlement" in sym_dict:
+                    total_symbols.add(sym)
+            
+            controller["total_contracts"] = len(total_symbols)
+            logger.info(f"📊【数据池】首次检测到币安历史费率数据: {len(total_symbols)}个合约")
+        
+        # 2. 标记当前合约已流出
+        controller["flowed_contracts"].add(symbol)
+        flowed = len(controller["flowed_contracts"])
+        total = controller["total_contracts"]
+        
+        # 3. 检查是否全部流出
+        if flowed >= total and total > 0:
+            controller["enabled"] = False
+            logger.info(f"🛑【数据池】币安历史费率数据全量流出({flowed}/{total}个合约)，永久关闭该类型数据流")
     
     # ==================== 市场数据放水系统 ====================
     
@@ -182,81 +242,38 @@ class DataStore:
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """按规则收集水 - 统一化处理所有数据类型"""
+        """按规则收集水"""
         if not self.rules:
             return []
         
         water = []
         
         async with self.locks['market_data']:
-            # ==================== 币安历史费率数据控制逻辑 ====================
-            BINANCE_FUNDING_SETTLEMENT = "funding_settlement"
-            
-            # 第一步：全局开关检查
-            if getattr(self, '_binance_funding_settlement_closed', False):
-                # 已关闭，跳过所有币安历史费率数据处理
-                pass
-            else:
-                # 初始化已流过合约集合（只在第一次运行时）
-                if not hasattr(self, '_binance_funding_settlement_flowed'):
-                    self._binance_funding_settlement_flowed = set()
-            
-            # ==================== 遍历所有数据 ====================
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
                 
                 for symbol, data_dict in self.market_data[exchange].items():
                     for data_type, data in data_dict.items():
-                        # 跳过内部字段
+                        # 跳过内部元数据
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # ==================== 针对币安历史费率的特殊处理 ====================
-                        if exchange == "binance" and data_type == BINANCE_FUNDING_SETTLEMENT:
-                            # 1. 检查全局开关是否已关闭
-                            if getattr(self, '_binance_funding_settlement_closed', False):
+                        # ✅ 币安历史费率数据特殊处理
+                        if exchange == "binance" and data_type == "funding_settlement":
+                            # 1. 检查是否应该跳过
+                            if self._should_skip_binance_funding(symbol):
                                 continue
                             
-                            # 2. 检查该合约是否已流过
-                            if symbol in getattr(self, '_binance_funding_settlement_flowed', set()):
-                                continue
-                            
-                            # 🔴 关键修正：只在首次遇到数据时才统计总数
-                            if not hasattr(self, '_binance_funding_settlement_total'):
-                                # 首次遇到funding_settlement数据，统计所有合约
-                                total_symbols = set()
-                                for sym, sym_dict in self.market_data.get("binance", {}).items():
-                                    if BINANCE_FUNDING_SETTLEMENT in sym_dict:
-                                        total_symbols.add(sym)
-                                
-                                if total_symbols:
-                                    self._binance_funding_settlement_total = len(total_symbols)
-                                    logger.info(f"📊【数据池】首次检测到币安历史费率数据: {len(total_symbols)}个合约")
-                                else:
-                                    # 理论上不会走到这里，因为当前就是funding_settlement数据
-                                    # 但为了安全起见，先标记当前合约，不统计总数
-                                    self._binance_funding_settlement_flowed.add(symbol)
-                                    continue
-                            
-                            # 3. 标记当前合约为已流过
-                            self._binance_funding_settlement_flowed.add(symbol)
-                            
-                            # 4. 检查是否所有合约都已流过
-                            flowed_count = len(self._binance_funding_settlement_flowed)
-                            total_count = self._binance_funding_settlement_total
-                            
-                            if flowed_count >= total_count:
-                                # 所有合约都已流过，永久关闭该类型数据流
-                                self._binance_funding_settlement_closed = True
-                                logger.info(f"🛑【数据池】币安历史费率数据已完成全量流入({flowed_count}/{total_count}个合约)，永久关闭该类型数据流")
+                            # 2. 允许流出，并更新控制状态
+                            self._update_binance_funding_control(symbol)
                         
-                        # ✅ 关键修改：直接传数据，不包装！
+                        # 构建水对象
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'data': data,  # ⚠️ 直接传数据，不包装！
+                            'data': data,
                             'timestamp': data.get('timestamp'),
                             'priority': 5
                         }
@@ -274,29 +291,27 @@ class DataStore:
                 self.market_data[exchange] = defaultdict(dict)
             
             data_type = data.get("data_type", "unknown")
-            
-            # ✅ 使用传入的source，如果没有则默认websocket
             source = data.get("source", "websocket")
             
             # 存储数据
             self.market_data[exchange][symbol][data_type] = {
                 **data,
                 'store_timestamp': datetime.now().isoformat(),
-                'source': source  # ✅ 保留传入的source
+                'source': source
             }
             
             # 存储最新引用
             self.market_data[exchange][symbol]['latest'] = data_type
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
-        """✅ 增强：接收账户数据（立即自动流出）"""
+        """接收账户数据（立即自动流出）"""
         async with self.locks['account_data']:
             self.account_data[exchange] = {
                 **data,
                 'timestamp': datetime.now().isoformat()
             }
         
-        # ✅ 新增：立即从私人管道流出！
+        # 立即从私人管道流出
         if self.private_water_callback and self.private_flowing:
             try:
                 private_data = {
@@ -318,7 +333,7 @@ class DataStore:
                 logger.error(f"❌【数据池】私人数据(账户)流出失败: {e}")
     
     async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
-        """✅ 增强：接收交易数据（立即自动流出）"""
+        """接收交易数据（立即自动流出）"""
         async with self.locks['order_data']:
             if exchange not in self.order_data:
                 self.order_data[exchange] = {}
@@ -327,7 +342,7 @@ class DataStore:
                 'update_time': datetime.now().isoformat()
             }
         
-        # ✅ 新增：立即从私人管道流出！
+        # 立即从私人管道流出
         if self.private_water_callback and self.private_flowing:
             try:
                 private_data = {
@@ -359,11 +374,11 @@ class DataStore:
                 'timestamp': datetime.now().isoformat()
             }
     
-    # ==================== 数据查询接口（兼容原有系统） ====================
+    # ==================== 数据查询接口 ====================
     
     async def get_market_data(self, exchange: str, symbol: str = None, 
                              data_type: str = None, get_latest: bool = False) -> Dict[str, Any]:
-        """获取市场数据（兼容原有接口）"""
+        """获取市场数据"""
         async with self.locks['market_data']:
             if exchange not in self.market_data:
                 return {}
@@ -405,8 +420,8 @@ class DataStore:
                 return self.connection_status.get(exchange, {}).copy()
             return self.connection_status.copy()
     
-    def get_market_data_stats(self) -> Dict[str, Any]:
-        """获取统计数据（兼容原有接口）"""
+    async def get_market_data_stats(self) -> Dict[str, Any]:
+        """获取统计数据"""
         stats = {'exchanges': {}, 'total_symbols': 0, 'total_data_types': 0}
         for exchange, symbols in self.market_data.items():
             symbol_count = len(symbols)
@@ -425,16 +440,17 @@ class DataStore:
     # ==================== 状态查询 ====================
     
     async def get_execution_status(self) -> Dict[str, Any]:
-        """✅ 增强：获取规则执行状态"""
+        """获取规则执行状态"""
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
         
-        # 添加币安历史费率控制状态
-        binance_funding_settlement_status = {
-            "closed": getattr(self, '_binance_funding_settlement_closed', False),
-            "total_contracts": getattr(self, '_binance_funding_settlement_total', 0),
-            "flowed_contracts": len(getattr(self, '_binance_funding_settlement_flowed', set())),
-            "flowed_contracts_list": sorted(list(getattr(self, '_binance_funding_settlement_flowed', set()))),
+        # 币安历史费率控制状态
+        controller = self._binance_funding_controller
+        binance_funding_status = {
+            "enabled": controller["enabled"],
+            "total_contracts": controller["total_contracts"],
+            "flowed_contracts": len(controller["flowed_contracts"]),
+            "flowed_contracts_list": sorted(controller["flowed_contracts"]),
             "data_type": "funding_settlement"
         }
         
@@ -447,7 +463,7 @@ class DataStore:
                 "flowing": self.private_flowing,
                 "stats": records["private_flows"]
             },
-            "binance_funding_settlement_control": binance_funding_settlement_status,
+            "binance_funding_settlement_control": binance_funding_status,
             "timestamp": datetime.now().isoformat()
         }
     
@@ -462,9 +478,7 @@ class DataStore:
             await self.water_callback(water)
     
     async def clear_market_data(self, exchange: str = None):
-        """
-        清空市场数据（谨慎使用）
-        """
+        """清空市场数据（谨慎使用）"""
         async with self.locks['market_data']:
             if exchange:
                 if exchange in self.market_data:
@@ -476,10 +490,9 @@ class DataStore:
                 logger.warning("⚠️【数据池】已清空所有市场数据")
     
     async def health_check(self) -> Dict[str, Any]:
-        """
-        健康检查
-        """
-        stats = self.get_market_data_stats()
+        """健康检查"""
+        stats = await self.get_market_data_stats()
+        controller = self._binance_funding_controller
         
         return {
             "status": "healthy",
@@ -502,9 +515,9 @@ class DataStore:
                 "flowing": self.private_flowing
             },
             "binance_funding_settlement_control": {
-                "closed": getattr(self, '_binance_funding_settlement_closed', False),
-                "total_contracts": getattr(self, '_binance_funding_settlement_total', 0),
-                "flowed_contracts": len(getattr(self, '_binance_funding_settlement_flowed', set()))
+                "enabled": controller["enabled"],
+                "total_contracts": controller["total_contracts"],
+                "flowed_contracts": len(controller["flowed_contracts"])
             }
         }
 
