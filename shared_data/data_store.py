@@ -64,14 +64,15 @@ class DataStore:
             'execution_records': asyncio.Lock(),
         }
         
-        # 🚨 测试版：闸门常开，不关闭
+        # ✅ 类型级闸门：所有合约通过10次后永久关闭
         self._binance_funding_gate = {
-            "enabled": True,          # 常开，不关闭
-            "flowed_symbols": set(),  # 记录流过的合约（仅记录，不拦截）
-            "total_passed": 0         # 记录总共通过的次数
+            "enabled": True,                    # 闸门总开关
+            "symbol_pass_count": defaultdict(int),  # 每个合约的通过次数
+            "last_check_time": 0,               # 上次检查时间（避免频繁检查）
+            "total_passes": 0                   # 总通过次数
         }
         
-        logger.info("✅【数据池】初始化完成，测试模式：闸门常开")
+        logger.info("✅【数据池】初始化完成，类型级闸门：所有合约通过10次后永久关闭")
     
     # ==================== 管道设置方法 ====================
     
@@ -164,21 +165,6 @@ class DataStore:
                 # 按规则收集水
                 water = await self._collect_water_by_rules()
                 
-                # 🚨 调试：记录币安历史费率数据的数量
-                binance_funding_count = sum(
-                    1 for item in water 
-                    if item['exchange'] == 'binance' and item['data_type'] == 'funding_settlement'
-                )
-                if binance_funding_count > 0:
-                    logger.warning(f"🚨【调试】water中有 {binance_funding_count} 条币安历史费率数据")
-                    if len(water) > 0:
-                        sample = next(
-                            item for item in water 
-                            if item['exchange'] == 'binance' and item['data_type'] == 'funding_settlement'
-                        )
-                        logger.warning(f"🚨【调试】样本数据键: {list(sample.keys())}")
-                        logger.warning(f"🚨【调试】样本data类型: {type(sample['data'])}")
-                
                 # 放水
                 if water and self.water_callback:
                     await self.water_callback(water)
@@ -195,113 +181,115 @@ class DataStore:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"❌【数据池】放水循环错误: {e}", exc_info=True)
+                logger.error(f"❌【数据池】放水循环错误: {e}")
                 await asyncio.sleep(5)
     
     async def _collect_water_by_rules(self) -> List[Dict[str, Any]]:
-        """🚨 测试版：闸门常开，数据无限次通过"""
+        """按规则收集水 - 类型级闸门（10次后永久关闭）"""
         if not self.rules:
             return []
         
         water = []
         
         async with self.locks['market_data']:
-            # 统计币安历史费率数据
-            binance_funding_total = 0
-            binance_funding_passed = 0
+            # 获取当前币安历史费率数据的所有合约
+            binance_data = self.market_data.get("binance", {})
+            funding_symbols = [
+                sym for sym, data_dict in binance_data.items()
+                if "funding_settlement" in data_dict
+            ]
+            total_funding_symbols = len(funding_symbols)
             
+            # 🚨 如果闸门已关闭，直接跳过所有币安费率数据
+            if not self._binance_funding_gate["enabled"]:
+                # 只收集非币安费率数据
+                for exchange in ["binance", "okx"]:
+                    if exchange not in self.market_data:
+                        continue
+                    
+                    for symbol, data_dict in self.market_data[exchange].items():
+                        for data_type, data in data_dict.items():
+                            if data_type in ['latest', 'store_timestamp']:
+                                continue
+                            
+                            # 跳过币安费率数据
+                            if exchange == "binance" and data_type == "funding_settlement":
+                                continue
+                            
+                            water_item = {
+                                'exchange': exchange,
+                                'symbol': symbol,
+                                'data_type': data_type,
+                                'data': data,
+                                'timestamp': data.get('timestamp'),
+                                'priority': 5
+                            }
+                            water.append(water_item)
+                
+                return water
+            
+            # 🚨 闸门开启状态
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
                 
                 for symbol, data_dict in self.market_data[exchange].items():
                     for data_type, data in data_dict.items():
-                        # 跳过内部字段
                         if data_type in ['latest', 'store_timestamp']:
                             continue
                         
-                        # 🚨 判断是否是币安历史费率数据
-                        is_binance_funding = (
-                            exchange == "binance" and 
-                            data_type == "funding_settlement"
-                        )
-                        
-                        if is_binance_funding:
-                            binance_funding_total += 1
+                        # 🔴 币安历史费率数据 - 类型级闸门
+                        if exchange == "binance" and data_type == "funding_settlement":
+                            # 检查该合约是否已通过10次
+                            current_count = self._binance_funding_gate["symbol_pass_count"][symbol]
                             
-                            # 🚨 测试版：闸门永远返回True（通过）
-                            gate_result = self._pass_through_funding_gate_test(symbol)
+                            if current_count >= 10:
+                                continue  # 该合约已通过10次，跳过
                             
-                            if gate_result:
-                                binance_funding_passed += 1
-                                logger.warning(f"🚨【测试】币安费率数据通过闸门: {symbol}")
-                            else:
-                                logger.error(f"🚨【测试】币安费率数据被拦截: {symbol}（不应该发生！）")
-                                continue
+                            # 通过，计数+1
+                            self._binance_funding_gate["symbol_pass_count"][symbol] = current_count + 1
+                            self._binance_funding_gate["total_passes"] += 1
                         
-                        # 🚨 构建数据项 - 保持100%原样
+                        # ✅ 构建数据项
                         water_item = {
                             'exchange': exchange,
                             'symbol': symbol,
                             'data_type': data_type,
-                            'data': data,  # 🚨 原样传递，不包装！
-                            'timestamp': data.get('timestamp') if isinstance(data, dict) else None,
+                            'data': data,
+                            'timestamp': data.get('timestamp'),
                             'priority': 5
                         }
-                        
                         water.append(water_item)
             
-            # 🚨 输出调试信息
-            if binance_funding_total > 0:
-                logger.warning(f"🚨【测试】币安历史费率数据统计:")
-                logger.warning(f"🚨【测试】  数据池中总数: {binance_funding_total}")
-                logger.warning(f"🚨【测试】  通过闸门数: {binance_funding_passed}")
-                logger.warning(f"🚨【测试】  water列表总数: {len(water)}")
-                logger.warning(f"🚨【测试】  闸门状态: enabled={self._binance_funding_gate['enabled']}")
-                logger.warning(f"🚨【测试】  已记录合约数: {len(self._binance_funding_gate['flowed_symbols'])}")
+            # ✅ 类型级关闭检查（每10秒检查一次，避免频繁计算）
+            current_time = time.time()
+            if current_time - self._binance_funding_gate["last_check_time"] >= 10:
+                self._binance_funding_gate["last_check_time"] = current_time
+                
+                if total_funding_symbols > 0:
+                    # 检查是否所有合约都通过了10次
+                    all_passed_10_times = True
+                    for symbol in funding_symbols:
+                        if self._binance_funding_gate["symbol_pass_count"][symbol] < 10:
+                            all_passed_10_times = False
+                            break
+                    
+                    if all_passed_10_times:
+                        self._binance_funding_gate["enabled"] = False
+                        logger.info(f"🚰【闸门】所有{total_funding_symbols}个合约都已通过10次，闸门永久关闭（总通过次数: {self._binance_funding_gate['total_passes']}）")
         
         return water
-    
-    def _pass_through_funding_gate_test(self, symbol: str) -> bool:
-        """
-        🚨 测试版闸门：永远通过，仅记录
-        返回：True（永远通过）
-        """
-        # 永远通过
-        result = True
-        
-        # 记录通过的合约
-        if symbol not in self._binance_funding_gate["flowed_symbols"]:
-            logger.warning(f"🚨【测试闸门】首次记录合约: {symbol}")
-            self._binance_funding_gate["flowed_symbols"].add(symbol)
-        
-        # 记录通过次数
-        self._binance_funding_gate["total_passed"] += 1
-        
-        # 记录日志（每10次记录一次）
-        if self._binance_funding_gate["total_passed"] % 10 == 0:
-            logger.warning(f"🚨【测试闸门】累计通过次数: {self._binance_funding_gate['total_passed']}")
-        
-        return result
     
     # ==================== 数据接收接口 ====================
     
     async def update_market_data(self, exchange: str, symbol: str, data: Dict[str, Any]):
-        """接收市场数据 - 增强日志"""
+        """接收市场数据"""
         async with self.locks['market_data']:
             if exchange not in self.market_data:
                 self.market_data[exchange] = defaultdict(dict)
             
             data_type = data.get("data_type", "unknown")
             source = data.get("source", "websocket")
-            
-            # 🚨 专门记录币安历史费率数据
-            if exchange == "binance" and data_type == "funding_settlement":
-                logger.warning(f"🚨【接收】币安历史费率数据: {symbol}")
-                logger.warning(f"🚨【接收】数据键: {list(data.keys())}")
-                if 'timestamp' in data:
-                    logger.warning(f"🚨【接收】时间戳: {data['timestamp']}")
-                logger.warning(f"🚨【接收】数据源: {source}")
             
             # 存储数据
             self.market_data[exchange][symbol][data_type] = {
@@ -454,28 +442,40 @@ class DataStore:
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
         
-        # 统计币安历史费率数据
+        # 统计闸门状态
         binance_data = self.market_data.get("binance", {})
-        total_funding_symbols = len([
+        funding_symbols = [
             sym for sym, data_dict in binance_data.items()
             if "funding_settlement" in data_dict
-        ])
+        ]
+        total_funding_symbols = len(funding_symbols)
+        
+        # 统计已通过10次的合约数
+        passed_10_times_count = sum(
+            1 for symbol in funding_symbols
+            if self._binance_funding_gate["symbol_pass_count"][symbol] >= 10
+        )
         
         return {
             "flowing": self.flowing,
             "has_rules": self.rules is not None,
-            "execution_records": records,
+            "execution_records": {
+                "total_flows": records["total_flows"],
+                "last_flow_time": records["last_flow_time"],
+                "private_flows": records["private_flows"]
+            },
             "private_pipeline": {
                 "connected": self.private_water_callback is not None,
-                "flowing": self.private_flowing,
-                "stats": records["private_flows"]
+                "flowing": self.private_flowing
             },
-            "binance_funding_gate_test": {
+            "binance_funding_gate": {
                 "enabled": self._binance_funding_gate["enabled"],
-                "flowed_symbols_count": len(self._binance_funding_gate["flowed_symbols"]),
-                "total_passed": self._binance_funding_gate["total_passed"],
                 "total_funding_symbols": total_funding_symbols,
-                "mode": "🚨 测试模式：闸门常开"
+                "passed_10_times_count": passed_10_times_count,
+                "passed_percentage": f"{(passed_10_times_count/total_funding_symbols*100):.1f}%" if total_funding_symbols > 0 else "0%",
+                "total_passes": self._binance_funding_gate["total_passes"],
+                "policy": "类型级：所有合约通过10次后永久关闭",
+                "status": "已关闭" if not self._binance_funding_gate["enabled"] else f"进行中 ({passed_10_times_count}/{total_funding_symbols})"
             },
             "timestamp": datetime.now().isoformat()
         }
@@ -510,6 +510,18 @@ class DataStore:
         """
         stats = self.get_market_data_stats()
         
+        # 闸门状态
+        binance_data = self.market_data.get("binance", {})
+        total_funding = len([
+            sym for sym, data_dict in binance_data.items()
+            if "funding_settlement" in data_dict
+        ])
+        passed_10 = sum(
+            1 for sym, data_dict in binance_data.items()
+            if "funding_settlement" in data_dict and 
+            self._binance_funding_gate["symbol_pass_count"][sym] >= 10
+        )
+        
         return {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
@@ -530,10 +542,11 @@ class DataStore:
                 "connected": self.private_water_callback is not None,
                 "flowing": self.private_flowing
             },
-            "binance_funding_gate_test": {
+            "binance_funding_gate": {
                 "enabled": self._binance_funding_gate["enabled"],
-                "flowed_count": len(self._binance_funding_gate["flowed_symbols"]),
-                "total_passed": self._binance_funding_gate["total_passed"]
+                "total_symbols": total_funding,
+                "passed_10_count": passed_10,
+                "total_passes": self._binance_funding_gate["total_passes"]
             }
         }
 
