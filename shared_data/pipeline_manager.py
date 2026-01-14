@@ -1,6 +1,6 @@
 """
 PipelineManager - 管理员/立法者
-功能：1. 制定规则 2. 启动系统 3. 监督运行
+功能：1. 制定规则 2. 启动系统 3. 监督运行（已添加Step0）
 """
 
 import asyncio
@@ -8,7 +8,8 @@ import time
 from typing import Dict, Any, Optional, Callable
 import logging
 
-# 导入5个步骤
+# ✅ 导入6个步骤（新增Step0）
+from shared_data.step0_rate_limiter import Step0RateLimiter
 from shared_data.step1_filter import Step1Filter
 from shared_data.step2_fusion import Step2Fusion
 from shared_data.step3_align import Step3Align
@@ -18,7 +19,7 @@ from shared_data.step5_cross_calc import Step5CrossCalc
 logger = logging.getLogger(__name__)
 
 class PipelineManager:
-    """管理员：制定规则，启动系统，管理双数据管道"""
+    """管理员：制定规则，启动系统，管理双数据管道（已集成Step0）"""
     
     _instance: Optional['PipelineManager'] = None
     
@@ -31,39 +32,44 @@ class PipelineManager:
     def __init__(self, 
                  brain_callback: Optional[Callable] = None,
                  private_data_callback: Optional[Callable] = None):
-        """✅ 新增：支持双回调"""
+        """✅ 已集成Step0限流器"""
         if hasattr(self, '_initialized'):
             return
         
         # 大脑双通道回调
-        self.brain_callback = brain_callback           # 市场数据回调
-        self.private_data_callback = private_data_callback  # ✅ 私人数据回调
+        self.brain_callback = brain_callback
+        self.private_data_callback = private_data_callback
         
-        # 立法：制定核心规则（移除币安历史费率特殊规则）
+        # 立法：制定核心规则
         self.rules = {
             # 放水规则
             "flow": {
-                "interval_seconds": 1.0,      # 1秒放一次水
-                "enabled": True,              # 是否放水
+                "interval_seconds": 1.0,
+                "enabled": True,
             },
-            
-            # ✅ 移除：不再有币安历史费率特殊规则
             
             # 流水线规则
             "pipeline": {
                 "enabled": True,
-                "log_statistics": True,       # 记录统计信息
+                "log_statistics": True,
             },
             
-            # ✅ 新增：私人数据规则
+            # ✅ 新增：Step0限流规则
+            "step0_limit": {
+                "binance_funding_settlement_limit": 10,  # 币安历史费率数据限制次数
+                "enabled": True
+            },
+            
+            # 私人数据规则
             "private_data": {
-                "enabled": True,              # 是否启用私人数据管道
-                "immediate_flow": True,       # 是否立即流出
-                "log_updates": True          # 是否记录更新
+                "enabled": True,
+                "immediate_flow": True,
+                "log_updates": True
             }
         }
         
-        # 流水线工人
+        # ✅ 流水线工人（现在有6个步骤！）
+        self.step0 = Step0RateLimiter(limit_times=self.rules["step0_limit"]["binance_funding_settlement_limit"])
         self.step1 = Step1Filter()
         self.step2 = Step2Fusion()
         self.step3 = Step3Align()
@@ -73,27 +79,34 @@ class PipelineManager:
         # 系统状态
         self.system_running = False
         self.stats = {
-            "total_processed": 0,            # 市场数据处理总数
+            "total_processed": 0,
             "last_processed_time": 0,
             "errors": 0,
             "start_time": time.time(),
-            # ✅ 新增：私人数据统计
+            # ✅ 新增：Step0统计
+            "step0_stats": {
+                "total_in": 0,
+                "total_out": 0,
+                "binance_funding_blocked": 0,
+                "binance_funding_passed": 0
+            },
+            # 私人数据统计
             "private_data": {
-                "account_updates": 0,        # 账户更新次数
-                "order_updates": 0,          # 交易更新次数
+                "account_updates": 0,
+                "order_updates": 0,
                 "last_account_update": 0,
                 "last_order_update": 0,
                 "errors": 0
             }
         }
         
-        logger.info("✅【数据处理管理员】初始化完成")
+        logger.info("✅【数据处理管理员】初始化完成（已集成Step0限流器）")
         self._initialized = True
     
     # ==================== 管理员核心功能 ====================
     
     async def start(self):
-        """启动整个系统（双管道启动）"""
+        """启动整个系统（已集成Step0）"""
         if self.system_running:
             logger.warning("⚠️【数据处理管理员】系统已经在运行中")
             return
@@ -111,17 +124,17 @@ class PipelineManager:
             await data_store.start_flowing(self._receive_water_callback)
             logger.info("🚰【数据处理管理员】DataStore市场数据放水系统已启动")
             
-            # 3. ✅ 新增：连接私人数据管道
+            # 3. 连接私人数据管道
             data_store.set_private_water_callback(self._receive_private_water)
             logger.info("🔄【数据处理管理员】私人数据管道已连接")
             
-            # 4. 流水线工人已就绪（步骤1-5）
-            logger.info("🔧【数据处理管理员】流水线工人已就位")
+            # ✅ 4. 流水线工人已就绪（步骤0-5）
+            logger.info("🔧【数据处理管理员】流水线工人已就位（步骤0-5）")
             
             # 5. 系统运行中
             logger.info("🎉【数据处理管理员】系统启动完成，开始自动运行")
             
-            # 6. 启动状态监控（可选）
+            # 6. 启动状态监控
             self._monitor_task = asyncio.create_task(self._monitor_system())
             
         except Exception as e:
@@ -130,7 +143,7 @@ class PipelineManager:
             raise
     
     async def stop(self):
-        """停止系统（双管道停止）"""
+        """停止系统"""
         logger.info("🛑【数据处理管理员】正在停止系统...")
         self.system_running = False
         
@@ -138,7 +151,7 @@ class PipelineManager:
         from shared_data.data_store import data_store
         await data_store.stop_flowing()
         
-        # ✅ 新增：关闭私人数据管道
+        # 关闭私人数据管道
         data_store.set_private_flowing(False)
         
         # 停止监控
@@ -155,25 +168,46 @@ class PipelineManager:
             
             logger.info(f"📝【数据处理管理员】规则更新: {rule_key} = {rule_value}")
             
+            # 特殊处理：更新Step0限流次数
+            if rule_key == "step0_limit" and "binance_funding_settlement_limit" in rule_value:
+                new_limit = rule_value["binance_funding_settlement_limit"]
+                self.step0.update_limit(new_limit)
+                logger.info(f"🔧【数据处理管理员】Step0限流次数已更新为: {new_limit}")
+            
             # 通知DataStore规则更新
             from shared_data.data_store import data_store
             await data_store.receive_rule_update(rule_key, rule_value)
         else:
             logger.warning(f"⚠️【数据处理管理员】未知规则: {rule_key}")
     
-    # ==================== 市场数据处理回调 ====================
+    # ==================== 市场数据处理回调（已集成Step0） ====================
     
     async def _receive_water_callback(self, water_data: list):
         """
         接收DataStore放过来的市场数据水
-        水已经按照规则过滤好了
+        ✅ 已集成Step0限流器
         """
         if not water_data:
             return
         
         try:
-            # 步骤1：过滤提取
-            step1_results = self.step1.process(water_data)
+            # ✅ 步骤0：币安历史费率限流
+            step0_results = self.step0.process(water_data)
+            
+            # 记录Step0统计
+            step0_status = self.step0.get_status()
+            self.stats["step0_stats"]["total_in"] += len(water_data)
+            self.stats["step0_stats"]["total_out"] += len(step0_results)
+            self.stats["step0_stats"]["binance_funding_passed"] = step0_status["binance_funding_passed"]
+            self.stats["step0_stats"]["binance_funding_blocked"] = step0_status.get("binance_funding_blocked", 0)
+            
+            if not step0_results:
+                # 如果Step0过滤后没有数据了，直接返回
+                logger.debug("🔄【数据处理管理员】Step0过滤后无数据，跳过本次处理")
+                return
+            
+            # ✅ 步骤1：过滤提取（接收Step0的输出！）
+            step1_results = self.step1.process(step0_results)
             if not step1_results:
                 return
             
@@ -203,7 +237,6 @@ class PipelineManager:
             
             # 给大脑
             if self.brain_callback:
-                # ✅ 一次性发送整个列表
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
             
@@ -211,13 +244,10 @@ class PipelineManager:
             logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
             self.stats["errors"] += 1
     
-    # ==================== ✅ 新增：私人数据处理回调 ====================
+    # ==================== 私人数据处理回调 ====================
     
     async def _receive_private_water(self, private_data: Dict):
-        """
-        接收DataStore放过来的私人数据水
-        立即自动流出，不经过流水线加工
-        """
+        """接收DataStore放过来的私人数据水（保持不变）"""
         if not private_data:
             return
         
@@ -236,11 +266,10 @@ class PipelineManager:
             if self.rules["private_data"]["log_updates"]:
                 logger.debug(f"📨【数据处理管理员】【私人数据】收到 {data_type}: {private_data.get('exchange')}")
             
-            # 立即推送给大脑（如果不加工）
+            # 立即推送给大脑
             if self.private_data_callback:
                 await self.private_data_callback(private_data)
             else:
-                # 如果没有设置回调，记录警告
                 logger.warning(f"⚠️【数据处理管理员】【私人数据】收到{data_type}但无回调，数据丢失")
             
         except Exception as e:
@@ -250,7 +279,7 @@ class PipelineManager:
     # ==================== 系统监控 ====================
     
     async def _monitor_system(self):
-        """监控系统运行状态（包含双管道）"""
+        """监控系统运行状态（包含Step0）"""
         while self.system_running:
             try:
                 # 每分钟报告一次状态
@@ -258,12 +287,16 @@ class PipelineManager:
                 
                 uptime = time.time() - self.stats["start_time"]
                 market_total = self.stats["total_processed"]
+                step0_in = self.stats["step0_stats"]["total_in"]
+                step0_out = self.stats["step0_stats"]["total_out"]
+                step0_blocked = step0_in - step0_out
                 private_account = self.stats["private_data"]["account_updates"]
                 private_order = self.stats["private_data"]["order_updates"]
                 
                 logger.info(f"📈【数据处理管理员】系统运行报告 - "
                           f"运行时间: {uptime:.0f}秒, "
-                          f"市场数据处理: {market_total}条, "
+                          f"Step0: 输入{step0_in}/输出{step0_out}/拦截{step0_blocked}, "
+                          f"市场处理: {market_total}条, "
                           f"私人数据(账户: {private_account}, 交易: {private_order})")
                 
             except asyncio.CancelledError:
@@ -283,13 +316,14 @@ class PipelineManager:
             "uptime_seconds": uptime,
             "market_processed": self.stats["total_processed"],
             "errors": self.stats["errors"],
+            "step0_status": self.step0.get_status(),  # ✅ 新增Step0状态
             "memory_mode": "定时全量处理，1秒间隔",
             "step4_cache_size": len(self.step4.binance_cache) if hasattr(self.step4, 'binance_cache') else 0,
             "timestamp": time.time()
         }
     
     def get_system_status(self) -> Dict[str, Any]:
-        """✅ 增强：获取系统状态（详细版，包含私人数据）"""
+        """✅ 增强：获取系统状态（详细版，包含Step0）"""
         uptime = time.time() - self.stats["start_time"]
         
         return {
@@ -297,12 +331,14 @@ class PipelineManager:
             "uptime_seconds": uptime,
             "stats": self.stats.copy(),
             "rules": self.rules.copy(),
+            "step0_status": self.step0.get_status(),  # ✅ 新增
             "timestamp": time.time()
         }
     
     def get_pipeline_stats(self) -> Dict[str, Any]:
-        """获取流水线统计"""
+        """获取流水线统计（包含Step0）"""
         return {
+            "step0_stats": self.step0.get_status() if hasattr(self.step0, 'get_status') else {},
             "step1_stats": dict(self.step1.stats) if hasattr(self.step1, 'stats') else {},
             "step2_stats": dict(self.step2.stats) if hasattr(self.step2, 'stats') else {},
             "step3_stats": self.step3.stats if hasattr(self.step3, 'stats') else {},
@@ -310,7 +346,7 @@ class PipelineManager:
             "step5_stats": self.step5.stats if hasattr(self.step5, 'stats') else {},
         }
     
-    # ==================== ✅ 新增：回调设置方法 ====================
+    # ==================== 回调设置方法 ====================
     
     def set_brain_callback(self, callback: Callable):
         """设置市场数据大脑回调"""
@@ -326,10 +362,24 @@ class PipelineManager:
         """检查是否有私人数据回调"""
         return self.private_data_callback is not None
     
+    # ==================== Step0相关方法 ====================
+    
+    def reset_step0_limit(self):
+        """重置Step0限流器（用于测试）"""
+        if hasattr(self, 'step0'):
+            self.step0.reset_limit()
+            logger.info("🔄【数据处理管理员】Step0限流器已重置")
+    
+    def get_step0_status(self) -> Dict[str, Any]:
+        """获取Step0状态"""
+        if hasattr(self, 'step0'):
+            return self.step0.get_status()
+        return {"error": "Step0 not initialized"}
+    
     # ==================== 兼容原有接口 ====================
     
     async def ingest_data(self, data: Dict[str, Any]) -> bool:
-        """接收数据（保持接口兼容，但实际由DataStore控制）"""
+        """接收数据（保持接口兼容）"""
         return True
 
 # 使用示例
@@ -337,7 +387,7 @@ async def main():
     # 大脑双回调函数
     async def brain_callback(data):
         """处理市场数据"""
-        print(f"📈【数据处理管理员】 收到市场数据: {data.get('symbol', 'unknown')}")
+        print(f"📈【数据处理管理员】 收到市场数据: {len(data)}条")
     
     async def private_data_callback(data):
         """处理私人数据"""

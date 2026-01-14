@@ -56,7 +56,7 @@ class Step4Calc:
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
         if should_log:
-            logger.info(f"🔄【流水线步骤4】开始处理srep3流入的 {len(aligned_results)} 个双平台合约的对齐数据，采用统一缓存方案...")
+            logger.info(f"🔄【内部步骤4】开始处理 {len(aligned_results)} 个合约，采用统一缓存方案...")
         
         # 批次统计
         batch_stats = {
@@ -119,18 +119,13 @@ class Step4Calc:
                 
             except Exception as e:
                 batch_stats["calculation_errors"] += 1
-                logger.error(f"❌【流水线步骤4】合约处理失败: {item.symbol} - {e}")
+                logger.error(f"❌【内部步骤4】合约处理失败: {item.symbol} - {e}")
                 continue
-        
-        # 🔧 修改点1：在整个批次循环结束后，统一打印一次滚动日志
-        rollover_count = len(batch_stats["binance_rollover_symbols"])
-        if rollover_count > 0:
-            logger.info(f"🔄✅ 【流水线步骤4】币安触发滚动更新: 共{rollover_count}个合约")
         
         if should_log:
             self._log_cache_status(batch_stats)
             self._log_calculation_report(batch_stats)
-            logger.info(f"✅【流水线步骤4】处理完成，共生成 {len(all_results)} 条数据")
+            logger.info(f"✅【内部步骤4】完成，共生成 {len(all_results)} 条数据")
             self.last_log_time = current_time
             self.process_count = 0
         
@@ -147,11 +142,11 @@ class Step4Calc:
             self.platform_cache[symbol] = {}
         
         # 🔍 调试：显示步骤3传入的原始数据 - 注释掉刷屏日志（保留代码）
-        # logger.debug(f"🔍【流水线步骤4-调试】步骤3传入数据 {symbol}:")
-        # logger.debug(f"•  币安上次时间戳: {aligned_item.binance_last_ts}")
-        # logger.debug(f"•  币安本次时间戳: {aligned_item.binance_current_ts}")
-        # logger.debug(f"•  OKX本次时间戳: {aligned_item.okx_current_ts}")
-        # logger.debug(f"•  OKX下次时间戳: {aligned_item.okx_next_ts}")
+        # logger.debug(f"🔍【步骤4-调试】步骤3传入数据 {symbol}:")
+        # logger.debug(f"  币安上次时间戳: {aligned_item.binance_last_ts}")
+        # logger.debug(f"  币安当前时间戳: {aligned_item.binance_current_ts}")
+        # logger.debug(f"  OKX当前时间戳: {aligned_item.okx_current_ts}")
+        # logger.debug(f"  OKX下次时间戳: {aligned_item.okx_next_ts}")
         
         # 📥 更新OKX缓存（直接覆盖）
         if aligned_item.okx_current_ts:
@@ -167,7 +162,7 @@ class Step4Calc:
                 "next_settlement_ts": aligned_item.okx_next_ts,
             }
             batch_stats["okx_updated"] += 1
-            # logger.debug(f"✅ 【流水线步骤4】OKX缓存已更新: {symbol}")
+            # logger.debug(f"✅ OKX缓存已更新: {symbol}")
         
         # 🔄 更新币安缓存（直接覆盖+滚动更新）
         if aligned_item.binance_current_ts:
@@ -176,7 +171,7 @@ class Step4Calc:
     
     def _update_binance_cache_direct(self, symbol: str, aligned_item, batch_stats: Dict[str, int]):
         """直接覆盖币安缓存，自动执行滚动更新"""
-        # 获取本次结算时间缓存（如果存在）
+        # 获取当前缓存（如果存在）
         current_cache = self.platform_cache.get(symbol, {}).get("binance", {})
         
         # 新数据
@@ -184,23 +179,26 @@ class Step4Calc:
         new_last_ts = aligned_item.binance_last_ts
         
         # 调试：显示滚动前状态 - 注释掉刷屏日志（保留代码）
-        # logger.debug(f"🔄 【流水线步骤4】币安缓存更新前 {symbol}:")
-        # logger.debug(f"• 缓存上次时间戳: {current_cache.get('last_settlement_ts')}")
-        # logger.debug(f"• 缓存本次时间戳: {current_cache.get('current_settlement_ts')}")
-        # logger.debug(f"•  步骤3传入上次时间戳: {new_last_ts}")
-        # logger.debug(f" • 步骤3传入本次时间戳: {new_current_ts}")
+        # logger.debug(f"🔄 币安缓存更新前 {symbol}:")
+        # logger.debug(f"  缓存上次时间戳: {current_cache.get('last_settlement_ts')}")
+        # logger.debug(f"  缓存当前时间戳: {current_cache.get('current_settlement_ts')}")
+        # logger.debug(f"  步骤3传入上次时间戳: {new_last_ts}")
+        # logger.debug(f"  步骤3传入当前时间戳: {new_current_ts}")
         
         # 检查是否需要滚动更新
         should_rollover = False
         last_ts_for_cache = new_last_ts  # 默认使用步骤3的last_ts
         
-        # 如果有历史缓存，且本次时间戳发生变化，则执行滚动
+        # 如果有历史缓存，且当前时间戳发生变化，则执行滚动
         if current_cache.get("current_settlement_ts") and new_current_ts != current_cache["current_settlement_ts"]:
             should_rollover = True
-            # 滚动：旧的本次 → 新的上次
+            # 滚动：旧的当前 → 新的上次
             last_ts_for_cache = current_cache["current_settlement_ts"]
             batch_stats["binance_rollover_symbols"].add(symbol)
-
+            # 实时打印滚动通知
+            logger.info(f"🔄 币安触发滚动更新: {len(batch_stats['binance_rollover_symbols'])}个合约")
+            # logger.debug(f"🔄 币安时间滚动触发 {symbol}: {last_ts_for_cache}→last, {new_current_ts}→current")
+        
         # 🔥 直接覆盖缓存（核心逻辑）
         self.platform_cache[symbol]["binance"] = {
             "contract_name": aligned_item.binance_contract_name or "",
@@ -216,10 +214,10 @@ class Step4Calc:
         }
         
         # 调试：显示滚动后状态 - 注释掉刷屏日志（保留代码）
-        # logger.debug(f"✅ 【流水线步骤4】币安缓存更新后 {symbol}:")
-        # logger.debug(f" • 最终上次时间戳: {last_ts_for_cache}")
-        # logger.debug(f" • 最终本次时间戳: {new_current_ts}")
-        # logger.debug(f" • 是否滚动: {should_rollover}")
+        # logger.debug(f"✅ 币安缓存更新后 {symbol}:")
+        # logger.debug(f"  最终上次时间戳: {last_ts_for_cache}")
+        # logger.debug(f"  最终当前时间戳: {new_current_ts}")
+        # logger.debug(f"  是否滚动: {should_rollover}")
     
     def _calc_from_cache(self, symbol: str, exchange: str, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
         """从缓存计算数据（唯一数据源）"""
@@ -246,7 +244,7 @@ class Step4Calc:
                 next_settlement_ts=cache_data["next_settlement_ts"],
             )
             
-            # 计算OKX费率周期（下次→本次）
+            # 计算OKX费率周期（当前→下次）
             if data.current_settlement_ts and data.next_settlement_ts:
                 data.period_seconds = (data.next_settlement_ts - data.current_settlement_ts) // 1000
                 batch_stats["okx_period_success"] += 1
@@ -276,15 +274,15 @@ class Step4Calc:
             )
             
             # 🔍 调试：显示币安计算详情 - 注释掉刷屏日志（保留代码）
-            # logger.debug(f"🔢【流水线步骤4】 币安计算 {symbol}:")
-            # logger.debug(f" • 上次时间戳: {data.last_settlement_ts}")
-            # logger.debug(f" • 本次时间戳: {data.current_settlement_ts}")
+            # logger.debug(f"🔢 币安计算 {symbol}:")
+            # logger.debug(f"  上次时间戳: {data.last_settlement_ts}")
+            # logger.debug(f"  当前时间戳: {data.current_settlement_ts}")
             
-            # 计算币安费率周期（本次→上次）- 有历史数据才计算
+            # 计算币安费率周期（上次→当前）- 有历史数据才计算
             if data.current_settlement_ts and data.last_settlement_ts:
                 data.period_seconds = (data.current_settlement_ts - data.last_settlement_ts) // 1000
                 batch_stats["binance_period_success"] += 1
-                # logger.debug(f"【流水线步骤4】✅ 币安费率周期计算: {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
+                # logger.debug(f"✅ 币安费率周期计算: {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
             else:
                 batch_stats["binance_period_fail"] += 1
                 # logger.debug(f"⚠️ 币安费率周期无法计算: 缺少历史时间戳")
@@ -298,7 +296,7 @@ class Step4Calc:
             
             # 调试倒计时 - 注释掉刷屏日志（保留代码）
             # if data.countdown_seconds is not None:
-            #     logger.debug(f"✅ 【流水线步骤4】币安倒计时: {data.countdown_seconds}秒")
+            #     logger.debug(f"✅ 币安倒计时: {data.countdown_seconds}秒")
         
         else:
             return None
@@ -319,22 +317,24 @@ class Step4Calc:
     
     def _log_calc_result(self, data: PlatformData, exchange_name: str, batch_stats: Dict[str, int]):
         """记录计算结果的详细日志（仅显示前2个合约）"""
-        logger.info(f"📝【流水线步骤4】{exchange_name}计算结果:")
-        logger.info(f"• 交易对: {data.symbol}")
-        logger.info(f"• 合约名称: {data.contract_name}")
-        logger.info(f"• 基础数据:")
-        logger.info(f"• 最新价格: {data.latest_price}")
-        logger.info(f"• 资金费率: {data.funding_rate}")
+        logger.info(f"📝【内部步骤4】{exchange_name}计算结果:")
+        logger.info(f"   交易对: {data.symbol}")
+        logger.info(f"   合约名称: {data.contract_name}")
+        logger.info(f"   基础数据:")
+        logger.info(f"     • 最新价格: {data.latest_price}")
+        logger.info(f"     • 资金费率: {data.funding_rate}")
         
         # 时间字段显示（三个字段都必须存在）
-        logger.info(f"• 时间字段:")
-        logger.info(f"• 上次结算时间: {data.last_settlement_time or '(空)'}")
-        logger.info(f"• - 时间戳: {data.last_settlement_ts or '(空)'}")
-        logger.info(f"• 本次结算时间: {data.current_settlement_time or '(空)'}")
-        logger.info(f"• - 时间戳: {data.current_settlement_ts or '(空)'}")
-        logger.info(f"• 下次结算时间: {data.next_settlement_time or '(空)'}")
-        logger.info(f"• - 时间戳: {data.next_settlement_ts or '(空)'}")
+        logger.info(f"   时间字段:")
+        logger.info(f"     • 上次结算时间: {data.last_settlement_time or '(空)'}")
+        logger.info(f"       - 时间戳: {data.last_settlement_ts or '(空)'}")
+        logger.info(f"     • 本次结算时间: {data.current_settlement_time or '(空)'}")
+        logger.info(f"       - 时间戳: {data.current_settlement_ts or '(空)'}")
+        logger.info(f"     • 下次结算时间: {data.next_settlement_time or '(空)'}")
+        logger.info(f"       - 时间戳: {data.next_settlement_ts or '(空)'}")
         
+        # 计算结果（格式化显示）
+        logger.info(f"   计算结果:")
         
         # 费率周期
         if data.period_seconds is not None:
@@ -347,10 +347,10 @@ class Step4Calc:
                     period_str = f"{hours}小时"
             else:
                 period_str = f"{minutes}分钟"
-            logger.info(f"• 费率周期: {period_str}")
+            logger.info(f"     • 费率周期: {period_str}")
         else:
             reason = "无历史时间戳" if exchange_name == "币安" and not data.last_settlement_ts else "计算失败"
-            logger.info(f"• 费率周期: {reason}")
+            logger.info(f"     • 费率周期: {reason}")
         
         # 倒计时
         if data.countdown_seconds is not None:
@@ -363,12 +363,12 @@ class Step4Calc:
                 countdown_str = f"{minutes}分钟{seconds}秒"
             else:
                 countdown_str = f"{seconds}秒"
-            logger.info(f"• 倒计时: {countdown_str}")
+            logger.info(f"     • 倒计时: {countdown_str}")
         else:
-            logger.info(f"• 倒计时: 计算失败")
+            logger.info(f"     • 倒计时: 计算失败")
     
     def _log_cache_status(self, batch_stats: Dict[str, int]):
-        """打印缓存报告"""
+        """打印缓存状态（每60秒）"""
         total_symbols = len(self.platform_cache)
         if total_symbols == 0:
             return
@@ -386,26 +386,31 @@ class Step4Calc:
                 if exchanges["binance"].get("last_settlement_ts"):
                     binance_with_history += 1
         
-        logger.info("️🔂📝流水线部步骤4】缓存报告:")
-        logger.info(f"• 总缓存合约数: {total_symbols} 条")
-        logger.info(f"• OKX数据缓存: {okx_count} 条")
-        logger.info(f"• 币安数据缓存: {binance_count} 条")
-        logger.info(f"• 币安上次结算时间: 有{binance_with_history}条，无{binance_count - binance_with_history}条")
+        logger.info("🗃️【内部步骤4】缓存状态:")
+        logger.info(f"  • 总缓存合约数: {total_symbols} 条")
+        logger.info(f"  • OKX数据缓存: {okx_count} 条")
+        logger.info(f"  • 币安数据缓存: {binance_count} 条")
+        logger.info(f"  • 币安上次结算时间: 有{binance_with_history}条，无{binance_count - binance_with_history}条")
     
     def _log_calculation_report(self, batch_stats: Dict[str, int]):
-        """打印计算报告"""
-        logger.info("📊【流水线步骤4】计算报告:")
+        """打印计算报告（每60秒）"""
+        logger.info("📊【内部步骤4】计算报告:")
         
         # 费率周期计算统计
-        logger.info(f"• 费率周期计算:")
-        logger.info(f"• - OKX: 成功{batch_stats['okx_period_success']}个，失败{batch_stats['okx_period_fail']}个")
-        logger.info(f"• - 币安: 成功{batch_stats['binance_period_success']}个，失败{batch_stats['binance_period_fail']}个")
+        logger.info(f"  • 费率周期计算:")
+        logger.info(f"     - OKX: 成功{batch_stats['okx_period_success']}个，失败{batch_stats['okx_period_fail']}个")
+        logger.info(f"     - 币安: 成功{batch_stats['binance_period_success']}个，失败{batch_stats['binance_period_fail']}个")
         
         # 倒计时计算统计
-        logger.info(f"• 倒计时计算:")
-        logger.info(f"• - OKX: 成功{batch_stats['okx_countdown_success']}个，失败{batch_stats['okx_countdown_fail']}个")
-        logger.info(f"• - 币安: 成功{batch_stats['binance_countdown_success']}个，失败{batch_stats['binance_countdown_fail']}个")
+        logger.info(f"  • 倒计时计算:")
+        logger.info(f"     - OKX: 成功{batch_stats['okx_countdown_success']}个，失败{batch_stats['okx_countdown_fail']}个")
+        logger.info(f"     - 币安: 成功{batch_stats['binance_countdown_success']}个，失败{batch_stats['binance_countdown_fail']}个")
         
+        # 滚动更新统计
+        rollover_count = len(batch_stats["binance_rollover_symbols"])
+        if rollover_count > 0:
+            logger.info(f"  • 滚动更新合约数: {rollover_count}个")
+    
     def get_cache_report(self) -> Dict[str, Any]:
         """获取完整缓存报告"""
         report = {
@@ -460,4 +465,4 @@ class Step4Calc:
     def clear_cache(self):
         """清空缓存"""
         self.platform_cache.clear()
-        logger.info("🗑️流水线部步骤4】缓存已清空")
+        logger.info("🗑️【内部步骤4】缓存已清空")
