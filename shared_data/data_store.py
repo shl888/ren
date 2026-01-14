@@ -189,7 +189,30 @@ class DataStore:
         water = []
         
         async with self.locks['market_data']:
-            # ==================== 简化：所有数据类型统一处理 ====================
+            # ==================== 币安历史费率数据控制逻辑 ====================
+            # 币安历史费率数据类型
+            BINANCE_FUNDING_SETTLEMENT = "funding_settlement"
+            
+            # 第一步：全局开关检查（放在最前面，性能最优）
+            if getattr(self, '_binance_funding_settlement_closed', False):
+                # 如果币安历史费率数据流已关闭，直接跳过相关处理
+                pass
+            else:
+                # 初始化已流过合约集合（只在第一次运行时）
+                if not hasattr(self, '_binance_funding_settlement_flowed'):
+                    self._binance_funding_settlement_flowed = set()
+                
+                # 统计总合约数（只在第一次运行时）
+                if not hasattr(self, '_binance_funding_settlement_total'):
+                    total_symbols = set()
+                    for symbol, data_dict in self.market_data.get("binance", {}).items():
+                        if BINANCE_FUNDING_SETTLEMENT in data_dict:
+                            total_symbols.add(symbol)
+                    self._binance_funding_settlement_total = len(total_symbols)
+                    if total_symbols:
+                        logger.info(f"📊【数据池】检测到币安历史费率数据({BINANCE_FUNDING_SETTLEMENT}): {len(total_symbols)}个合约")
+            
+            # ==================== 遍历所有数据 ====================
             for exchange in ["binance", "okx"]:
                 if exchange not in self.market_data:
                     continue
@@ -199,6 +222,27 @@ class DataStore:
                         # 跳过内部字段
                         if data_type in ['latest', 'store_timestamp']:
                             continue
+                        
+                        # ==================== 针对币安历史费率的特殊处理 ====================
+                        if exchange == "binance" and data_type == BINANCE_FUNDING_SETTLEMENT:
+                            # 1. 检查全局开关是否已关闭
+                            if getattr(self, '_binance_funding_settlement_closed', False):
+                                continue  # 已关闭，跳过所有币安历史费率数据
+                            
+                            # 2. 检查该合约是否已流过
+                            if symbol in getattr(self, '_binance_funding_settlement_flowed', set()):
+                                continue  # 已流过，跳过
+                            
+                            # 3. 标记为已流过（先标记，再放水）
+                            self._binance_funding_settlement_flowed.add(symbol)
+                            
+                            # 4. 检查是否所有合约都已流过
+                            if (hasattr(self, '_binance_funding_settlement_total') and 
+                                hasattr(self, '_binance_funding_settlement_flowed') and
+                                len(self._binance_funding_settlement_flowed) >= self._binance_funding_settlement_total):
+                                # 所有合约都已流过，永久关闭该类型数据流
+                                self._binance_funding_settlement_closed = True
+                                logger.info(f"🛑【数据池】币安历史费率数据已完成全量流入({self._binance_funding_settlement_total}个合约)，永久关闭该类型数据流出")
                         
                         # ✅ 关键修改：直接传数据，不包装！
                         water_item = {
@@ -378,6 +422,15 @@ class DataStore:
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
         
+        # 添加币安历史费率控制状态
+        binance_funding_settlement_status = {
+            "closed": getattr(self, '_binance_funding_settlement_closed', False),
+            "total_contracts": getattr(self, '_binance_funding_settlement_total', 0),
+            "flowed_contracts": len(getattr(self, '_binance_funding_settlement_flowed', set())),
+            "flowed_contracts_list": sorted(list(getattr(self, '_binance_funding_settlement_flowed', set()))),
+            "data_type": "funding_settlement"
+        }
+        
         return {
             "flowing": self.flowing,
             "has_rules": self.rules is not None,
@@ -387,6 +440,7 @@ class DataStore:
                 "flowing": self.private_flowing,
                 "stats": records["private_flows"]
             },
+            "binance_funding_settlement_control": binance_funding_settlement_status,
             "timestamp": datetime.now().isoformat()
         }
     
@@ -439,6 +493,11 @@ class DataStore:
             "private_pipeline": {
                 "connected": self.private_water_callback is not None,
                 "flowing": self.private_flowing
+            },
+            "binance_funding_settlement_control": {
+                "closed": getattr(self, '_binance_funding_settlement_closed', False),
+                "total_contracts": getattr(self, '_binance_funding_settlement_total', 0),
+                "flowed_contracts": len(getattr(self, '_binance_funding_settlement_flowed', set()))
             }
         }
 
