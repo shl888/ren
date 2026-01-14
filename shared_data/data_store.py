@@ -5,12 +5,14 @@ DataStore - 执行者/执法者
 
 import asyncio
 import time
+import traceback
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable
 import logging
 from collections import defaultdict
 
 logger = logging.getLogger(__name__)
+
 
 class DataStore:
     """执行者：按管理员规则放水"""
@@ -73,6 +75,7 @@ class DataStore:
         }
         
         logger.info("✅【数据池】初始化完成")
+        logger.info(f"🔍【数据池】初始化状态: 市场回调={self.water_callback}, 私人回调={self.private_water_callback}")
     
     # ==================== 管道设置方法 ====================
     
@@ -80,6 +83,9 @@ class DataStore:
         """设置市场数据回调"""
         self.water_callback = callback
         logger.info("✅【数据池】市场数据管道已连接")
+        logger.info(f"✅【数据池】回调函数对象: {callback}")
+        logger.info(f"✅【数据池】回调函数类型: {type(callback)}")
+        logger.info(f"✅【数据池】是否可调用: {callable(callback)}")
     
     def set_private_water_callback(self, callback: Callable):
         """设置私人数据回调"""
@@ -133,8 +139,18 @@ class DataStore:
             logger.error("❌【数据池】没有接收到规则，无法开始放水")
             return
         
+        # 强制检查回调
+        if not self.water_callback:
+            logger.error("❌【数据池】致命错误：water_callback 未设置！")
+            return
+        
+        if not callable(self.water_callback):
+            logger.error(f"❌【数据池】致命错误：water_callback 不可调用！类型: {type(self.water_callback)}")
+            return
+        
         self.flowing = True
         logger.info("🚰【数据池】开始按规则放水...")
+        logger.info(f"🚰【数据池】回调函数确认: {self.water_callback}")
         
         # 启动放水任务
         self.flow_task = asyncio.create_task(self._flow_loop())
@@ -157,42 +173,55 @@ class DataStore:
         logger.info("✅【数据池】放水已停止")
     
     async def _flow_loop(self):
-        """放水循环 - 按规则执行"""
+        """放水循环 - 终极调试版"""
         while self.flowing:
             try:
-                # 检查规则是否允许放水
+                # 检查规则
                 if not self.rules or not self.rules.get("flow", {}).get("enabled", False):
+                    logger.debug("⏳【数据池】放水规则未启用，等待1秒")
                     await asyncio.sleep(1)
                     continue
                 
-                # 按规则收集水
-                water = await self._collect_water_by_rules()
+                # 强制检查回调
+                if self.water_callback is None:
+                    logger.error("🚨【数据池】致命错误：water_callback 为 None！放水系统停止！")
+                    self.flowing = False
+                    break
                 
-                # 关键调试日志
+                if not callable(self.water_callback):
+                    logger.error(f"🚨【数据池】致命错误：water_callback 不可调用！类型: {type(self.water_callback)}")
+                    self.flowing = False
+                    break
+                
+                # 收集数据
+                water = await self._collect_water_by_rules()
                 logger.debug(f"💧【数据池】本次收集到 {len(water)} 条数据")
                 
                 # 放水
-                if water and self.water_callback:
+                if water:
+                    logger.info(f"🌊【数据池】正在放水！条数: {len(water)}")
+                    logger.debug(f"🌊【数据池】回调函数: {self.water_callback}")
+                    
                     try:
                         await self.water_callback(water)
-                        logger.debug(f"✅【数据池】成功放出水，共 {len(water)} 条")
+                        logger.info("✅【数据池】回调执行成功")
                         
                         # 记录
                         async with self.locks['execution_records']:
                             self.execution_records["total_flows"] += 1
                             self.execution_records["last_flow_time"] = time.time()
                     except Exception as e:
-                        logger.error(f"❌【数据池】放水回调失败: {e}")
-                elif not water:
-                    logger.debug("⏳【数据池】本次无数据可放")
+                        logger.error(f"❌【数据池】回调执行失败: {e}")
+                        logger.error(traceback.format_exc())
                 else:
-                    logger.warning("⚠️【数据池】水回调未设置")
+                    logger.debug("⏳【数据池】本次无数据可放")
                 
-                # 按规则间隔等待
+                # 等待间隔
                 interval = self.rules.get("flow", {}).get("interval_seconds", 5)
                 await asyncio.sleep(interval)
                 
             except asyncio.CancelledError:
+                logger.info("🛑【数据池】放水循环被取消")
                 break
             except Exception as e:
                 logger.error(f"❌【数据池】放水循环错误: {e}", exc_info=True)
@@ -239,7 +268,9 @@ class DataStore:
                             continue
                         
                         # 币安费率数据特殊处理
-                        if exchange == "binance" and data_type == "funding_settlement":
+                        is_funding = (exchange == "binance" and data_type == "funding_settlement")
+                        
+                        if is_funding:
                             if not controller["enabled"]:
                                 continue
                             if symbol in controller["flowed_contracts"]:
@@ -262,7 +293,7 @@ class DataStore:
                             }
                             water.append(water_item)
                         except Exception as e:
-                            logger.error(f"❌【数据池】创建水项失败: {e}, data={data}")
+                            logger.error(f"❌【数据池】创建水项失败: {e}, exchange={exchange}, symbol={symbol}, data_type={data_type}")
             
             # ===== 检查是否全部流出 =====
             if controller["enabled"] and controller["init_done"]:
@@ -530,6 +561,7 @@ class DataStore:
                 "remaining": max(0, self._binance_funding_controller["total_contracts"] - len(self._binance_funding_controller["flowed_contracts"]))
             }
         }
+
 
 # 全局实例
 data_store = DataStore()
