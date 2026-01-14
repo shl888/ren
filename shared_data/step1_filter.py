@@ -83,7 +83,7 @@ class Step1Filter:
         
         # 定期日志输出 - 暂时关闭
         # if should_log:
-        #     logger.info(f"🔄【流水线步骤1】开始处理{len(raw_items)} 条原始数据...")
+        #     logger.info(f"🔄【流水线步骤1】开始处理 data_store流入的{len(raw_items)} 条原始数据...")
         #     
         #     stats_lines = []
         #     stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
