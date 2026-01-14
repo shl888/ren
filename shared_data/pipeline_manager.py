@@ -56,7 +56,7 @@ class PipelineManager:
             
             # ✅ 新增：Step0限流规则
             "step0_limit": {
-                "binance_funding_settlement_limit": 500,  # 币安历史费率数据限制次数
+                "binance_funding_settlement_limit": 800,  # 币安历史费率数据限制次数
                 "enabled": True
             },
             
