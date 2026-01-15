@@ -39,7 +39,7 @@ class Step2Fusion:
             "failed_groups": 0
         }
         self.last_log_time = 0
-        self.log_interval = 60  # 1分钟，单位：秒
+        self.log_interval = 180  # 3分钟，单位：秒
         self.process_count = 0
         # 分别记录每个交易所的详细日志计数器
         self.okx_log_counter = 0
@@ -70,9 +70,9 @@ class Step2Fusion:
         self.fusion_stats["total_groups"] = len(grouped)
         
         # 处理日志 - 暂时关闭
-        # if should_log:
-        #     logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
-        #     logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
+          if should_log:
+              logger.info(f"🔄【流水线步骤2】开始融合Step1输出的 {len(step1_results)} 条精简数据...")
+              logger.info(f"【流水线步骤2】检测到 {len(grouped)} 个不同的交易所合约")
         #     
         #     # 统计每个交易所的合约组数
         #     exchange_groups = defaultdict(list)
@@ -104,7 +104,7 @@ class Step2Fusion:
                 continue
                 
             # 处理日志 - 暂时关闭
-            # logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
+              logger.info(f"📋【流水线步骤2】处理{exchange.upper()}数据...")
             
             for key, items in exchange_groups[exchange]:
                 try:
@@ -161,9 +161,9 @@ class Step2Fusion:
                     continue
         
         # 处理完成后日志 - 暂时关闭
-        # if should_log:
-        #     # 处理完成后，打印统计结果
-        #     logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
+          if should_log:
+              处理完成后，打印统计结果
+              logger.info(f"✅【流水线步骤2】Step2融合完成，共生成 {len(results)} 条融合数据")
         #     
         #     # 按交易所统计合约数
         #     okx_contracts = len(exchange_contracts.get("okx", set()))

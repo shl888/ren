@@ -55,7 +55,7 @@ class Step1Filter:
     def __init__(self):
         self.stats = defaultdict(int)
         self.last_log_time = 0
-        self.log_interval = 60  # 1分钟
+        self.log_interval = 120  # 2分钟
         self.process_count = 0
         self.log_detail_counter = 0  # 用于记录详细日志的计数器
     
@@ -82,8 +82,8 @@ class Step1Filter:
                 raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
         # 定期日志输出 - 暂时关闭
-        # if should_log:
-        #     logger.info(f"🔄【流水线步骤1】开始处理{len(raw_items)} 条原始数据...")
+          if should_log:
+              logger.info(f"🔄【流水线步骤1】开始处理{len(raw_items)} 条原始数据...")
         #     
         #     stats_lines = []
         #     stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
@@ -140,14 +140,14 @@ class Step1Filter:
                 continue
         
         # 定期日志输出结果 - 暂时关闭
-        # if should_log:
-        #     logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
-        #     
-        #     # 统计每种数据类型的提取数量
-        #     if self.stats:
-        #         logger.info("📊【流水线步骤1】提取数据统计:")
-        #         for data_type, count in sorted(self.stats.items()):
-        #             logger.info(f"  • {data_type}: {count} 条")
+          if should_log:
+              logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
+             
+             # 统计每种数据类型的提取数量
+              if self.stats:
+                  logger.info("📊【流水线步骤1】提取数据统计:")
+                  for data_type, count in sorted(self.stats.items()):
+                      logger.info(f"  • {data_type}: {count} 条")
         #     
         #     # 如果总数据量少于2条，补充说明
         #     if len(results) < 2 and self.log_detail_counter < len(results):
@@ -187,7 +187,7 @@ class Step1Filter:
             type_key = f"{exchange}_{data_type}"
         
         if type_key not in self.FIELD_MAP:
-            # logger.debug(f"⚠️ 未知数据类型: {type_key}")  # 调试日志注释掉
+            # logger.debug(f"⚠️【流水线步骤1】 未知数据类型: {type_key}")  # 调试日志注释掉
             return None
         
         config = self.FIELD_MAP[type_key]
@@ -201,7 +201,7 @@ class Step1Filter:
             data_source = raw_item
         
         if data_source is None:
-            # logger.debug(f"⚠️ 数据源为空: {type_key}, path={path}")  # 调试日志注释掉
+            # logger.debug(f"⚠️ 【流水线步骤1】数据源为空: {type_key}, path={path}")  # 调试日志注释掉
             return None
         
         # 提取字段
