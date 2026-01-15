@@ -58,9 +58,16 @@ class Step1Filter:
         self.log_interval = 120  # 2分钟
         self.process_count = 0
         self.log_detail_counter = 0  # 用于记录详细日志的计数器
+        
+        # 每小时重置统计计数相关
+        self._last_hourly_reset = time.time()
+        self._hourly_reset_interval = 3600  # 1小时 = 3600秒
     
     def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
         """处理原始数据"""
+        # 检查是否需要每小时重置统计
+        self._check_hourly_reset()
+        
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
@@ -105,9 +112,9 @@ class Step1Filter:
         if should_log:
             logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
             
-            # 统计每种数据类型的提取数量
+            # 统计每种数据类型的提取数量（当前小时的统计）
             if self.stats:
-                logger.info("📊【流水线步骤1】提取数据统计:")
+                logger.info("📊【流水线步骤1】提取数据统计（当前小时）:")
                 for data_type, count in sorted(self.stats.items()):
                     logger.info(f"  • {data_type}: {count} 条")
             
@@ -182,3 +189,40 @@ class Step1Filter:
             symbol=symbol,
             payload=extracted_payload
         )
+    
+    # ==================== 每小时重置方法 ====================
+    
+    def _check_hourly_reset(self):
+        """检查并执行每小时统计重置"""
+        current_time = time.time()
+        time_since_reset = current_time - self._last_hourly_reset
+        
+        if time_since_reset >= self._hourly_reset_interval:
+            self._reset_hourly_stats()
+            self._last_hourly_reset = current_time
+    
+    def _reset_hourly_stats(self):
+        """每小时重置统计计数"""
+        logger.info("🕐【流水线步骤1】每小时统计重置开始")
+        
+        # 记录重置前的统计快照（可选，仅日志）
+        if self.stats:
+            total_before = sum(self.stats.values())
+            logger.info(f"📊【流水线步骤1】重置前统计: 总共提取 {total_before} 条数据")
+        
+        # 重置统计计数
+        self.stats.clear()
+        
+        logger.info("✅【流水线步骤1】每小时统计重置完成")
+    
+    def get_status(self) -> Dict[str, Any]:
+        """获取步骤状态（包含每小时重置检查）"""
+        self._check_hourly_reset()
+        
+        return {
+            "stats": dict(self.stats),
+            "process_count": self.process_count,
+            "next_reset_in": max(0, self._hourly_reset_interval - (time.time() - self._last_hourly_reset)),
+            "last_reset_time": self._last_hourly_reset,
+            "timestamp": time.time()
+        }

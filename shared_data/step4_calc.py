@@ -56,14 +56,14 @@ class Step4Calc:
         
         # 处理前日志 - 只在频率控制时打印
         if should_log:
-            logger.info(f"🔄【流水线步骤4】开始处理 {len(aligned_results)} 个合约，采用智能缓存方案...")
+            logger.info(f"🔄【流水线步骤4】开始处理step3输出的 {len(aligned_results)} 个合约，采用智能缓存方案...")
         
-        # 批次统计
+        # 批次统计（每次process调用都会新建，不累积）
         batch_stats = {
             "total_contracts": len(aligned_results),
             "okx_updated": 0,
             "binance_updated": 0,
-            "binance_cache_protected": 0,  # 新增：缓存保护次数
+            "binance_cache_protected": 0,  # 当前批次保护次数
             "okx_calculated": 0,
             "binance_calculated": 0,
             "calculation_errors": 0,
@@ -160,7 +160,7 @@ class Step4Calc:
         智能更新币安缓存：
         1. 第一次只要有任意数据就创建缓存
         2. 后续更新：有值的项覆盖，无值的项保留原缓存
-        3. 检查本次结算时间变化 → 触发滚动更新
+        3. 检查本次结算时间变化 → 触发滚动更新（独立日志）
         """
         # 获取或初始化缓存
         if symbol not in self.platform_cache:
@@ -184,16 +184,21 @@ class Step4Calc:
         
         cache = self.platform_cache[symbol]["binance"]
         
-        # 1. 检查滚动更新
+        # 1. 检查滚动更新 - 独立日志，不受频率控制
         new_current_ts = aligned_item.binance_current_ts
         old_current_ts = cache.get("current_settlement_ts")
         
+        # 🔄 滚动更新日志独立，每次触发就打印
         if new_current_ts and old_current_ts and new_current_ts != old_current_ts:
-            # 🔄 触发滚动：旧的本次 → 新的上次
+            # 触发滚动：旧的本次 → 新的上次
             cache["last_settlement_ts"] = old_current_ts
             cache["last_settlement_time"] = cache.get("current_settlement_time", "")
             cache["has_rollover"] = True
             batch_stats["binance_rollover_symbols"].add(symbol)
+            
+            # ✅ 独立打印滚动更新日志（不受频率控制）
+            rollover_count = len(batch_stats["binance_rollover_symbols"])
+            logger.info(f"🔄【流水线步骤4】【滚动更新】已触发 {rollover_count} 个合约的滚动更新")
         
         # 2. 智能覆盖：有值就覆盖，无值保留
         cache["update_timestamp"] = time.time()
@@ -221,7 +226,7 @@ class Step4Calc:
         if aligned_item.binance_current_ts:
             cache["current_settlement_ts"] = aligned_item.binance_current_ts
         
-        # 3. 统计更新
+        # 3. 统计更新（只累积当前批次）
         has_effective_update = any([
             aligned_item.binance_contract_name,
             aligned_item.binance_price,
@@ -321,7 +326,7 @@ class Step4Calc:
             return None
     
     def _log_cache_status(self, batch_stats: Dict[str, int]):
-        """打印缓存状态"""
+        """打印缓存状态（受频率控制，每60秒打印一次）"""
         total_symbols = len(self.platform_cache)
         if total_symbols == 0:
             return
@@ -345,13 +350,13 @@ class Step4Calc:
         logger.info(f"  • 币安数据缓存: {binance_count} 条")
         logger.info(f"  • 币安上次结算时间: 有{binance_with_history}条，无{binance_count - binance_with_history}条")
         
-        # 保护统计
+        # 保护统计 - 受频率控制，打印本次批次的保护次数
         protected_count = batch_stats.get("binance_cache_protected", 0)
         if protected_count > 0:
-            logger.info(f"  • 缓存保护次数: {protected_count}次")
+            logger.info(f"  • 缓存保护次数（本次）: {protected_count}次")
     
     def _log_calculation_report(self, batch_stats: Dict[str, int]):
-        """打印计算报告"""
+        """打印计算报告（受频率控制）"""
         logger.info("📊【流水线步骤4】计算报告:")
         
         # 费率周期计算统计
@@ -363,11 +368,6 @@ class Step4Calc:
         logger.info(f"  • 倒计时计算:")
         logger.info(f"     - OKX: 成功{batch_stats['okx_countdown_success']}个，失败{batch_stats['okx_countdown_fail']}个")
         logger.info(f"     - 币安: 成功{batch_stats['binance_countdown_success']}个，失败{batch_stats['binance_countdown_fail']}个")
-        
-        # 滚动更新统计
-        rollover_count = len(batch_stats["binance_rollover_symbols"])
-        if rollover_count > 0:
-            logger.info(f"  • 滚动更新合约数: {rollover_count}个")
     
     def get_cache_report(self) -> Dict[str, Any]:
         """获取完整缓存报告"""

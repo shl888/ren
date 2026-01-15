@@ -40,6 +40,10 @@ class PipelineManager:
         self.brain_callback = brain_callback
         self.private_data_callback = private_data_callback
         
+        # 每小时重置计时器
+        self._last_hourly_reset = time.time()
+        self._hourly_reset_interval = 3600  # 1小时 = 3600秒
+        
         # 立法：制定核心规则
         self.rules = {
             # 放水规则
@@ -113,6 +117,7 @@ class PipelineManager:
         
         logger.info("🚀【数据处理管理员】开始启动系统...")
         self.system_running = True
+        self._last_hourly_reset = time.time()  # 重置计时器
         
         try:
             # 1. 把规则发给DataStore
@@ -134,7 +139,7 @@ class PipelineManager:
             # 5. 系统运行中
             logger.info("🎉【数据处理管理员】系统启动完成，开始自动运行")
             
-            # 6. 启动状态监控
+            # 6. 启动状态监控（包含每小时重置检查）
             self._monitor_task = asyncio.create_task(self._monitor_system())
             
         except Exception as e:
@@ -191,6 +196,9 @@ class PipelineManager:
             return
         
         try:
+            # 检查是否需要每小时重置统计
+            self._check_hourly_reset()
+            
             # ✅ 步骤0：币安历史费率限流
             step0_results = self.step0.process(water_data)
             
@@ -252,6 +260,9 @@ class PipelineManager:
             return
         
         try:
+            # 检查是否需要每小时重置统计
+            self._check_hourly_reset()
+            
             data_type = private_data.get('data_type', 'unknown')
             
             # 统计
@@ -276,16 +287,58 @@ class PipelineManager:
             logger.error(f"❌【数据处理管理员】私人数据处理失败: {e}")
             self.stats["private_data"]["errors"] += 1
     
+    # ==================== 每小时重置方法 ====================
+    
+    def _check_hourly_reset(self):
+        """检查并执行每小时统计重置"""
+        current_time = time.time()
+        time_since_reset = current_time - self._last_hourly_reset
+        
+        if time_since_reset >= self._hourly_reset_interval:
+            self._reset_hourly_stats()
+            self._last_hourly_reset = current_time
+    
+    def _reset_hourly_stats(self):
+        """每小时重置统计计数"""
+        logger.info("🕐【数据处理管理员】每小时统计重置开始")
+        
+        # 重置所有统计计数
+        self.stats["total_processed"] = 0
+        self.stats["errors"] = 0
+        
+        # 重置Step0统计
+        self.stats["step0_stats"]["total_in"] = 0
+        self.stats["step0_stats"]["total_out"] = 0
+        self.stats["step0_stats"]["binance_funding_blocked"] = 0
+        self.stats["step0_stats"]["binance_funding_passed"] = 0
+        
+        # 重置Step0限流器内部计数
+        if hasattr(self, 'step0') and hasattr(self.step0, 'reset_counters'):
+            self.step0.reset_counters()
+        
+        # 重置私人数据统计
+        self.stats["private_data"]["account_updates"] = 0
+        self.stats["private_data"]["order_updates"] = 0
+        self.stats["private_data"]["errors"] = 0
+        
+        logger.info("✅【数据处理管理员】每小时统计重置完成")
+    
     # ==================== 系统监控 ====================
     
     async def _monitor_system(self):
-        """监控系统运行状态（包含Step0）"""
+        """监控系统运行状态（包含每小时重置检查）"""
         while self.system_running:
             try:
                 # 每分钟报告一次状态
                 await asyncio.sleep(60)
                 
-                uptime = time.time() - self.stats["start_time"]
+                # 检查每小时重置
+                self._check_hourly_reset()
+                
+                # 格式化运行时间
+                uptime_seconds = time.time() - self.stats["start_time"]
+                uptime_str = self._format_uptime(uptime_seconds)
+                
                 market_total = self.stats["total_processed"]
                 step0_in = self.stats["step0_stats"]["total_in"]
                 step0_out = self.stats["step0_stats"]["total_out"]
@@ -294,7 +347,7 @@ class PipelineManager:
                 private_order = self.stats["private_data"]["order_updates"]
                 
                 logger.info(f"📈【数据处理管理员】系统运行报告 - "
-                          f"运行时间: {uptime:.0f}秒, "
+                          f"运行时间: {uptime_str}, "
                           f"Step0: 输入{step0_in}/输出{step0_out}/拦截{step0_blocked}, "
                           f"市场处理: {market_total}条, "
                           f"私人数据(账户: {private_account}, 交易: {private_order})")
@@ -305,18 +358,30 @@ class PipelineManager:
                 logger.error(f"❌【数据处理管理员】监控错误: {e}")
                 await asyncio.sleep(10)
     
+    def _format_uptime(self, seconds: float) -> str:
+        """将秒数格式化为 小时:分钟:秒 格式"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds_remain = int(seconds % 60)
+        
+        return f"{hours}小时{minutes:02d}分{seconds_remain:02d}秒"
+    
     # ==================== 状态查询 ====================
     
     def get_status(self) -> Dict[str, Any]:
         """获取系统状态（保持接口兼容）"""
-        uptime = time.time() - self.stats["start_time"]
+        self._check_hourly_reset()  # 确保统计是最新的
+        
+        uptime_seconds = time.time() - self.stats["start_time"]
+        uptime_str = self._format_uptime(uptime_seconds)
         
         return {
             "running": self.system_running,
-            "uptime_seconds": uptime,
+            "uptime": uptime_str,  # 改为格式化字符串
+            "uptime_seconds": uptime_seconds,  # 保留秒数版本
             "market_processed": self.stats["total_processed"],
             "errors": self.stats["errors"],
-            "step0_status": self.step0.get_status(),  # ✅ 新增Step0状态
+            "step0_status": self.step0.get_status(),
             "memory_mode": "定时全量处理，1秒间隔",
             "step4_cache_size": len(self.step4.binance_cache) if hasattr(self.step4, 'binance_cache') else 0,
             "timestamp": time.time()
@@ -324,19 +389,26 @@ class PipelineManager:
     
     def get_system_status(self) -> Dict[str, Any]:
         """✅ 增强：获取系统状态（详细版，包含Step0）"""
-        uptime = time.time() - self.stats["start_time"]
+        self._check_hourly_reset()  # 确保统计是最新的
+        
+        uptime_seconds = time.time() - self.stats["start_time"]
+        uptime_str = self._format_uptime(uptime_seconds)
         
         return {
             "system_running": self.system_running,
-            "uptime_seconds": uptime,
+            "uptime": uptime_str,
+            "uptime_seconds": uptime_seconds,
             "stats": self.stats.copy(),
             "rules": self.rules.copy(),
-            "step0_status": self.step0.get_status(),  # ✅ 新增
-            "timestamp": time.time()
+            "step0_status": self.step0.get_status(),
+            "timestamp": time.time(),
+            "next_hourly_reset_in": max(0, self._hourly_reset_interval - (time.time() - self._last_hourly_reset))
         }
     
     def get_pipeline_stats(self) -> Dict[str, Any]:
         """获取流水线统计（包含Step0）"""
+        self._check_hourly_reset()  # 确保统计是最新的
+        
         return {
             "step0_stats": self.step0.get_status() if hasattr(self.step0, 'get_status') else {},
             "step1_stats": dict(self.step1.stats) if hasattr(self.step1, 'stats') else {},
