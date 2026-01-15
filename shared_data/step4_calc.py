@@ -1,8 +1,8 @@
 """
-第四步：单平台计算（统一缓存版 - 直接覆盖方案）
+第四步：单平台计算（统一缓存版 - 智能覆盖方案）
 功能：统一缓存所有平台数据，所有计算基于缓存数据
-原则：1. 先缓存后计算 2. 缓存为唯一数据源 3. 统一处理逻辑
-特点：所有数据直接覆盖，币安附带滚动更新
+原则：1. 先缓存后计算 2. 缓存为唯一数据源 3. 智能覆盖（有值覆盖，无值保留）
+特点：智能覆盖+滚动更新，防止空数据覆盖历史缓存
 """
 
 import logging
@@ -38,7 +38,7 @@ class PlatformData:
     countdown_seconds: Optional[int] = None
 
 class Step4Calc:
-    """第四步：单平台计算（统一缓存方案）"""
+    """第四步：单平台计算（统一缓存+智能覆盖方案）"""
     
     def __init__(self):
         # 统一缓存结构：symbol -> exchange -> 数据
@@ -46,23 +46,24 @@ class Step4Calc:
         self.last_log_time = 0
         self.log_interval = 60  # 1分钟
         self.process_count = 0
-        self.log_detail_counter = 0
         
     def process(self, aligned_results: List) -> List[PlatformData]:
         """
-        统一处理流程：1.更新缓存 2.从缓存计算
+        统一处理流程：1.智能更新缓存 2.从缓存计算
         """
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
         
+        # 处理前日志 - 只在频率控制时打印
         if should_log:
-            logger.info(f"🔄【流水线步骤4】开始处理 {len(aligned_results)} 个合约，采用统一缓存方案...")
+            logger.info(f"🔄【流水线步骤4】开始处理 {len(aligned_results)} 个合约，采用智能缓存方案...")
         
         # 批次统计
         batch_stats = {
             "total_contracts": len(aligned_results),
             "okx_updated": 0,
             "binance_updated": 0,
+            "binance_cache_protected": 0,  # 新增：缓存保护次数
             "okx_calculated": 0,
             "binance_calculated": 0,
             "calculation_errors": 0,
@@ -81,14 +82,13 @@ class Step4Calc:
         }
         
         all_results = []
-        self.log_detail_counter = 0
         
         for item in aligned_results:
             try:
                 symbol = item.symbol
                 
-                # 🔄 第一步：统一更新缓存（直接覆盖）
-                self._update_cache(item, batch_stats)
+                # 🔄 第一步：智能更新缓存（有值覆盖，无值保留）
+                self._update_cache_smart(item, batch_stats)
                 
                 # 🔢 第二步：从缓存统一计算
                 # OKX计算
@@ -96,11 +96,6 @@ class Step4Calc:
                 if okx_data:
                     all_results.append(okx_data)
                     batch_stats["okx_calculated"] += 1
-                    
-                    # 详细日志（前2个合约）- 已注释
-                    # if should_log and self.log_detail_counter < 1:
-                    #     self._log_calc_result(okx_data, "OKX", batch_stats)
-                    #     self.log_detail_counter += 1
                 
                 # 币安计算
                 binance_data = self._calc_from_cache(symbol, "binance", batch_stats)
@@ -111,21 +106,18 @@ class Step4Calc:
                     # 统计有历史数据的币安合约
                     if binance_data.last_settlement_ts:
                         batch_stats["binance_with_history"] += 1
-                    
-                    # 详细日志（前2个合约）- 已注释
-                    # if should_log and self.log_detail_counter < 2:
-                    #     self._log_calc_result(binance_data, "币安", batch_stats)
-                    #     self.log_detail_counter += 1
                 
             except Exception as e:
                 batch_stats["calculation_errors"] += 1
-                logger.error(f"❌【流水线步骤4】合约处理失败: {item.symbol} - {e}")
                 continue
         
+        # 处理后日志 - 只在频率控制时打印
         if should_log:
+            logger.info(f"✅【流水线步骤4】完成，共生成 {len(all_results)} 条数据")
+            
             self._log_cache_status(batch_stats)
             self._log_calculation_report(batch_stats)
-            logger.info(f"✅【流水线步骤4】完成，共生成 {len(all_results)} 条数据")
+            
             self.last_log_time = current_time
             self.process_count = 0
         
@@ -133,20 +125,16 @@ class Step4Calc:
         
         return all_results
     
-    def _update_cache(self, aligned_item, batch_stats: Dict[str, int]):
-        """统一更新所有平台缓存（直接覆盖）"""
+    def _update_cache_smart(self, aligned_item, batch_stats: Dict[str, int]):
+        """
+        智能更新所有平台缓存
+        原则：有值的项覆盖，无值的项保留原缓存
+        """
         symbol = aligned_item.symbol
         
         # 初始化缓存结构
         if symbol not in self.platform_cache:
             self.platform_cache[symbol] = {}
-        
-        # 🔍 调试：显示步骤3传入的原始数据 - 已注释刷屏日志
-        # logger.debug(f"🔍【步骤4-调试】步骤3传入数据 {symbol}:")
-        # logger.debug(f"  币安上次时间戳: {aligned_item.binance_last_ts}")
-        # logger.debug(f"  币安当前时间戳: {aligned_item.binance_current_ts}")
-        # logger.debug(f"  OKX当前时间戳: {aligned_item.okx_current_ts}")
-        # logger.debug(f"  OKX下次时间戳: {aligned_item.okx_next_ts}")
         
         # 📥 更新OKX缓存（直接覆盖）
         if aligned_item.okx_current_ts:
@@ -154,70 +142,98 @@ class Step4Calc:
                 "contract_name": aligned_item.okx_contract_name or "",
                 "latest_price": aligned_item.okx_price,
                 "funding_rate": aligned_item.okx_funding_rate,
-                "last_settlement_time": None,  # OKX无上次结算时间
+                "last_settlement_time": None,
                 "current_settlement_time": aligned_item.okx_current_settlement,
                 "next_settlement_time": aligned_item.okx_next_settlement,
-                "last_settlement_ts": None,  # OKX无上次结算时间戳
+                "last_settlement_ts": None,
                 "current_settlement_ts": aligned_item.okx_current_ts,
                 "next_settlement_ts": aligned_item.okx_next_ts,
+                "update_timestamp": time.time()
             }
             batch_stats["okx_updated"] += 1
-            # logger.debug(f"✅ OKX缓存已更新: {symbol}")
         
-        # 🔄 更新币安缓存（直接覆盖+滚动更新）
-        if aligned_item.binance_current_ts:
-            self._update_binance_cache_direct(symbol, aligned_item, batch_stats)
-            batch_stats["binance_updated"] += 1
+        # 🔥 关键：智能更新币安缓存
+        self._update_binance_smart(symbol, aligned_item, batch_stats)
     
-    def _update_binance_cache_direct(self, symbol: str, aligned_item, batch_stats: Dict[str, int]):
-        """直接覆盖币安缓存，自动执行滚动更新"""
-        # 获取当前缓存（如果存在）
-        current_cache = self.platform_cache.get(symbol, {}).get("binance", {})
+    def _update_binance_smart(self, symbol: str, aligned_item, batch_stats: Dict[str, int]):
+        """
+        智能更新币安缓存：
+        1. 第一次只要有任意数据就创建缓存
+        2. 后续更新：有值的项覆盖，无值的项保留原缓存
+        3. 检查本次结算时间变化 → 触发滚动更新
+        """
+        # 获取或初始化缓存
+        if symbol not in self.platform_cache:
+            self.platform_cache[symbol] = {}
         
-        # 新数据
+        # 获取缓存状态（如果不存在则创建空缓存）
+        if "binance" not in self.platform_cache[symbol]:
+            self.platform_cache[symbol]["binance"] = {
+                "contract_name": "",
+                "latest_price": "",
+                "funding_rate": "",
+                "last_settlement_time": "",
+                "current_settlement_time": "",
+                "next_settlement_time": None,
+                "last_settlement_ts": None,
+                "current_settlement_ts": None,
+                "next_settlement_ts": None,
+                "has_rollover": False,
+                "update_timestamp": 0
+            }
+        
+        cache = self.platform_cache[symbol]["binance"]
+        
+        # 1. 检查滚动更新
         new_current_ts = aligned_item.binance_current_ts
-        new_last_ts = aligned_item.binance_last_ts
+        old_current_ts = cache.get("current_settlement_ts")
         
-        # 调试：显示滚动前状态 - 已注释刷屏日志
-        # logger.debug(f"🔄 币安缓存更新前 {symbol}:")
-        # logger.debug(f"  缓存上次时间戳: {current_cache.get('last_settlement_ts')}")
-        # logger.debug(f"  缓存当前时间戳: {current_cache.get('current_settlement_ts')}")
-        # logger.debug(f"  步骤3传入上次时间戳: {new_last_ts}")
-        # logger.debug(f"  步骤3传入当前时间戳: {new_current_ts}")
-        
-        # 检查是否需要滚动更新
-        should_rollover = False
-        last_ts_for_cache = new_last_ts  # 默认使用步骤3的last_ts
-        
-        # 如果有历史缓存，且当前时间戳发生变化，则执行滚动
-        if current_cache.get("current_settlement_ts") and new_current_ts != current_cache["current_settlement_ts"]:
-            should_rollover = True
-            # 滚动：旧的当前 → 新的上次
-            last_ts_for_cache = current_cache["current_settlement_ts"]
+        if new_current_ts and old_current_ts and new_current_ts != old_current_ts:
+            # 🔄 触发滚动：旧的本次 → 新的上次
+            cache["last_settlement_ts"] = old_current_ts
+            cache["last_settlement_time"] = cache.get("current_settlement_time", "")
+            cache["has_rollover"] = True
             batch_stats["binance_rollover_symbols"].add(symbol)
-            # 实时打印滚动通知 - 保留滚动总数统计
-            logger.info(f"🔄【流水线步骤4】 币安触发滚动更新: {len(batch_stats['binance_rollover_symbols'])}个合约")
-            logger.debug(f"🔄【流水线步骤4】 币安时间滚动触发 {symbol}: {last_ts_for_cache}→last, {new_current_ts}→current")
         
-        # 🔥 直接覆盖缓存（核心逻辑）
-        self.platform_cache[symbol]["binance"] = {
-            "contract_name": aligned_item.binance_contract_name or "",
-            "latest_price": aligned_item.binance_price,
-            "funding_rate": aligned_item.binance_funding_rate,
-            "last_settlement_time": aligned_item.binance_last_settlement,
-            "current_settlement_time": aligned_item.binance_current_settlement,
-            "next_settlement_time": None,  # 币安无下次结算时间
-            "last_settlement_ts": last_ts_for_cache,  # 滚动后或用步骤3的
-            "current_settlement_ts": new_current_ts,
-            "next_settlement_ts": None,  # 币安无下次结算时间戳
-            "has_rollover": should_rollover,  # 标记是否执行了滚动
-        }
+        # 2. 智能覆盖：有值就覆盖，无值保留
+        cache["update_timestamp"] = time.time()
         
-        # 调试：显示滚动后状态 - 已注释刷屏日志
-        # logger.debug(f"✅ 币安缓存更新后 {symbol}:")
-        # logger.debug(f"  最终上次时间戳: {last_ts_for_cache}")
-        # logger.debug(f"  最终当前时间戳: {new_current_ts}")
-        # logger.debug(f"  是否滚动: {should_rollover}")
+        # 覆盖逻辑（只有有值时才覆盖）
+        if aligned_item.binance_contract_name:
+            cache["contract_name"] = aligned_item.binance_contract_name
+        
+        if aligned_item.binance_price:
+            cache["latest_price"] = aligned_item.binance_price
+        
+        if aligned_item.binance_funding_rate:
+            cache["funding_rate"] = aligned_item.binance_funding_rate
+        
+        if aligned_item.binance_last_settlement:
+            cache["last_settlement_time"] = aligned_item.binance_last_settlement
+        
+        if aligned_item.binance_current_settlement:
+            cache["current_settlement_time"] = aligned_item.binance_current_settlement
+        
+        # 🎯 关键：时间戳特殊处理
+        if aligned_item.binance_last_ts:
+            cache["last_settlement_ts"] = aligned_item.binance_last_ts
+        
+        if aligned_item.binance_current_ts:
+            cache["current_settlement_ts"] = aligned_item.binance_current_ts
+        
+        # 3. 统计更新
+        has_effective_update = any([
+            aligned_item.binance_contract_name,
+            aligned_item.binance_price,
+            aligned_item.binance_funding_rate,
+            aligned_item.binance_current_ts,
+            aligned_item.binance_last_ts
+        ])
+        
+        if has_effective_update:
+            batch_stats["binance_updated"] += 1
+        else:
+            batch_stats["binance_cache_protected"] += 1
     
     def _calc_from_cache(self, symbol: str, exchange: str, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
         """从缓存计算数据（唯一数据源）"""
@@ -244,7 +260,7 @@ class Step4Calc:
                 next_settlement_ts=cache_data["next_settlement_ts"],
             )
             
-            # 计算OKX费率周期（当前→下次）
+            # 计算OKX费率周期（下次→上次）
             if data.current_settlement_ts and data.next_settlement_ts:
                 data.period_seconds = (data.next_settlement_ts - data.current_settlement_ts) // 1000
                 batch_stats["okx_period_success"] += 1
@@ -273,19 +289,12 @@ class Step4Calc:
                 next_settlement_ts=cache_data["next_settlement_ts"],
             )
             
-            # 🔍 调试：显示币安计算详情 - 已注释刷屏日志
-            logger.debug(f"🔢 【流水线步骤4】币安计算 {symbol}:")
-            logger.debug(f"• 上次时间戳: {data.last_settlement_ts}")
-            logger.debug(f"• 当前时间戳: {data.current_settlement_ts}")
-            
-            # 计算币安费率周期（上次→当前）- 有历史数据才计算
+            # 计算币安费率周期（本次→上次）- 有历史数据才计算
             if data.current_settlement_ts and data.last_settlement_ts:
                 data.period_seconds = (data.current_settlement_ts - data.last_settlement_ts) // 1000
                 batch_stats["binance_period_success"] += 1
-                logger.debug(f"✅【流水线步骤4】 币安费率周期计算: {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
             else:
                 batch_stats["binance_period_fail"] += 1
-                logger.debug(f"⚠️【流水线步骤4】 币安费率周期无法计算: 缺少历史时间戳")
             
             # 计算倒计时
             data.countdown_seconds = self._calc_countdown(data.current_settlement_ts)
@@ -293,10 +302,6 @@ class Step4Calc:
                 batch_stats["binance_countdown_success"] += 1
             else:
                 batch_stats["binance_countdown_fail"] += 1
-            
-            # 调试倒计时 - 已注释刷屏日志
-            # if data.countdown_seconds is not None:
-            #     logger.debug(f"✅ 【流水线步骤4】币安倒计时: {data.countdown_seconds}秒")
         
         else:
             return None
@@ -314,59 +319,6 @@ class Step4Calc:
             return countdown
         except Exception:
             return None
-    
-    def _log_calc_result(self, data: PlatformData, exchange_name: str, batch_stats: Dict[str, int]):
-        """记录计算结果的详细日志（仅显示前2个合约）- 已注释"""
-        # logger.info(f"📝【内部步骤4】{exchange_name}计算结果:")
-        # logger.info(f"   交易对: {data.symbol}")
-        # logger.info(f"   合约名称: {data.contract_name}")
-        # logger.info(f"   基础数据:")
-        # logger.info(f"     • 最新价格: {data.latest_price}")
-        # logger.info(f"     • 资金费率: {data.funding_rate}")
-        # 
-        # # 时间字段显示（三个字段都必须存在）
-        # logger.info(f"   时间字段:")
-        # logger.info(f"     • 上次结算时间: {data.last_settlement_time or '(空)'}")
-        # logger.info(f"       - 时间戳: {data.last_settlement_ts or '(空)'}")
-        # logger.info(f"     • 本次结算时间: {data.current_settlement_time or '(空)'}")
-        # logger.info(f"       - 时间戳: {data.current_settlement_ts or '(空)'}")
-        # logger.info(f"     • 下次结算时间: {data.next_settlement_time or '(空)'}")
-        # logger.info(f"       - 时间戳: {data.next_settlement_ts or '(空)'}")
-        # 
-        # # 计算结果（格式化显示）
-        # logger.info(f"   计算结果:")
-        # 
-        # # 费率周期
-        # if data.period_seconds is not None:
-        #     hours = data.period_seconds // 3600
-        #     minutes = (data.period_seconds % 3600) // 60
-        #     if hours > 0:
-        #         if minutes > 0:
-        #             period_str = f"{hours}小时{minutes}分钟"
-        #         else:
-        #             period_str = f"{hours}小时"
-        #     else:
-        #         period_str = f"{minutes}分钟"
-        #     logger.info(f"     • 费率周期: {period_str}")
-        # else:
-        #     reason = "无历史时间戳" if exchange_name == "币安" and not data.last_settlement_ts else "计算失败"
-        #     logger.info(f"     • 费率周期: {reason}")
-        # 
-        # # 倒计时
-        # if data.countdown_seconds is not None:
-        #     hours = data.countdown_seconds // 3600
-        #     minutes = (data.countdown_seconds % 3600) // 60
-        #     seconds = data.countdown_seconds % 60
-        #     if hours > 0:
-        #         countdown_str = f"{hours}小时{minutes}分钟{seconds}秒"
-        #     elif minutes > 0:
-        #         countdown_str = f"{minutes}分钟{seconds}秒"
-        #     else:
-        #         countdown_str = f"{seconds}秒"
-        #     logger.info(f"     • 倒计时: {countdown_str}")
-        # else:
-        #     logger.info(f"     • 倒计时: 计算失败")
-        pass
     
     def _log_cache_status(self, batch_stats: Dict[str, int]):
         """打印缓存状态"""
@@ -392,6 +344,11 @@ class Step4Calc:
         logger.info(f"  • OKX数据缓存: {okx_count} 条")
         logger.info(f"  • 币安数据缓存: {binance_count} 条")
         logger.info(f"  • 币安上次结算时间: 有{binance_with_history}条，无{binance_count - binance_with_history}条")
+        
+        # 保护统计
+        protected_count = batch_stats.get("binance_cache_protected", 0)
+        if protected_count > 0:
+            logger.info(f"  • 缓存保护次数: {protected_count}次")
     
     def _log_calculation_report(self, batch_stats: Dict[str, int]):
         """打印计算报告"""
