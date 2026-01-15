@@ -81,9 +81,9 @@ class Step1Filter:
             if type_key in self.FIELD_MAP:
                 raw_contract_stats[type_key].add(symbol if symbol else "empty")
         
-        # 定期日志输出 - 暂时关闭
-          if should_log:
-              logger.info(f"🔄【流水线步骤1】开始处理{len(raw_items)} 条原始数据...")
+            # 定期日志输出 - 暂时关闭
+            if should_log:
+                logger.info(f"🔄【流水线步骤1】开始处理{len(raw_items)} 条原始数据...")
         #     
         #     stats_lines = []
         #     stats_lines.append("📊【流水线步骤1】原始数据合约统计:")
@@ -140,14 +140,14 @@ class Step1Filter:
                 continue
         
         # 定期日志输出结果 - 暂时关闭
-          if should_log:
-              logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
-             
-             # 统计每种数据类型的提取数量
-              if self.stats:
-                  logger.info("📊【流水线步骤1】提取数据统计:")
-                  for data_type, count in sorted(self.stats.items()):
-                      logger.info(f"  • {data_type}: {count} 条")
+        if should_log:
+            logger.info(f"✅【流水线步骤1】过滤完成，共提取 {len(results)} 条精简数据")
+            
+            # 统计每种数据类型的提取数量
+            if self.stats:
+                logger.info("📊【流水线步骤1】提取数据统计:")
+                for data_type, count in sorted(self.stats.items()):
+                    logger.info(f"  • {data_type}: {count} 条")
         #     
         #     # 如果总数据量少于2条，补充说明
         #     if len(results) < 2 and self.log_detail_counter < len(results):

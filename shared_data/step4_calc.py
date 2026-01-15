@@ -196,8 +196,8 @@ class Step4Calc:
             last_ts_for_cache = current_cache["current_settlement_ts"]
             batch_stats["binance_rollover_symbols"].add(symbol)
             # 实时打印滚动通知 - 保留滚动总数统计
-              logger.info(f"🔄【流水线步骤4】 币安触发滚动更新: {len(batch_stats['binance_rollover_symbols'])}个合约")
-              logger.debug(f"🔄【流水线步骤4】 币安时间滚动触发 {symbol}: {last_ts_for_cache}→last, {new_current_ts}→current")
+            logger.info(f"🔄【流水线步骤4】 币安触发滚动更新: {len(batch_stats['binance_rollover_symbols'])}个合约")
+            logger.debug(f"🔄【流水线步骤4】 币安时间滚动触发 {symbol}: {last_ts_for_cache}→last, {new_current_ts}→current")
         
         # 🔥 直接覆盖缓存（核心逻辑）
         self.platform_cache[symbol]["binance"] = {
@@ -274,18 +274,18 @@ class Step4Calc:
             )
             
             # 🔍 调试：显示币安计算详情 - 已注释刷屏日志
-              logger.debug(f"🔢 【流水线步骤4】币安计算 {symbol}:")
-              logger.debug(f"• 上次时间戳: {data.last_settlement_ts}")
-              logger.debug(f"• 当前时间戳: {data.current_settlement_ts}")
+            logger.debug(f"🔢 【流水线步骤4】币安计算 {symbol}:")
+            logger.debug(f"• 上次时间戳: {data.last_settlement_ts}")
+            logger.debug(f"• 当前时间戳: {data.current_settlement_ts}")
             
             # 计算币安费率周期（上次→当前）- 有历史数据才计算
             if data.current_settlement_ts and data.last_settlement_ts:
                 data.period_seconds = (data.current_settlement_ts - data.last_settlement_ts) // 1000
                 batch_stats["binance_period_success"] += 1
-                  logger.debug(f"✅【流水线步骤4】 币安费率周期计算: {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
+                logger.debug(f"✅【流水线步骤4】 币安费率周期计算: {data.current_settlement_ts} - {data.last_settlement_ts} = {data.period_seconds}秒")
             else:
                 batch_stats["binance_period_fail"] += 1
-                  logger.debug(f"⚠️【流水线步骤4】 币安费率周期无法计算: 缺少历史时间戳")
+                logger.debug(f"⚠️【流水线步骤4】 币安费率周期无法计算: 缺少历史时间戳")
             
             # 计算倒计时
             data.countdown_seconds = self._calc_countdown(data.current_settlement_ts)
