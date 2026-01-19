@@ -48,7 +48,7 @@ class FrontendRelayServer:
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
         
-        logger.info(f"🔄 前端中继初始化完成，端口: {self.port}")
+        logger.info(f"🔄【智能大脑】 前端中继初始化完成，端口: {self.port}")
     
     def _setup_routes(self):
         """设置路由（极简版）"""
@@ -74,7 +74,7 @@ class FrontendRelayServer:
         # 1. 基础验证（可选）
         token = request.query.get('token', '')
         if not self._validate_token_simple(token):
-            logger.warning(f"📛 WebSocket连接被拒绝，token无效")
+            logger.warning(f"📛【智能大脑】 前端WebSocket连接被拒绝，token无效")
             return web.HTTPUnauthorized()
         
         # 2. 建立连接
@@ -90,7 +90,7 @@ class FrontendRelayServer:
         self.stats["total_connections"] += 1
         self.stats["current_connections"] = len(self.ws_clients)
         
-        logger.info(f"✅ 前端连接建立: {client_id} (当前: {len(self.ws_clients)}个)")
+        logger.info(f"✅ 【智能大脑】前端连接建立: {client_id} (当前: {len(self.ws_clients)}个)")
         
         try:
             # 5. 发送连接确认（可选）
@@ -124,7 +124,7 @@ class FrontendRelayServer:
             if ws in self.ws_clients:
                 self.ws_clients.remove(ws)
                 self.stats["current_connections"] = len(self.ws_clients)
-                logger.info(f"❌ 前端连接断开: {client_id} (剩余: {len(self.ws_clients)}个)")
+                logger.info(f"❌ 【智能大脑】前端连接断开: {client_id} (剩余: {len(self.ws_clients)}个)")
         
         return ws
     
@@ -139,7 +139,7 @@ class FrontendRelayServer:
             params = data.get('params', {})
             client_id = data.get('client_id', 'unknown')
             
-            logger.info(f"📨 收到前端指令: {command} from {client_id}")
+            logger.info(f"📨 【智能大脑】收到前端指令: {command} from {client_id}")
             
             # 2. 基础验证
             token = self._get_token_from_request(request)
@@ -179,7 +179,7 @@ class FrontendRelayServer:
                 "error": "无效的JSON格式"
             }, status=400)
         except Exception as e:
-            logger.error(f"处理指令失败: {e}")
+            logger.error(f"【智能大脑】处理前端指令失败: {e}")
             return web.json_response({
                 "success": False,
                 "error": str(e)
@@ -266,7 +266,7 @@ class FrontendRelayServer:
                 # 连接已断开，标记为待清理
                 dead_clients.append(ws)
             except Exception as e:
-                logger.debug(f"广播消息失败: {e}")
+                logger.debug(f"【智能大脑】向前端广播消息失败: {e}")
                 dead_clients.append(ws)
         
         # 静默清理死连接
@@ -316,7 +316,7 @@ class FrontendRelayServer:
     async def start(self):
         """启动前端中继服务器"""
         try:
-            logger.info(f"🚀 启动前端中继服务器，端口: {self.port}")
+            logger.info(f"🚀【智能大脑】 启动前端中继服务器，端口: {self.port}")
             
             # 创建运行器
             self.runner = web.AppRunner(self.app)
@@ -326,21 +326,21 @@ class FrontendRelayServer:
             self.site = web.TCPSite(self.runner, '0.0.0.0', self.port)
             await self.site.start()
             
-            logger.info(f"✅ 前端中继服务器启动成功")
-            logger.info(f"   📡 WebSocket: ws://0.0.0.0:{self.port}/ws")
-            logger.info(f"   📨 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
-            logger.info(f"   📊 状态查询: http://0.0.0.0:{self.port}/status")
-            logger.info(f"   ❤️  健康检查: http://0.0.0.0:{self.port}/health")
+            logger.info(f"✅【智能大脑】 前端中继服务器启动成功")
+            logger.info(f"📡【智能大脑】 WebSocket: ws://0.0.0.0:{self.port}/ws")
+            logger.info(f"📨【智能大脑】 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
+            logger.info(f"📊【智能大脑】状态查询: http://0.0.0.0:{self.port}/status")
+            logger.info(f"❤️【智能大脑】健康检查: http://0.0.0.0:{self.port}/health")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌ 启动前端中继服务器失败: {e}")
+            logger.error(f"❌【智能大脑】 启动前端中继服务器失败: {e}")
             return False
     
     async def stop(self):
         """停止前端中继服务器"""
-        logger.info("🛑 停止前端中继服务器...")
+        logger.info("🛑 【智能大脑】停止前端中继服务器...")
         
         # 关闭所有WebSocket连接
         for ws in self.ws_clients:
@@ -356,7 +356,7 @@ class FrontendRelayServer:
             self.runner = None
             self.site = None
         
-        logger.info("✅ 前端中继服务器已停止")
+        logger.info("✅ 【智能大脑】前端中继服务器已停止")
     
     def get_stats_summary(self) -> Dict[str, Any]:
         """获取统计摘要"""
