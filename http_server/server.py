@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(os.path.dirname(current_dir))  # brain_core目录
+root_dir = os.path.dirname(os.path.dirname(current_dir))  # smart_brain目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
@@ -47,7 +47,7 @@ class HTTPServer:
         self.app.on_shutdown.append(self.on_shutdown)
         self.app.on_cleanup.append(self.on_cleanup)
         
-        # ❌ 移除信号处理，由brain_core统一管理
+        # ❌ 移除信号处理，由bsmart_brain统一管理
     
     async def on_startup(self, app):
         """应用启动时 - 快速初始化"""
@@ -58,12 +58,12 @@ class HTTPServer:
         
         logger.info(f"HTTP服务器已就绪，监听在 {self.host}:{self.port}")
         
-        # WebSocket连接池将在brain_core中后台初始化
+        # WebSocket连接池将在smart_brain中后台初始化
         # 这里不初始化，保证HTTP服务快速启动
     
     async def handle_websocket_data(self, data: Dict[str, Any]):
-        """处理WebSocket数据 - 占位方法，实际由brain_core处理"""
-        # 这个方法保留，但实际处理逻辑在brain_core中
+        """处理WebSocket数据 - 占位方法，实际由smart_brain处理"""
+        # 这个方法保留，但实际处理逻辑在smart_brain中
         pass
     
     async def on_shutdown(self, app):
@@ -93,7 +93,7 @@ class HTTPServer:
             await self.site.stop()
         
         logger.info("HTTP服务器已关闭")
-        # ❌ 不调用 sys.exit(0)，由brain_core控制进程退出
+        # ❌ 不调用 sys.exit(0)，由smart_brain控制进程退出
     
     async def get_ws_pool_status(self) -> Dict[str, Any]:
         """获取WebSocket连接池状态"""
