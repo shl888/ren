@@ -32,7 +32,7 @@ try:
 except ImportError:
     FRONTEND_RELAY_AVAILABLE = False
     logger = logging.getLogger(__name__)
-    logger.warning("⚠️ 前端中继模块未找到，前端功能将不可用")
+    logger.warning("⚠️【智能大脑】 前端中继模块未找到，前端功能将不可用")
 
 logger = logging.getLogger(__name__)
 
@@ -46,13 +46,13 @@ def start_keep_alive_background():
             try:
                 start_with_http_check()
             except Exception as e:
-                logger.error(f"保活服务异常: {e}")
+                logger.error(f"【智能大脑】保活服务异常: {e}")
         
         thread = threading.Thread(target=run_keeper, daemon=True)
         thread.start()
-        logger.info("✅ 保活服务已启动")
+        logger.info("✅ 【智能大脑】保活服务已启动")
     except:
-        logger.warning("⚠️  保活服务未启动，但继续运行")
+        logger.warning("⚠️ 【智能大脑】 保活服务未启动，但继续运行")
 
 class SmartBrain:
     def __init__(self):
@@ -89,9 +89,9 @@ class SmartBrain:
                 if logger.isEnabledFor(logging.DEBUG):
                     if processed_data and len(processed_data) > 0:
                         symbol = processed_data[0].get('symbol', 'unknown')
-                        logger.debug(f"收到批量数据: {len(processed_data)}条, 第一个合约: {symbol}")
+                        logger.debug(f"📣【智能大脑】收到批量数据: {len(processed_data)}条, 第一个合约: {symbol}")
             else:
-                logger.warning(f"⚠️ 收到非列表类型市场数据: {type(processed_data)}")
+                logger.warning(f"⚠️【智能大脑】 收到非列表类型市场数据: {type(processed_data)}")
                 self.last_market_count = 1
             
             self.last_market_time = datetime.now()
@@ -101,12 +101,12 @@ class SmartBrain:
                 try:
                     await self.frontend_relay.broadcast_market_data(processed_data)
                     if isinstance(processed_data, list) and len(processed_data) > 0:
-                        logger.debug(f"📤 已推送市场数据到前端: {len(processed_data)}条")
+                        logger.debug(f"✅【智能大脑】 已推送市场数据到前端: {len(processed_data)}条")
                 except Exception as e:
-                    logger.error(f"推送市场数据到前端失败: {e}")
+                    logger.error(f"️❌【智能大脑】推送市场数据到前端失败: {e}")
             
         except Exception as e:
-            logger.error(f"接收数据错误: {e}")
+            logger.error(f"⚠️【智能大脑】接收数据错误: {e}")
     
     async def receive_private_data(self, private_data):
         """
@@ -121,31 +121,31 @@ class SmartBrain:
             
             if data_type == 'account_update' or data_type == 'account':
                 self.last_account_time = now
-                logger.info(f"💰 收到账户私人数据: {exchange}")
+                logger.info(f"💰【智能大脑】 收到账户私人数据: {exchange}")
             elif data_type == 'order_update' or data_type == 'trade':
                 self.last_trade_time = now
-                logger.info(f"📝 收到交易私人数据: {exchange}")
+                logger.info(f"📝【智能大脑】 收到交易私人数据: {exchange}")
             else:
                 self.last_account_time = now
-                logger.info(f"📨 收到未知类型私人数据: {exchange}.{data_type}")
+                logger.info(f"⚠️【智能大脑】 收到未知类型私人数据: {exchange}.{data_type}")
             
             # 推送到前端
             if self.frontend_relay:
                 try:
                     await self.frontend_relay.broadcast_private_data(private_data)
-                    logger.debug(f"📤 已推送私人数据到前端: {exchange}.{data_type}")
+                    logger.debug(f"✅【智能大脑】 已推送私人数据到前端: {exchange}.{data_type}")
                 except Exception as e:
-                    logger.error(f"推送私人数据到前端失败: {e}")
+                    logger.error(f"❌【智能大脑】推送私人数据到前端失败: {e}")
                 
         except Exception as e:
-            logger.error(f"接收私人数据错误: {e}")
+            logger.error(f"⚠️【智能大脑】接收私人数据错误: {e}")
     
     async def _execute_exchange_api(self, exchange_name, api_method, **kwargs):
         """执行交易所API调用"""
         try:
             api = ExchangeAPI(exchange_name)
             if not await api.initialize():
-                return {"success": False, "error": f"{exchange_name} API初始化失败"}
+                return {"success": False, "error": f"❌【智能大脑】{exchange_name} API初始化失败"}
             
             method = getattr(api, api_method)
             result = await method(**kwargs)
@@ -157,7 +157,7 @@ class SmartBrain:
             return {"success": True, "data": result}
             
         except Exception as e:
-            logger.error(f"执行API失败: {e}")
+            logger.error(f"❌【智能大脑】执行API失败: {e}")
             return {"success": False, "error": str(e)}
     
     async def handle_frontend_command(self, command_data):
@@ -170,7 +170,7 @@ class SmartBrain:
             params = command_data.get('params', {})
             client_id = command_data.get('client_id', 'unknown')
             
-            logger.info(f"🧠 处理前端指令: {command} from {client_id}")
+            logger.info(f"🧠 【智能大脑】处理前端指令: {command} from {client_id}")
             
             # 根据指令类型处理
             if command == 'place_order':
@@ -196,13 +196,13 @@ class SmartBrain:
             else:
                 return {
                     "success": False,
-                    "error": f"未知指令: {command}",
+                    "error": f"⚠️【智能大脑】未知指令: {command}",
                     "client_id": client_id,
                     "timestamp": datetime.now().isoformat()
                 }
             
         except Exception as e:
-            error_msg = f"处理前端指令失败: {e}"
+            error_msg = f"❌【智能大脑】处理前端指令失败: {e}"
             logger.error(error_msg)
             return {
                 'success': False, 
@@ -218,7 +218,7 @@ class SmartBrain:
             if field not in params:
                 return {
                     "success": False,
-                    "error": f"缺少必要参数: {field}",
+                    "error": f"❌【智能大脑】缺少必要参数: {field}",
                     "client_id": client_id,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -254,7 +254,7 @@ class SmartBrain:
         if 'exchange' not in params or 'symbol' not in params or 'order_id' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange、symbol或order_id参数",
+                "error": "❌【智能大脑】缺少exchange、symbol或order_id参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -282,7 +282,7 @@ class SmartBrain:
         if 'exchange' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange参数",
+                "error": "❌【智能大脑】缺少exchange参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -308,7 +308,7 @@ class SmartBrain:
         if 'exchange' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange参数",
+                "error": "❌【智能大脑】缺少exchange参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -336,7 +336,7 @@ class SmartBrain:
         if 'exchange' not in params or 'symbol' not in params or 'leverage' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange、symbol或leverage参数",
+                "error": "❌【智能大脑】缺少exchange、symbol或leverage参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -364,7 +364,7 @@ class SmartBrain:
         if 'exchange' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange参数",
+                "error": "❌【智能大脑】缺少exchange参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -388,7 +388,7 @@ class SmartBrain:
         if 'exchange' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange参数",
+                "error": "❌【智能大脑】缺少exchange参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -412,7 +412,7 @@ class SmartBrain:
         if 'exchange' not in params or 'symbol' not in params:
             return {
                 "success": False,
-                "error": "缺少exchange或symbol参数",
+                "error": "❌【智能大脑】缺少exchange或symbol参数",
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
@@ -442,7 +442,7 @@ class SmartBrain:
             if not exchange:
                 return {
                     "success": False,
-                    "error": "缺少exchange参数",
+                    "error": "❌【智能大脑】缺少exchange参数",
                     "client_id": client_id,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -459,7 +459,7 @@ class SmartBrain:
             }
             
         except Exception as e:
-            logger.error(f"获取市场数据失败: {e}")
+            logger.error(f"❌【智能大脑】获取市场数据失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -484,7 +484,7 @@ class SmartBrain:
             }
             
         except Exception as e:
-            logger.error(f"获取连接状态失败: {e}")
+            logger.error(f"❌【智能大脑】获取连接状态失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
@@ -494,7 +494,7 @@ class SmartBrain:
     
     def _format_time_diff(self, last_time):
         if not last_time:
-            return "从未收到"
+            return "⚠️【智能大脑】从未收到"
         
         now = datetime.now()
         diff = now - last_time
@@ -516,25 +516,25 @@ class SmartBrain:
                 market_time = self._format_time_diff(self.last_market_time)
                 
                 if self.last_account_time:
-                    account_status = f"已更新，{self._format_time_diff(self.last_account_time)}"
+                    account_status = f"✅【智能大脑】已更新，{self._format_time_diff(self.last_account_time)}"
                 else:
-                    account_status = "从未收到"
+                    account_status = "⚠️【智能大脑】从未收到"
                     
                 if self.last_trade_time:
-                    trade_status = f"已更新，{self._format_time_diff(self.last_trade_time)}"
+                    trade_status = f"✅【智能大脑】已更新，{self._format_time_diff(self.last_trade_time)}"
                 else:
-                    trade_status = "从未收到"
+                    trade_status = "❌【智能大脑】从未收到"
                 
                 # 前端连接状态
                 if self.frontend_relay:
                     frontend_stats = self.frontend_relay.get_stats_summary()
                     frontend_clients = frontend_stats.get('clients_connected', 0)
-                    frontend_status = f"已连接 {frontend_clients} 个客户端"
+                    frontend_status = f"✅【智能大脑】已连接 {frontend_clients} 个客户端"
                 else:
-                    frontend_status = "未启用"
+                    frontend_status = "⚠️【智能大脑】未启用"
                     frontend_clients = 0
                 
-                status_msg = f"""【大脑数据状态】
+                status_msg = f"""【智能大脑】【大脑数据状态】
 成品数据，{market_count}条，已更新。{market_time}
 私人数据-账户：{account_status}
 私人数据-交易：{trade_status}
@@ -562,18 +562,18 @@ class SmartBrain:
                         }
                         await self.frontend_relay.broadcast_system_status(system_status)
                     except Exception as e:
-                        logger.debug(f"推送系统状态失败: {e}")
+                        logger.debug(f"❌【智能大脑】推送系统状态失败: {e}")
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"状态日志错误: {e}")
+                logger.error(f"❌【智能大脑】状态日志错误: {e}")
                 await asyncio.sleep(10)
     
     async def initialize(self):
         """初始化大脑核心"""
         logger.info("=" * 60)
-        logger.info("大脑核心启动中（流式终极版，512MB优化）...")
+        logger.info("智能大脑核心启动中（流式终极版，512MB优化）...")
         logger.info("=" * 60)
         
         try:
@@ -600,7 +600,7 @@ class SmartBrain:
                 private_data_callback=self.receive_private_data
             )
             await self.pipeline_manager.start()
-            logger.info("✅ 流水线管理员启动完成！")
+            logger.info("✅ 数据处理管理员启动完成！")
             
             data_store.pipeline_manager = self.pipeline_manager
             
@@ -626,7 +626,7 @@ class SmartBrain:
             # 完成初始化
             self.running = True
             logger.info("=" * 60)
-            logger.info("🚀 大脑核心启动完成！（流式终极版）")
+            logger.info("🚀 智能大脑核心启动完成！（流式终极版）")
             logger.info("=" * 60)
             return True
             
@@ -647,18 +647,18 @@ class SmartBrain:
             # 启动服务器
             success = await self.frontend_relay.start()
             if not success:
-                logger.error("❌ 前端中继服务器启动失败")
+                logger.error("❌【智能大脑】 前端中继服务器启动失败")
                 self.frontend_relay = None
                 return
             
-            logger.info("🎯 前端中继服务已就绪:")
-            logger.info(f"   📡 数据推送: ws://0.0.0.0:10001/ws")
-            logger.info(f"   📨 指令接口: http://0.0.0.0:10001/api/cmd")
-            logger.info(f"   📊 状态查询: http://0.0.0.0:10001/status")
-            logger.info(f"   ❤️  健康检查: http://0.0.0.0:10001/health")
+            logger.info("🎯【智能大脑】 前端中继服务已就绪:")
+            logger.info(f"📡【智能大脑】数据推送: ws://0.0.0.0:10001/ws")
+            logger.info(f"📨【智能大脑】指令接口: http://0.0.0.0:10001/api/cmd")
+            logger.info(f"📊 【智能大脑】状态查询: http://0.0.0.0:10001/status")
+            logger.info(f"❤️【智能大脑】健康检查: http://0.0.0.0:10001/health")
             
         except Exception as e:
-            logger.error(f"❌ 初始化前端中继失败: {e}")
+            logger.error(f"❌【智能大脑】 初始化前端中继失败: {e}")
             self.frontend_relay = None
     
     async def _delayed_ws_init(self):
@@ -692,7 +692,7 @@ class SmartBrain:
             raise
     
     async def run(self):
-        """运行大脑核心"""
+        """运行智能大脑核心"""
         try:
             success = await self.initialize()
             if not success:
@@ -700,7 +700,7 @@ class SmartBrain:
                 return
             
             logger.info("=" * 60)
-            logger.info("🚀 大脑核心运行中（流式终极版，512MB优化）...")
+            logger.info("🚀 智能大脑核心运行中（流式终极版，512MB优化）...")
             logger.info("🛑 按 Ctrl+C 停止")
             logger.info("=" * 60)
             
@@ -739,7 +739,7 @@ class SmartBrain:
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 3. 停止流水线
+            # 3. 数据处理管理员
             if hasattr(self, 'pipeline_manager') and self.pipeline_manager:
                 await self.pipeline_manager.stop()
             
