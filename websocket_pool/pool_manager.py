@@ -11,7 +11,7 @@ import ccxt.async_support as ccxt_async
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(os.path.dirname(current_dir))  # brain_core目录
+root_dir = os.path.dirname(os.path.dirname(current_dir))  # smart_brain目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
