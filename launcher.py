@@ -87,6 +87,8 @@ async def main():
     logger.info("🚀 智能大脑启动中（重构版：启动器负责所有模块启动）...")
     logger.info("=" * 60)
     
+    brain = None  # 提前声明变量
+    
     try:
         # ==================== 1. 获取端口并创建HTTP服务器 ====================
         logger.info("【1️⃣】创建HTTP服务器...")
@@ -114,34 +116,41 @@ async def main():
         logger.info("【5️⃣】初始化资金费率管理器...")
         funding_manager = FundingSettlementManager()
         
-        # ==================== 6. 初始化前端中继 ====================
-        logger.info("【6️⃣】初始化前端中继服务器...")
-        frontend_relay = None
-        try:
-            frontend_relay = FrontendRelayServer(port=10001)
-            await frontend_relay.start()
-            logger.info("✅ 前端中继启动完成！")
-        except ImportError:
-            logger.warning("⚠️ 前端中继模块未找到，跳过前端功能")
-        except Exception as e:
-            logger.error(f"❌ 前端中继启动失败: {e}")
-        
-        # ==================== 7. 创建精简版大脑 ====================
-        logger.info("【7️⃣】创建精简版大脑...")
+        # ==================== 6. 创建精简版大脑（先创建大脑） ====================
+        logger.info("【6️⃣】创建精简版大脑...")
         brain = SmartBrain(
             http_server=http_server,
             http_runner=http_runner,
             pipeline_manager=pipeline_manager,
             funding_manager=funding_manager,
-            frontend_relay=frontend_relay
+            frontend_relay=None  # 先设为None，稍后设置
         )
         
         # 设置数据存储的引用
         data_store.pipeline_manager = pipeline_manager
         
-        # ==================== 8. 大脑初始化（只初始化自己的组件） ====================
-        logger.info("【8️⃣】大脑初始化...")
+        # ==================== 7. 大脑初始化（只初始化自己的组件） ====================
+        logger.info("【7️⃣】大脑初始化...")
         await brain.initialize()
+        
+        # ==================== 8. 初始化前端中继（需要大脑实例） ====================
+        logger.info("【8️⃣】初始化前端中继服务器...")
+        try:
+            # 现在有大脑实例了，创建前端中继
+            frontend_relay = FrontendRelayServer(
+                brain_instance=brain,  # ✅ 传入大脑实例
+                port=10001
+            )
+            await frontend_relay.start()
+            
+            # ✅ 将前端中继设置回大脑
+            brain.frontend_relay = frontend_relay
+            
+            logger.info("✅ 前端中继启动完成！")
+        except ImportError:
+            logger.warning("⚠️ 前端中继模块未找到，跳过前端功能")
+        except Exception as e:
+            logger.error(f"❌ 前端中继启动失败: {e}")
         
         # ==================== 9. 设置PipelineManager回调 ====================
         logger.info("【9️⃣】设置数据处理回调...")
@@ -180,7 +189,8 @@ async def main():
         logger.error(traceback.format_exc())
     finally:
         # 关闭
-        await brain.shutdown()
+        if brain:
+            await brain.shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
