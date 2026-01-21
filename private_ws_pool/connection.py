@@ -115,8 +115,12 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     def __init__(self, listen_key: str, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
-        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
-    
+           # （实盘地址）
+#        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
+        
+        # （测试网地址）
+        self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        
     async def connect(self):
         """建立币安私人连接"""
         try:
