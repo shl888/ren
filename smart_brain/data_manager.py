@@ -3,6 +3,7 @@
 """
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,32 @@ class DataManager:
         self.memory_store = {
             'market_data': {},
             'private_data': {},
-            'encrypted_keys': {}
+            'encrypted_keys': {},
+            'env_apis': self._load_apis_from_env(),  # 新增：从环境变量加载API
+            'exchange_tokens': {}  # 存放币安listenKey等令牌
         }
+    
+    def _load_apis_from_env(self):
+        """从环境变量加载API凭证"""
+        apis = {
+            'binance': {
+                'api_key': os.getenv('BINANCE_API_KEY'),
+                'api_secret': os.getenv('BINANCE_API_SECRET'),
+            },
+            'okx': {
+                'api_key': os.getenv('OKX_API_KEY'),
+                'api_secret': os.getenv('OKX_API_SECRET'),
+                # 注意：根据我们的讨论，OKX可能不需要passphrase
+            }
+        }
+        
+        # 验证凭证是否存在
+        for exchange, creds in apis.items():
+            if not creds['api_key'] or not creds['api_secret']:
+                logger.warning(f"⚠️【智能大脑】环境变量中{exchange}的API凭证不完整")
+        
+        logger.info(f"✅【智能大脑】已从环境变量加载API凭证")
+        return apis
     
     async def receive_market_data(self, processed_data):
         """
