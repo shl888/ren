@@ -192,13 +192,79 @@ async def main():
         asyncio.create_task(delayed_ws_init(ws_admin))
         brain.ws_admin = ws_admin  # 传递给大脑
         
+        # ==================== ✅ 新增：注册大脑DataManager API路由到主服务器 ====================
+        if brain.data_manager:
+            logger.info("【1️⃣2️⃣】注册大脑DataManager API路由到主服务器...")
+            
+            # 使用 aiohttp 的路由系统
+            from aiohttp import web
+            
+            # 创建路由表
+            routes = web.RouteTableDef()
+            
+            @routes.get('/api/brain/')
+            async def handle_brain_root(request):
+                return await brain.data_manager.handle_api_root(request)
+            
+            @routes.get('/api/brain/health')
+            async def handle_brain_health(request):
+                return await brain.data_manager.handle_health(request)
+            
+            @routes.get('/api/brain/data')
+            async def handle_brain_data(request):
+                return await brain.data_manager.handle_get_all_data(request)
+            
+            @routes.get('/api/brain/data/market')
+            async def handle_brain_market_data(request):
+                return await brain.data_manager.handle_get_market_data(request)
+            
+            @routes.get('/api/brain/data/market/{exchange}')
+            async def handle_brain_market_data_exchange(request):
+                return await brain.data_manager.handle_get_market_data_by_exchange(request)
+            
+            @routes.get('/api/brain/data/market/{exchange}/{symbol}')
+            async def handle_brain_market_data_detail(request):
+                return await brain.data_manager.handle_get_market_data_detail(request)
+            
+            @routes.get('/api/brain/data/private')
+            async def handle_brain_private_data(request):
+                return await brain.data_manager.handle_get_private_data(request)
+            
+            @routes.get('/api/brain/data/private/{exchange}')
+            async def handle_brain_private_data_exchange(request):
+                return await brain.data_manager.handle_get_private_data_by_exchange(request)
+            
+            @routes.get('/api/brain/data/private/{exchange}/{data_type}')
+            async def handle_brain_private_data_detail(request):
+                return await brain.data_manager.handle_get_private_data_detail(request)
+            
+            @routes.get('/api/brain/apis')
+            async def handle_brain_apis(request):
+                return await brain.data_manager.handle_get_apis(request)
+            
+            @routes.get('/api/brain/status')
+            async def handle_brain_status(request):
+                return await brain.data_manager.handle_get_status(request)
+            
+            # 将路由添加到主应用
+            http_server.app.add_routes(routes)
+            
+            logger.info("✅ 大脑DataManager API路由已注册到主服务器")
+            logger.info("📊 大脑数据查看地址:")
+            logger.info(f"  • 所有数据: /api/brain/data")
+            logger.info(f"  • 市场数据: /api/brain/data/market")
+            logger.info(f"  • 私人数据: /api/brain/data/private")
+            logger.info(f"  • 系统状态: /api/brain/status")
+            logger.info(f"  • API状态: /api/brain/apis")
+        # ===================================================================
+        
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # ==================== 12. 运行大脑 ====================
+        # ==================== 13. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
