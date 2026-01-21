@@ -216,7 +216,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
-        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"
+#        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"
+        self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
         self.authenticated = False
     
     async def connect(self):
