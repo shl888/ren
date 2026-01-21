@@ -29,8 +29,10 @@ class SmartBrain:
         self.funding_manager = funding_manager
         self.frontend_relay = frontend_relay
         
-        # 自己的管理器
-        self.data_manager = None
+        # 自己的管理器 - ✅ 立即创建data_manager，其他保持延迟
+        from .data_manager import DataManager
+        self.data_manager = DataManager(self)  # ✅ 关键：这里立即创建
+        
         self.command_router = None
         self.security_manager = None
         self.private_connection_manager = None  # 新增：私人连接指挥官
@@ -47,22 +49,20 @@ class SmartBrain:
         signal.signal(signal.SIGTERM, self.handle_signal)
     
     async def initialize(self):
-        """初始化大脑核心 - 只初始化自己的组件"""
+        """初始化大脑核心 - 只初始化耗时的组件"""
         logger.info("🧠 大脑核心初始化中...")
         
         try:
-            # 1. 初始化各个管理器
-            from .data_manager import DataManager
+            # 1. 初始化除data_manager外的其他管理器
             from .command_router import CommandRouter
             from .security_manager import SecurityManager
             from .private_connection_manager import PrivateConnectionManager  # 新增导入
             
-            self.data_manager = DataManager(self)
             self.command_router = CommandRouter(self)
             self.security_manager = SecurityManager(self)
             self.private_connection_manager = PrivateConnectionManager(self)  # 新增实例化
             
-            # 2. 初始化私人连接管理器
+            # 2. 初始化私人连接管理器（耗时的IO操作）
             logger.info("🧠 正在初始化私人连接管理器...")
             pm_success = await self.private_connection_manager.initialize()
             if pm_success:
@@ -149,4 +149,3 @@ class SmartBrain:
             logger.info("✅ 大脑核心已关闭")
         except Exception as e:
             logger.error(f"关闭出错: {e}")
-            
