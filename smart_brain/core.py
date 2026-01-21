@@ -72,7 +72,6 @@ class SmartBrain:
             else:
                 logger.warning("⚠️ 私人连接管理器初始化失败，私人功能将不可用")
             
-            
             # 3. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
@@ -130,10 +129,6 @@ class SmartBrain:
             # 1. 关闭私人连接管理器
             if self.private_connection_manager:
                 await self.private_connection_manager.shutdown()
-            
-            # ✅ 删除：不再需要关闭独立的API服务器
-            # if self.data_manager:
-            #     await self.data_manager.stop_api_server()
             
             # 2. 取消状态日志任务
             if self.status_log_task:

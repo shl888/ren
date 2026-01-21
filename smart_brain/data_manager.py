@@ -5,7 +5,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime
-from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +23,9 @@ class DataManager:
             'market_data': {},
             'private_data': {},
             'encrypted_keys': {},
-            'env_apis': self._load_apis_from_env(),  # 新增：从环境变量加载API
-            'exchange_tokens': {}  # 存放币安listenKey等令牌
+            'env_apis': self._load_apis_from_env(),
+            'exchange_tokens': {}
         }
-        
     
     def _load_apis_from_env(self):
         """从环境变量加载API凭证"""
@@ -39,7 +37,7 @@ class DataManager:
             'okx': {
                 'api_key': os.getenv('OKX_API_KEY'),
                 'api_secret': os.getenv('OKX_API_SECRET'),
-                'passphrase': os.getenv('OKX_passphrase', ''),  # ← 添加这一行！
+                'passphrase': os.getenv('OKX_passphrase', ''),
             }
         }
         
@@ -51,8 +49,7 @@ class DataManager:
         logger.info(f"✅【智能大脑】已从环境变量加载API凭证")
         return apis
     
-    # ✅ 注意：以下处理器方法保持不变，只是移除了装饰器
-    # 路由将由launcher.py在主服务器中统一注册
+    # ==================== HTTP API处理器 ====================
     
     async def handle_api_root(self, request):
         """API根路径"""
@@ -65,7 +62,8 @@ class DataManager:
                 "/api/brain/data": "查看所有存储数据",
                 "/api/brain/data/market": "查看市场数据",
                 "/api/brain/data/private": "查看私人数据",
-                "/api/brain/status": "查看数据状态"
+                "/api/brain/status": "查看数据状态",
+                "/api/brain/data/clear": "清空数据（谨慎使用）"
             },
             "current_time": datetime.now().isoformat()
         }
@@ -302,7 +300,92 @@ class DataManager:
         }
         return web.json_response(status)
     
-    # ✅ 以下原有方法保持不变
+    # ✅ 修改：将私有方法改为公有方法
+    async def handle_clear_data(self, request):
+        """清空所有数据"""
+        from aiohttp import web
+        try:
+            # 记录清空前状态
+            before_stats = {
+                "market_data_count": len(self.memory_store['market_data']),
+                "private_data_count": len(self.memory_store['private_data'])
+            }
+            
+            # 清空数据
+            self.memory_store['market_data'].clear()
+            self.memory_store['private_data'].clear()
+            
+            # 重置状态
+            self.last_market_time = None
+            self.last_market_count = 0
+            self.last_account_time = None
+            self.last_trade_time = None
+            
+            logger.warning(f"⚠️【智能大脑】通过API清空所有数据: {before_stats}")
+            
+            return web.json_response({
+                "success": True,
+                "message": "所有数据已清空",
+                "before_stats": before_stats,
+                "after_stats": {
+                    "market_data_count": 0,
+                    "private_data_count": 0
+                },
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】清空数据失败: {e}")
+            return web.json_response({
+                "success": False,
+                "error": str(e)
+            }, status=500)
+    
+    async def handle_clear_data_type(self, request):
+        """清空特定类型数据"""
+        from aiohttp import web
+        data_type = request.match_info.get('data_type', '').lower()
+        
+        try:
+            if data_type == 'market':
+                before_count = len(self.memory_store['market_data'])
+                self.memory_store['market_data'].clear()
+                self.last_market_time = None
+                self.last_market_count = 0
+                message = f"清空市场数据，共{before_count}条"
+                
+            elif data_type == 'private':
+                before_count = len(self.memory_store['private_data'])
+                self.memory_store['private_data'].clear()
+                self.last_account_time = None
+                self.last_trade_time = None
+                message = f"清空私人数据，共{before_count}条"
+                
+            else:
+                return web.json_response({
+                    "success": False,
+                    "error": f"不支持的数据类型: {data_type}",
+                    "supported_types": ["market", "private"]
+                }, status=400)
+            
+            logger.warning(f"⚠️【智能大脑】通过API清空{data_type}数据")
+            
+            return web.json_response({
+                "success": True,
+                "message": message,
+                "data_type": data_type,
+                "before_count": before_count,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】清空{data_type}数据失败: {e}")
+            return web.json_response({
+                "success": False,
+                "error": str(e)
+            }, status=500)
+    
+    # ==================== 核心数据处理方法 ====================
     
     async def receive_market_data(self, processed_data):
         """
