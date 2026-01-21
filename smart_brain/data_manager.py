@@ -300,7 +300,6 @@ class DataManager:
         }
         return web.json_response(status)
     
-    # ✅ 修改：将私有方法改为公有方法
     async def handle_clear_data(self, request):
         """清空所有数据"""
         from aiohttp import web
@@ -555,31 +554,38 @@ class DataManager:
                 await asyncio.sleep(10)
     
     async def store_market_data(self, data):
-        """存储市场数据到内存 - 新的覆盖旧的"""
+        """存储市场数据到内存 - 每个symbol独立覆盖存储"""
         try:
             if not data:
                 return
                 
             if isinstance(data, list) and len(data) > 0:
-                # 批量数据：存储整个列表，按第一个symbol作为键
-                first_item = data[0]
-                symbol = first_item.get('symbol', 'batch_data')
-                storage_key = f"market_{symbol}"
+                # ✅ 遍历列表，每个symbol独立存储
+                for item in data:
+                    symbol = item.get('symbol', 'unknown')
+                    if not symbol or symbol == 'unknown':
+                        logger.warning(f"⚠️【智能大脑】跳过无symbol的数据: {item}")
+                        continue
+                    
+                    storage_key = f"market_{symbol}"
+                    
+                    stored_data = {
+                        'raw_data': item,  # 单条数据
+                        'received_at': datetime.now().isoformat(),
+                        'count': 1,
+                        'symbol': symbol,
+                        'data_type': 'single'
+                    }
+                    
+                    # ✅ 新数据覆盖旧数据
+                    self.memory_store['market_data'][storage_key] = stored_data
                 
-                stored_data = {
-                    'raw_data': data,  # 存储整个列表
-                    'received_at': datetime.now().isoformat(),
-                    'count': len(data),
-                    'symbol': symbol,
-                    'data_type': 'batch'
-                }
-                
-                # ✅ 新的覆盖旧的
-                self.memory_store['market_data'][storage_key] = stored_data
-                logger.debug(f"✅【智能大脑】存储市场数据: {storage_key}, {len(data)}条")
+                # ✅ 记录统计信息
+                unique_symbols = len(set([i.get('symbol') for i in data if 'symbol' in i]))
+                logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条，涉及{unique_symbols}个合约")
                 
             elif isinstance(data, dict):
-                # 单个数据对象
+                # 单个数据对象（保留原有逻辑）
                 symbol = data.get('symbol', 'single_data')
                 storage_key = f"market_{symbol}"
                 
@@ -591,7 +597,6 @@ class DataManager:
                     'data_type': 'single'
                 }
                 
-                # ✅ 新的覆盖旧的
                 self.memory_store['market_data'][storage_key] = stored_data
                 logger.debug(f"✅【智能大脑】存储市场数据: {storage_key}")
                 
@@ -612,4 +617,3 @@ class DataManager:
         # 这个通用方法可能被更专门的推送方法替代
         # 保留这个空方法是为了接口兼容
         pass
-      
