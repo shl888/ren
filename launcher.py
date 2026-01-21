@@ -111,92 +111,27 @@ async def main():
         port = int(os.getenv('PORT', 10000))
         http_server = HTTPServer(host='0.0.0.0', port=port)
         
-        # ==================== 2. 注册路由 ====================
+        # ==================== 2. 注册路由（基础路由 + 大脑路由） ====================
         logger.info("【2️⃣】注册路由...")
+        
+        # 2.1 注册基础路由
         from funding_settlement.api_routes import setup_funding_settlement_routes
         setup_funding_settlement_routes(http_server.app)
         
-        # ==================== 3. 启动HTTP服务器 ====================
-        logger.info("【3️⃣】启动HTTP服务器...")
-        http_runner = await start_http_server(http_server)
-        
-        from shared_data.data_store import data_store
-        data_store.set_http_server_ready(True)
-        logger.info("✅ HTTP服务已就绪！")
-        
-        # ==================== 4. 初始化PipelineManager（双管道） ====================
-        logger.info("【4️⃣】初始化PipelineManager（双管道）...")
-        pipeline_manager = PipelineManager()
-        
-        # ==================== 5. 初始化资金费率管理器 ====================
-        logger.info("【5️⃣】初始化资金费率管理器...")
-        funding_manager = FundingSettlementManager()
-        
-        # ==================== 6. 创建精简版大脑（先创建大脑） ====================
-        logger.info("【6️⃣】创建精简版大脑...")
+        # 2.2 ✅ 创建大脑实例（仅实例化，不建立连接）
+        logger.info("【2️⃣.1】创建精简版大脑实例...")
         brain = SmartBrain(
             http_server=http_server,
-            http_runner=http_runner,
-            pipeline_manager=pipeline_manager,
-            funding_manager=funding_manager,
-            frontend_relay=None  # 先设为None，稍后设置
+            http_runner=None,  # 稍后设置
+            pipeline_manager=None,  # 稍后设置
+            funding_manager=None,  # 稍后设置
+            frontend_relay=None
         )
         
-        # 设置数据存储的引用
-        data_store.pipeline_manager = pipeline_manager
-        
-        # ==================== 7. 大脑初始化（现在会自动初始化私人连接） ====================
-        logger.info("【7️⃣】大脑初始化...")
-        brain_init_success = await brain.initialize()
-        
-        if not brain_init_success:
-            logger.error("❌ 大脑初始化失败，程序将退出")
-            return
-        
-        # 检查私人连接管理器状态
-        if hasattr(brain, 'private_connection_manager'):
-            pm_status = "✅ 已初始化" if brain.private_connection_manager.running else "❌ 初始化失败"
-            logger.info(f"🧠 私人连接管理器状态: {pm_status}")
-        
-        # ==================== 8. 初始化前端中继（需要大脑实例） ====================
-        logger.info("【8️⃣】初始化前端中继服务器...")
-        try:
-            # 现在有大脑实例了，创建前端中继
-            frontend_relay = FrontendRelayServer(
-                brain_instance=brain,  # ✅ 传入大脑实例
-                port=10001
-            )
-            await frontend_relay.start()
-            
-            # ✅ 将前端中继设置回大脑
-            brain.frontend_relay = frontend_relay
-            
-            logger.info("✅ 前端中继启动完成！")
-        except ImportError:
-            logger.warning("⚠️ 前端中继模块未找到，跳过前端功能")
-        except Exception as e:
-            logger.error(f"❌ 前端中继启动失败: {e}")
-        
-        # ==================== 9. 设置PipelineManager回调 ====================
-        logger.info("【9️⃣】设置数据处理回调...")
-        pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
-        pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
-        
-        # ==================== 10. 启动数据处理管道 ====================
-        logger.info("【🔟】启动数据处理管道...")
-        await pipeline_manager.start()
-        
-        # ==================== 11. 延迟启动WebSocket ====================
-        logger.info("【1️⃣1️⃣】准备延迟启动WebSocket...")
-        ws_admin = WebSocketAdmin()
-        asyncio.create_task(delayed_ws_init(ws_admin))
-        brain.ws_admin = ws_admin  # 传递给大脑
-        
-        # ==================== ✅ 修改：使用和原来路由文件相同的方式注册路由 ====================
+        # 2.3 ✅ 注册大脑DataManager API路由（关键！在启动服务器前注册）
         if brain.data_manager:
-            logger.info("【1️⃣2️⃣】注册大脑DataManager API路由到主服务器...")
+            logger.info("【2️⃣.2】注册大脑DataManager API路由到主服务器...")
             
-            # ✅ 使用和原来路由文件相同的方式：app.router.add_get()
             app = http_server.app
             
             # 基本路由
@@ -218,7 +153,7 @@ async def main():
             app.router.add_get('/api/brain/apis', brain.data_manager.handle_get_apis)
             app.router.add_get('/api/brain/status', brain.data_manager.handle_get_status)
             
-            # ✅ 清空数据路由（谨慎使用）
+            # 清空数据路由（谨慎使用）
             app.router.add_delete('/api/brain/data/clear', brain.data_manager.handle_clear_data)
             app.router.add_delete('/api/brain/data/clear/{data_type}', brain.data_manager.handle_clear_data_type)
             
@@ -230,7 +165,73 @@ async def main():
             logger.info(f"  • 系统状态: /api/brain/status")
             logger.info(f"  • API状态: /api/brain/apis")
             logger.info(f"  • 清空数据: /api/brain/data/clear (谨慎使用)")
-        # ===================================================================
+        
+        # ==================== 3. 启动HTTP服务器 ====================
+        logger.info("【3️⃣】启动HTTP服务器...")
+        http_runner = await start_http_server(http_server)
+        
+        # 补全大脑实例的引用
+        brain.http_runner = http_runner
+        
+        from shared_data.data_store import data_store
+        data_store.set_http_server_ready(True)
+        logger.info("✅ HTTP服务已就绪！")
+        
+        # ==================== 4. 初始化PipelineManager（双管道） ====================
+        logger.info("【4️⃣】初始化PipelineManager（双管道）...")
+        pipeline_manager = PipelineManager()
+        
+        # 注入到大脑实例
+        brain.pipeline_manager = pipeline_manager
+        data_store.pipeline_manager = pipeline_manager
+        
+        # ==================== 5. 初始化资金费率管理器 ====================
+        logger.info("【5️⃣】初始化资金费率管理器...")
+        funding_manager = FundingSettlementManager()
+        brain.funding_manager = funding_manager
+        
+        # ==================== 6. 大脑初始化（现在可以慢慢建立私人连接） ====================
+        logger.info("【6️⃣】大脑初始化（建立私人连接，不影响HTTP服务）...")
+        brain_init_success = await brain.initialize()
+        
+        if not brain_init_success:
+            logger.error("❌ 大脑初始化失败，但HTTP服务仍在运行")
+            # 不return，让HTTP服务继续运行
+        
+        # 检查私人连接管理器状态
+        if hasattr(brain, 'private_connection_manager'):
+            pm_status = "✅ 已初始化" if brain.private_connection_manager.running else "❌ 初始化失败"
+            logger.info(f"🧠 私人连接管理器状态: {pm_status}")
+        
+        # ==================== 7. 初始化前端中继（需要大脑实例） ====================
+        logger.info("【7️⃣】初始化前端中继服务器...")
+        try:
+            frontend_relay = FrontendRelayServer(
+                brain_instance=brain,  # ✅ 传入大脑实例
+                port=10001
+            )
+            await frontend_relay.start()
+            brain.frontend_relay = frontend_relay
+            logger.info("✅ 前端中继启动完成！")
+        except ImportError:
+            logger.warning("⚠️ 前端中继模块未找到，跳过前端功能")
+        except Exception as e:
+            logger.error(f"❌ 前端中继启动失败: {e}")
+        
+        # ==================== 8. 设置PipelineManager回调 ====================
+        logger.info("【8️⃣】设置数据处理回调...")
+        pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
+        pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
+        
+        # ==================== 9. 启动数据处理管道 ====================
+        logger.info("【9️⃣】启动数据处理管道...")
+        await pipeline_manager.start()
+        
+        # ==================== 10. 延迟启动WebSocket ====================
+        logger.info("【🔟】准备延迟启动WebSocket...")
+        ws_admin = WebSocketAdmin()
+        asyncio.create_task(delayed_ws_init(ws_admin))
+        brain.ws_admin = ws_admin  # 传递给大脑
         
         # ==================== 完成初始化 ====================
         brain.running = True
@@ -238,7 +239,7 @@ async def main():
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # ==================== 13. 运行大脑 ====================
+        # ==================== 11. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
@@ -259,4 +260,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
