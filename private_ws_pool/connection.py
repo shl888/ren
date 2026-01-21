@@ -264,18 +264,21 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     async def _authenticate(self) -> bool:
         """欧意WebSocket认证"""
         try:
-            # 生成时间戳（ISO 8601格式）
-            timestamp = datetime.utcnow().isoformat(timespec='milliseconds') + 'Z'
+            # ✅ 生成Unix时间戳（秒）
+            timestamp = str(int(time.time()))
             
-            # 生成签名
+            # ✅ 正确的签名消息：timestamp + "GET" + "/users/self/verify"
             message = timestamp + 'GET' + '/users/self/verify'
-            signature = base64.b64encode(
-                hmac.new(
-                    self.api_secret.encode('utf-8'),
-                    message.encode('utf-8'),
-                    hashlib.sha256
-                ).digest()
-            ).decode('utf-8')
+            
+            # ✅ 生成HMAC-SHA256签名
+            signature = hmac.new(
+                self.api_secret.encode('utf-8'),
+                message.encode('utf-8'),
+                hashlib.sha256
+            ).digest()
+            
+            # ✅ Base64编码
+            signature_base64 = base64.b64encode(signature).decode('utf-8')
             
             # 构造认证消息
             auth_msg = {
@@ -284,16 +287,17 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     {
                         "apiKey": self.api_key,
                         "passphrase": self.passphrase,
-                        "timestamp": timestamp,
-                        "sign": signature
+                        "timestamp": timestamp,  # ✅ 使用Unix时间戳
+                        "sign": signature_base64
                     }
                 ]
             }
             
+            logger.debug(f"[欧意私人] 发送认证请求: timestamp={timestamp}")
             await self.ws.send(json.dumps(auth_msg))
             
             # 等待认证响应
-            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
+            response = await asyncio.wait_for(self.ws.recv(), timeout=10)
             response_data = json.loads(response)
             
             if response_data.get('event') == 'login' and response_data.get('code') == '0':
