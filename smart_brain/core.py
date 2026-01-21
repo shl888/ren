@@ -33,6 +33,7 @@ class SmartBrain:
         self.data_manager = None
         self.command_router = None
         self.security_manager = None
+        self.private_connection_manager = None  # 新增：私人连接指挥官
         
         # WebSocket管理员
         self.ws_admin = None
@@ -54,15 +55,27 @@ class SmartBrain:
             from .data_manager import DataManager
             from .command_router import CommandRouter
             from .security_manager import SecurityManager
+            from .private_connection_manager import PrivateConnectionManager  # 新增导入
             
             self.data_manager = DataManager(self)
             self.command_router = CommandRouter(self)
             self.security_manager = SecurityManager(self)
+            self.private_connection_manager = PrivateConnectionManager(self)  # 新增实例化
             
-            # 2. 启动状态日志任务
+            # 2. 初始化私人连接管理器
+            logger.info("🧠 正在初始化私人连接管理器...")
+            pm_success = await self.private_connection_manager.initialize()
+            if pm_success:
+                logger.info("✅ 私人连接管理器初始化成功")
+                # 启动所有私人连接
+                asyncio.create_task(self.private_connection_manager.start_all_connections())
+            else:
+                logger.warning("⚠️ 私人连接管理器初始化失败，私人功能将不可用")
+            
+            # 3. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 3. 完成初始化
+            # 4. 完成初始化
             self.running = True
             logger.info("✅ 大脑核心初始化完成")
             
@@ -113,7 +126,11 @@ class SmartBrain:
         logger.info("正在关闭大脑核心...")
         
         try:
-            # 1. 取消状态日志任务
+            # 1. 关闭私人连接管理器
+            if self.private_connection_manager:
+                await self.private_connection_manager.shutdown()
+            
+            # 2. 取消状态日志任务
             if self.status_log_task:
                 self.status_log_task.cancel()
                 try:
@@ -121,14 +138,15 @@ class SmartBrain:
                 except asyncio.CancelledError:
                     pass
             
-            # 2. 关闭前端中继服务器
+            # 3. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 3. 停止WebSocket管理员
+            # 4. 停止WebSocket管理员
             if self.ws_admin:
                 await self.ws_admin.stop()
             
             logger.info("✅ 大脑核心已关闭")
         except Exception as e:
             logger.error(f"关闭出错: {e}")
+            
