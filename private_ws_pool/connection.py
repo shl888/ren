@@ -115,10 +115,10 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     def __init__(self, listen_key: str, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
-           # （实盘地址）
+        # （币安实盘地址）
 #        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
         
-        # （测试网地址）
+        # （币安测试网地址）
         self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
         
     async def connect(self):
@@ -220,8 +220,15 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
-#        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"
+        # 欧意真实交易地址
+#        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"   
+        
+        # 欧意模拟交易地址
         self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+        
+        # 欧意模拟交易时,需要添加这一行
+        self.broker_id = "9999"
+        
         self.authenticated = False
     
     async def connect(self):
@@ -319,13 +326,23 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     async def _subscribe_channels(self) -> bool:
         """订阅欧意私人频道"""
         try:
-            # 订阅账户、订单、持仓频道
+            # (真实交易)订阅账户、订单、持仓频道
+#            subscribe_msg = {
+#                "op": "subscribe",
+#                "args": [
+#                    {"channel": "account"},
+#                    {"channel": "orders", "instType": "SWAP"},
+#                    {"channel": "positions", "instType": "SWAP"}
+#                ]
+#            }
+            
+            # (模拟交易)修改为带brokerId的订阅
             subscribe_msg = {
                 "op": "subscribe",
                 "args": [
-                    {"channel": "account"},
-                    {"channel": "orders", "instType": "SWAP"},
-                    {"channel": "positions", "instType": "SWAP"}
+                    {"channel": "account", "brokerId": self.broker_id},
+                    {"channel": "orders", "instType": "SWAP", "brokerId": self.broker_id},
+                    {"channel": "positions", "instType": "SWAP", "brokerId": self.broker_id}
                 ]
             }
             
