@@ -11,6 +11,11 @@ import signal
 from datetime import datetime
 import threading
 
+# ==================== 新增：加载环境变量 ====================
+from dotenv import load_dotenv
+load_dotenv()  # 从 .env 文件加载环境变量
+# =======================================================
+
 # 设置路径
 CURRENT_FILE = os.path.abspath(__file__)
 PROJECT_ROOT = os.path.dirname(CURRENT_FILE)
@@ -90,6 +95,17 @@ async def main():
     brain = None  # 提前声明变量
     
     try:
+        # ==================== 新增：验证环境变量 ====================
+        # 检查必要的环境变量
+        required_vars = ['BINANCE_API_KEY', 'BINANCE_API_SECRET', 
+                        'OKX_API_KEY', 'OKX_API_SECRET']
+        missing_vars = [var for var in required_vars if not os.getenv(var)]
+        if missing_vars:
+            logger.warning(f"⚠️ 以下环境变量未设置，私人连接可能不可用: {missing_vars}")
+        else:
+            logger.info("✅ 所有私人连接环境变量已就绪")
+        # =========================================================
+        
         # ==================== 1. 获取端口并创建HTTP服务器 ====================
         logger.info("【1️⃣】创建HTTP服务器...")
         port = int(os.getenv('PORT', 10000))
@@ -129,9 +145,18 @@ async def main():
         # 设置数据存储的引用
         data_store.pipeline_manager = pipeline_manager
         
-        # ==================== 7. 大脑初始化（只初始化自己的组件） ====================
+        # ==================== 7. 大脑初始化（现在会自动初始化私人连接） ====================
         logger.info("【7️⃣】大脑初始化...")
-        await brain.initialize()
+        brain_init_success = await brain.initialize()
+        
+        if not brain_init_success:
+            logger.error("❌ 大脑初始化失败，程序将退出")
+            return
+        
+        # 检查私人连接管理器状态
+        if hasattr(brain, 'private_connection_manager'):
+            pm_status = "✅ 已初始化" if brain.private_connection_manager.running else "❌ 初始化失败"
+            logger.info(f"🧠 私人连接管理器状态: {pm_status}")
         
         # ==================== 8. 初始化前端中继（需要大脑实例） ====================
         logger.info("【8️⃣】初始化前端中继服务器...")
