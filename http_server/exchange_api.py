@@ -80,8 +80,11 @@ class ExchangeAPI:
             {"listenKey": "xxx"} 或 {"error": "message"}
         """
         try:
-            # 币安Futures API 端点
-            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # (实盘地址)币安 API 端点
+#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            
+            # (模拟地址)币安Futures API 端点
+            url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
             
             # 生成请求头 (币安此端点只需要API-KEY)
             headers = {
@@ -119,7 +122,12 @@ class ExchangeAPI:
             {"success": True/False, "error": "message"}
         """
         try:
-            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # (实盘地址)币安 API 端点
+#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            
+            # (模拟地址)币安Futures API 端点
+            url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
+            
             headers = {"X-MBX-APIKEY": api_key}
             
             # 币安使用PUT方法延长listenKey
@@ -152,7 +160,12 @@ class ExchangeAPI:
             {"success": True/False, "error": "message"}
         """
         try:
-            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # (实盘地址)币安 API 端点
+#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            
+            # (模拟地址)币安Futures API 端点
+            url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
+            
             headers = {"X-MBX-APIKEY": api_key}
             
             # 币安使用DELETE方法关闭listenKey
