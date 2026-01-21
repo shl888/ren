@@ -179,11 +179,11 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     
     async def _process_binance_message(self, data: Dict[str, Any]):
         """处理币安私人消息"""
-        # 1. 保存原始数据
+        # 1. 保存原始数据到缓存
         event_type = data.get('e', 'unknown')
         await self._save_raw_data(event_type, data)
         
-        # 2. 格式化处理（简单版，后续由formatter完善）
+        # 2. 格式化处理
         formatted = {
             'exchange': 'binance',
             'data_type': self._map_binance_event_type(event_type),
@@ -195,11 +195,13 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             }
         }
         
-        # 3. 推送给大脑
+        # 3. ✅ 只传递给大脑，不在连接池推送
         try:
+            # data_callback 是大脑的回调函数，只负责接收数据
+            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
-            logger.error(f"[币安私人] 推送数据失败: {e}")
+            logger.error(f"[币安私人] 传递给大脑失败: {e}")
     
     def _map_binance_event_type(self, event_type: str) -> str:
         """映射币安事件类型到标准类型"""
@@ -413,11 +415,13 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             }
         }
         
-        # 4. 推送给大脑
+        # 4. ✅ 只传递给大脑，不在连接池推送
         try:
+            # data_callback 是大脑的回调函数，只负责接收数据
+            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
-            logger.error(f"[欧意私人] 推送数据失败: {e}")
+            logger.error(f"[欧意私人] 传递给大脑失败: {e}")
     
     def _map_okx_channel_type(self, channel: str) -> str:
         """映射欧意频道到标准类型"""
