@@ -68,7 +68,6 @@ class PrivateWebSocketConnection:
         while self.connected:
             await asyncio.sleep(5)
             
-            # 检查是否收到消息
             if self.last_message_time:
                 seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
                 if seconds_since_last > 30:  # 30秒没收到消息认为有问题
@@ -112,15 +111,20 @@ class PrivateWebSocketConnection:
 class BinancePrivateConnection(PrivateWebSocketConnection):
     """币安私人连接"""
     
-    def __init__(self, listen_key: str, **kwargs):
+    def __init__(self, listen_key: str, client, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
-        # （币安实盘地址）
-#        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
+        self.client = client
         
-        # （币安测试网地址）
-        self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        # 根据环境自动选择测试网/主网
+        if os.getenv('BINANCE_TESTNET', 'true').lower() == 'true':
+            self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        else:
+            self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
         
+        # 续期任务
+        self.renew_task = None
+    
     async def connect(self):
         """建立币安私人连接"""
         try:
@@ -136,20 +140,85 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             self.connected = True
             self.last_message_time = datetime.now()
             
-            # 启动接收任务
+            # ✅ 关键：币安测试网必须手动发送LISTEN
+            await self._send_listen()
+            
+            # 启动任务
             self.receive_task = asyncio.create_task(self._receive_messages())
-            # 启动健康检查
             self.health_check_task = asyncio.create_task(self._start_health_check())
+            
+            # ✅ 启动listenKey续期任务（每30分钟）
+            self.renew_task = asyncio.create_task(self._renew_listen_key_periodically())
             
             await self._report_status('connection_established')
             logger.info(f"[币安私人] 连接建立成功")
-            
             return True
             
         except Exception as e:
             logger.error(f"[币安私人] 连接失败: {e}")
             await self._report_status('connection_failed', {'error': str(e)})
             return False
+    
+    async def _send_listen(self):
+        """币安测试网必须手动发送LISTEN消息"""
+        try:
+            # 测试网特殊要求：连接后必须发送LISTEN
+            listen_msg = {
+                "method": "LISTEN",
+                "params": [self.listen_key],
+                "id": 1
+            }
+            await self.ws.send(json.dumps(listen_msg))
+            logger.info("[币安私人] 已发送LISTEN消息")
+            
+            # 等待确认
+            response = await asyncio.wait_for(self.ws.recv(), timeout=5)
+            response_data = json.loads(response)
+            logger.info(f"[币安私人] LISTEN响应: {response_data}")
+            
+            # 检查是否是错误响应
+            if 'error' in response_data:
+                logger.error(f"[币安私人] LISTEN错误: {response_data['error']}")
+            else:
+                logger.info("[币安私人] LISTEN成功")
+            
+        except asyncio.TimeoutError:
+            logger.warning("[币安私人] LISTEN响应超时，但可能已静默成功")
+        except Exception as e:
+            logger.error(f"[币安私人] LISTEN失败: {e}")
+    
+    async def _renew_listen_key_periodically(self):
+        """每30分钟续期listenKey"""
+        while self.connected:
+            try:
+                await asyncio.sleep(30 * 60)  # 30分钟
+                logger.info("[币安私人] 正在续期listenKey...")
+                self.client.futures_stream_keepalive()
+                await self._report_status('listenkey_renewed')
+                logger.info("[币安私人] listenKey续期成功")
+            except Exception as e:
+                logger.error(f"[币安私人] listenKey续期失败: {e}")
+                await self._report_status('listenkey_renew_failed', {'error': str(e)})
+    
+    async def disconnect(self):
+        """断开连接（增强版）"""
+        try:
+            # 取消续期任务
+            if self.renew_task:
+                self.renew_task.cancel()
+            
+            # 调用父类断开
+            await super().disconnect()
+            
+            # 关闭listenKey（可选）
+            try:
+                self.client.futures_stream_close()
+                logger.info("[币安私人] listenKey已关闭")
+            except:
+                pass
+                
+        except Exception as e:
+            logger.error(f"[币安私人] 断开连接失败: {e}")
     
     async def _receive_messages(self):
         """接收币安私人消息"""
@@ -195,10 +264,8 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             }
         }
         
-        # 3. ✅ 只传递给大脑，不在连接池推送
+        # 3. ✅ 传递给大脑
         try:
-            # data_callback 是大脑的回调函数，只负责接收数据
-            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[币安私人] 传递给大脑失败: {e}")
@@ -222,14 +289,14 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
-        # 欧意真实交易地址
-#        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"   
         
-        # 欧意模拟交易地址
-        self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
-        
-        # 欧意模拟交易时,需要添加这一行
-        self.broker_id = "9999"
+        # 根据环境选择测试网/主网
+        if os.getenv('OKX_TESTNET', 'true').lower() == 'true':
+            self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
+            self.broker_id = "9999"
+        else:
+            self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"
+            self.broker_id = None
         
         self.authenticated = False
     
@@ -278,20 +345,20 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     async def _authenticate(self) -> bool:
         """欧意WebSocket认证"""
         try:
-            # ✅ 生成Unix时间戳（秒）
+            # 生成Unix时间戳（秒）
             timestamp = str(int(time.time()))
             
-            # ✅ 正确的签名消息：timestamp + "GET" + "/users/self/verify"
+            # 正确的签名消息：timestamp + "GET" + "/users/self/verify"
             message = timestamp + 'GET' + '/users/self/verify'
             
-            # ✅ 生成HMAC-SHA256签名
+            # 生成HMAC-SHA256签名
             signature = hmac.new(
                 self.api_secret.encode('utf-8'),
                 message.encode('utf-8'),
                 hashlib.sha256
             ).digest()
             
-            # ✅ Base64编码
+            # Base64编码
             signature_base64 = base64.b64encode(signature).decode('utf-8')
             
             # 构造认证消息
@@ -301,7 +368,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     {
                         "apiKey": self.api_key,
                         "passphrase": self.passphrase,
-                        "timestamp": timestamp,  # ✅ 使用Unix时间戳
+                        "timestamp": timestamp,
                         "sign": signature_base64
                     }
                 ]
@@ -328,30 +395,25 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     async def _subscribe_channels(self) -> bool:
         """订阅欧意私人频道"""
         try:
-            # (真实交易)订阅账户、订单、持仓频道
-#            subscribe_msg = {
-#                "op": "subscribe",
-#                "args": [
-#                    {"channel": "account"},
-#                    {"channel": "orders", "instType": "SWAP"},
-#                    {"channel": "positions", "instType": "SWAP"}
-#                ]
-#            }
+            # 模拟交易需要brokerId
+            args = [
+                {"channel": "account"},
+                {"channel": "orders", "instType": "SWAP"},
+                {"channel": "positions", "instType": "SWAP"}
+            ]
             
-            # (模拟交易)修改为带brokerId的订阅
+            # 如果是模拟交易，添加brokerId
+            if self.broker_id:
+                for arg in args:
+                    arg["brokerId"] = self.broker_id
+            
             subscribe_msg = {
                 "op": "subscribe",
-                "args": [
-                    {"channel": "account", "brokerId": self.broker_id},
-                    {"channel": "orders", "instType": "SWAP", "brokerId": self.broker_id},
-                    {"channel": "positions", "instType": "SWAP", "brokerId": self.broker_id}
-                ]
+                "args": args
             }
             
             await self.ws.send(json.dumps(subscribe_msg))
             logger.info("[欧意私人] 已发送订阅请求")
-            
-            # 这里可以等待订阅响应，但为了简单我们先返回成功
             return True
             
         except Exception as e:
@@ -415,10 +477,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             }
         }
         
-        # 4. ✅ 只传递给大脑，不在连接池推送
+        # 4. ✅ 传递给大脑
         try:
-            # data_callback 是大脑的回调函数，只负责接收数据
-            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[欧意私人] 传递给大脑失败: {e}")
@@ -431,4 +491,3 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             'positions': 'position_update'
         }
         return mapping.get(channel, 'unknown')
-        
