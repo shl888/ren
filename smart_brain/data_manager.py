@@ -300,7 +300,6 @@ class DataManager:
         }
         return web.json_response(status)
     
-    # ✅ 修改：将私有方法改为公有方法
     async def handle_clear_data(self, request):
         """清空所有数据"""
         from aiohttp import web
@@ -581,16 +580,9 @@ class DataManager:
                     # ✅ 新数据覆盖旧数据
                     self.memory_store['market_data'][storage_key] = stored_data
                 
-                # ✅ 同时保存聚合列表（便于快速查询总数）
-                self.memory_store['market_data']['market_all'] = {
-                    'raw_data': data,
-                    'received_at': datetime.now().isoformat(),
-                    'count': len(data),
-                    'symbol': 'all',
-                    'data_type': 'batch'
-                }
-                
-                logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条，涉及{len(set([i.get('symbol') for i in data if 'symbol' in i]))}个合约")
+                # ✅ 记录统计信息
+                unique_symbols = len(set([i.get('symbol') for i in data if 'symbol' in i]))
+                logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条，涉及{unique_symbols}个合约")
                 
             elif isinstance(data, dict):
                 # 单个数据对象（保留原有逻辑）
