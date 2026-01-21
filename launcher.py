@@ -77,45 +77,6 @@ async def delayed_ws_init(ws_admin):
     except Exception as e:
         logger.error(f"WebSocket初始化失败: {e}")
 
-def register_brain_routes(http_server, brain):
-    """注册大脑DataManager API路由到主服务器"""
-    if not brain or not brain.data_manager:
-        return
-    
-    logger.info("📝 注册大脑DataManager API路由到主服务器...")
-    
-    from aiohttp import web
-    
-    # 直接在主服务器应用中添加路由（不冻结的路由器）
-    app = http_server.app
-    
-    # 1. API根路径
-    app.router.add_get('/api/brain/', brain.data_manager.handle_api_root)
-    
-    # 2. 健康检查
-    app.router.add_get('/api/brain/health', brain.data_manager.handle_health)
-    
-    # 3. 数据查看
-    app.router.add_get('/api/brain/data', brain.data_manager.handle_get_all_data)
-    
-    # 4. 市场数据
-    app.router.add_get('/api/brain/data/market', brain.data_manager.handle_get_market_data)
-    app.router.add_get('/api/brain/data/market/{exchange}', brain.data_manager.handle_get_market_data_by_exchange)
-    app.router.add_get('/api/brain/data/market/{exchange}/{symbol}', brain.data_manager.handle_get_market_data_detail)
-    
-    # 5. 私人数据
-    app.router.add_get('/api/brain/data/private', brain.data_manager.handle_get_private_data)
-    app.router.add_get('/api/brain/data/private/{exchange}', brain.data_manager.handle_get_private_data_by_exchange)
-    app.router.add_get('/api/brain/data/private/{exchange}/{data_type}', brain.data_manager.handle_get_private_data_detail)
-    
-    # 6. API凭证状态
-    app.router.add_get('/api/brain/apis', brain.data_manager.handle_get_apis)
-    
-    # 7. 数据状态
-    app.router.add_get('/api/brain/status', brain.data_manager.handle_get_status)
-    
-    logger.info("✅ 大脑DataManager API路由已注册")
-
 async def main():
     """主启动函数 - 完全按照大脑原来的启动顺序"""
     logging.basicConfig(
@@ -151,7 +112,7 @@ async def main():
         http_server = HTTPServer(host='0.0.0.0', port=port)
         
         # ==================== 2. 注册路由 ====================
-        logger.info("【2️⃣】注册资金费率管理器路由...")
+        logger.info("【2️⃣】注册路由...")
         from funding_settlement.api_routes import setup_funding_settlement_routes
         setup_funding_settlement_routes(http_server.app)
         
@@ -197,12 +158,8 @@ async def main():
             pm_status = "✅ 已初始化" if brain.private_connection_manager.running else "❌ 初始化失败"
             logger.info(f"🧠 私人连接管理器状态: {pm_status}")
         
-        # ✅ 重要：在启动任何服务之前注册大脑路由
-        logger.info("【8️⃣】注册大脑API路由...")
-        register_brain_routes(http_server, brain)
-        
-        # ==================== 9. 初始化前端中继（需要大脑实例） ====================
-        logger.info("【9️⃣】初始化前端中继服务器...")
+        # ==================== 8. 初始化前端中继（需要大脑实例） ====================
+        logger.info("【8️⃣】初始化前端中继服务器...")
         try:
             # 现在有大脑实例了，创建前端中继
             frontend_relay = FrontendRelayServer(
@@ -220,32 +177,66 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 前端中继启动失败: {e}")
         
-        # ==================== 10. 设置PipelineManager回调 ====================
-        logger.info("【🔟】设置数据处理回调...")
+        # ==================== 9. 设置PipelineManager回调 ====================
+        logger.info("【9️⃣】设置数据处理回调...")
         pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
         pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
         
-        # ==================== 11. 启动数据处理管道 ====================
-        logger.info("【1️⃣1️⃣】启动数据处理管道...")
+        # ==================== 10. 启动数据处理管道 ====================
+        logger.info("【🔟】启动数据处理管道...")
         await pipeline_manager.start()
         
-        # ==================== 12. 延迟启动WebSocket ====================
-        logger.info("【1️⃣2️⃣】准备延迟启动WebSocket...")
+        # ==================== 11. 延迟启动WebSocket ====================
+        logger.info("【1️⃣1️⃣】准备延迟启动WebSocket...")
         ws_admin = WebSocketAdmin()
         asyncio.create_task(delayed_ws_init(ws_admin))
         brain.ws_admin = ws_admin  # 传递给大脑
+        
+        # ==================== ✅ 修改：使用和原来路由文件相同的方式注册路由 ====================
+        if brain.data_manager:
+            logger.info("【1️⃣2️⃣】注册大脑DataManager API路由到主服务器...")
+            
+            # ✅ 使用和原来路由文件相同的方式：app.router.add_get()
+            app = http_server.app
+            
+            # 基本路由
+            app.router.add_get('/api/brain/', brain.data_manager.handle_api_root)
+            app.router.add_get('/api/brain/health', brain.data_manager.handle_health)
+            
+            # 数据查看路由
+            app.router.add_get('/api/brain/data', brain.data_manager.handle_get_all_data)
+            app.router.add_get('/api/brain/data/market', brain.data_manager.handle_get_market_data)
+            app.router.add_get('/api/brain/data/market/{exchange}', brain.data_manager.handle_get_market_data_by_exchange)
+            app.router.add_get('/api/brain/data/market/{exchange}/{symbol}', brain.data_manager.handle_get_market_data_detail)
+            
+            # 私人数据路由
+            app.router.add_get('/api/brain/data/private', brain.data_manager.handle_get_private_data)
+            app.router.add_get('/api/brain/data/private/{exchange}', brain.data_manager.handle_get_private_data_by_exchange)
+            app.router.add_get('/api/brain/data/private/{exchange}/{data_type}', brain.data_manager.handle_get_private_data_detail)
+            
+            # 状态路由
+            app.router.add_get('/api/brain/apis', brain.data_manager.handle_get_apis)
+            app.router.add_get('/api/brain/status', brain.data_manager.handle_get_status)
+            
+            # ✅ 清空数据路由（谨慎使用）
+            app.router.add_delete('/api/brain/data/clear', brain.data_manager.handle_clear_data)
+            app.router.add_delete('/api/brain/data/clear/{data_type}', brain.data_manager.handle_clear_data_type)
+            
+            logger.info("✅ 大脑DataManager API路由已注册到主服务器")
+            logger.info("📊 大脑数据查看地址:")
+            logger.info(f"  • 所有数据: /api/brain/data")
+            logger.info(f"  • 市场数据: /api/brain/data/market")
+            logger.info(f"  • 私人数据: /api/brain/data/private")
+            logger.info(f"  • 系统状态: /api/brain/status")
+            logger.info(f"  • API状态: /api/brain/apis")
+            logger.info(f"  • 清空数据: /api/brain/data/clear (谨慎使用)")
+        # ===================================================================
         
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
-        logger.info("📊 大脑数据查看地址:")
-        logger.info(f"  • 所有数据: /api/brain/data")
-        logger.info(f"  • 市场数据: /api/brain/data/market")
-        logger.info(f"  • 私人数据: /api/brain/data/private")
-        logger.info(f"  • 系统状态: /api/brain/status")
-        logger.info(f"  • API状态: /api/brain/apis")
         
         # ==================== 13. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
