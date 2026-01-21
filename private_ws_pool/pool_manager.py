@@ -10,7 +10,6 @@ from typing import Dict, Any, Optional, Callable
 from .connection import BinancePrivateConnection, OKXPrivateConnection
 from .raw_data_cache import RawDataCache
 from .data_formatter import PrivateDataFormatter
-from .api_viewer import PrivateDataAPI
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,6 @@ class PrivateWebSocketPool:
         # 组件初始化
         self.raw_data_cache = RawDataCache()
         self.data_formatter = PrivateDataFormatter()
-        self.api_server = None
         
         # 连接存储
         self.connections = {
@@ -43,16 +41,10 @@ class PrivateWebSocketPool:
         
         logger.info("🔗 [私人连接池] 初始化完成")
     
-    async def start(self, start_api: bool = True):
-        """启动连接池（可选启动API服务器）"""
+    async def start(self):
+        """启动连接池"""
         try:
-            # 启动API查看服务器
-            if start_api:
-                self.api_server = PrivateDataAPI(self.raw_data_cache, port=10002)
-                asyncio.create_task(self.api_server.start())
-                logger.info("🌐 [私人连接池] API查看服务器已启动")
-            
-            logger.info("✅ [私人连接池] 已完全启动")
+            logger.info("✅ [私人连接池] 已启动")
             return True
             
         except Exception as e:
@@ -211,10 +203,6 @@ class PrivateWebSocketPool:
         """关闭所有连接和组件"""
         logger.info("🛑 [私人连接池] 正在关闭...")
         
-        # 关闭API服务器
-        if self.api_server:
-            await self.api_server.stop()
-        
         # 关闭所有连接
         shutdown_tasks = []
         for exchange, connection in self.connections.items():
@@ -234,8 +222,7 @@ class PrivateWebSocketPool:
             'connections': {},
             'components': {
                 'raw_data_cache': 'active' if self.raw_data_cache else 'inactive',
-                'data_formatter': self.data_formatter.get_status() if self.data_formatter else 'inactive',
-                'api_server': 'active' if self.api_server else 'inactive'
+                'data_formatter': self.data_formatter.get_status() if self.data_formatter else 'inactive'
             }
         }
         
