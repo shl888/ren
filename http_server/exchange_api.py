@@ -1,12 +1,17 @@
 """
 交易所REST API封装
-处理账户、交易、订单等操作
+处理账户、交易、订单等操作，支持私人WebSocket连接
 """
 import asyncio
 import logging
 import sys
 import os
+import time
+import hmac
+import hashlib
+import urllib.parse
 import ccxt.async_support as ccxt
+import aiohttp
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -21,7 +26,7 @@ from .auth import get_api_config, generate_binance_signature, generate_okx_signa
 logger = logging.getLogger(__name__)
 
 class ExchangeAPI:
-    """交易所API封装"""
+    """交易所API封装 - 支持币安listenKey管理"""
     
     def __init__(self, exchange: str):
         self.exchange = exchange
@@ -59,6 +64,114 @@ class ExchangeAPI:
             logger.error(f"[{self.exchange}] API客户端初始化失败: {e}")
         
         return False
+    
+    # ==================== 新增：币安私人连接HTTP服务 ====================
+    
+    @staticmethod
+    async def get_binance_listen_key(api_key: str, api_secret: str) -> Dict[str, Any]:
+        """
+        获取币安私人WebSocket的listenKey（静态方法）
+        
+        参数:
+            api_key: 币安API Key
+            api_secret: 币安Secret Key
+            
+        返回:
+            {"listenKey": "xxx"} 或 {"error": "message"}
+        """
+        try:
+            # 币安Futures API 端点
+            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            
+            # 生成请求头 (币安此端点只需要API-KEY)
+            headers = {
+                "X-MBX-APIKEY": api_key
+            }
+            
+            # 发送POST请求
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as response:
+                    data = await response.json()
+                    
+                    if 'listenKey' in data:
+                        logger.info("✅ [HTTP] 币安listenKey获取成功")
+                        return {"success": True, "listenKey": data['listenKey']}
+                    else:
+                        error_msg = data.get('msg', 'Unknown error')
+                        logger.error(f"❌ [HTTP] 币安listenKey获取失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 获取币安listenKey异常: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @staticmethod
+    async def keep_alive_binance_listen_key(api_key: str, api_secret: str, listen_key: str) -> Dict[str, Any]:
+        """
+        延长币安listenKey有效期（静态方法）
+        
+        参数:
+            api_key: 币安API Key
+            api_secret: 币安Secret Key
+            listen_key: 要延长的listenKey
+            
+        返回:
+            {"success": True/False, "error": "message"}
+        """
+        try:
+            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            headers = {"X-MBX-APIKEY": api_key}
+            
+            # 币安使用PUT方法延长listenKey
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers) as response:
+                    if response.status == 200:
+                        logger.debug(f"✅ [HTTP] 币安listenKey续期成功: {listen_key[:10]}...")
+                        return {"success": True}
+                    else:
+                        data = await response.json()
+                        error_msg = data.get('msg', f'HTTP {response.status}')
+                        logger.warning(f"⚠️ [HTTP] 币安listenKey续期失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 币安listenKey续期异常: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @staticmethod
+    async def close_binance_listen_key(api_key: str, api_secret: str, listen_key: str) -> Dict[str, Any]:
+        """
+        关闭/删除币安listenKey（静态方法）
+        
+        参数:
+            api_key: 币安API Key
+            api_secret: 币安Secret Key
+            listen_key: 要关闭的listenKey
+            
+        返回:
+            {"success": True/False, "error": "message"}
+        """
+        try:
+            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            headers = {"X-MBX-APIKEY": api_key}
+            
+            # 币安使用DELETE方法关闭listenKey
+            async with aiohttp.ClientSession() as session:
+                async with session.delete(url, headers=headers) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ [HTTP] 币安listenKey关闭成功: {listen_key[:10]}...")
+                        return {"success": True}
+                    else:
+                        data = await response.json()
+                        error_msg = data.get('msg', f'HTTP {response.status}')
+                        logger.warning(f"⚠️ [HTTP] 币安listenKey关闭失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 关闭币安listenKey异常: {e}")
+            return {"success": False, "error": str(e)}
+    
+    # ==================== 原有方法保持不变 ====================
     
     async def fetch_account_balance(self) -> Dict[str, Any]:
         """获取账户余额"""
