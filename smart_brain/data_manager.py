@@ -4,7 +4,10 @@
 import asyncio
 import logging
 import os
+import json
 from datetime import datetime, timedelta
+from typing import Dict, Any, Optional
+from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,15 @@ class DataManager:
             'env_apis': self._load_apis_from_env(),  # 新增：从环境变量加载API
             'exchange_tokens': {}  # 存放币安listenKey等令牌
         }
+        
+        # ✅ 新增：HTTP API服务器相关
+        self.api_port = 10002  # 与前端中继端口10001区分开
+        self.api_app = None
+        self.api_runner = None
+        self.api_site = None
+        
+        # ✅ 初始化API服务器
+        self._setup_api_routes()
     
     def _load_apis_from_env(self):
         """从环境变量加载API凭证"""
@@ -49,6 +61,405 @@ class DataManager:
         logger.info(f"✅【智能大脑】已从环境变量加载API凭证")
         return apis
     
+    # ✅ 新增：API路由设置
+    def _setup_api_routes(self):
+        """设置HTTP API路由"""
+        self.api_app = web.Application()
+        
+        # 1. 根路径：显示所有可用的API
+        self.api_app.router.add_get('/', self._handle_api_root)
+        
+        # 2. 健康检查
+        self.api_app.router.add_get('/health', self._handle_health)
+        
+        # 3. 查看所有存储数据
+        self.api_app.router.add_get('/data', self._handle_get_all_data)
+        
+        # 4. 查看市场数据
+        self.api_app.router.add_get('/data/market', self._handle_get_market_data)
+        self.api_app.router.add_get('/data/market/{exchange}', self._handle_get_market_data_by_exchange)
+        self.api_app.router.add_get('/data/market/{exchange}/{symbol}', self._handle_get_market_data_detail)
+        
+        # 5. 查看私人数据
+        self.api_app.router.add_get('/data/private', self._handle_get_private_data)
+        self.api_app.router.add_get('/data/private/{exchange}', self._handle_get_private_data_by_exchange)
+        self.api_app.router.add_get('/data/private/{exchange}/{data_type}', self._handle_get_private_data_detail)
+        
+        # 6. 查看API凭证状态
+        self.api_app.router.add_get('/apis', self._handle_get_apis)
+        
+        # 7. 查看数据状态
+        self.api_app.router.add_get('/status', self._handle_get_status)
+        
+        # 8. 清空数据（谨慎使用）
+        self.api_app.router.add_delete('/data/clear', self._handle_clear_data)
+        self.api_app.router.add_delete('/data/clear/{data_type}', self._handle_clear_data_type)
+        
+        logger.info(f"✅【智能大脑】HTTP API路由设置完成，端口: {self.api_port}")
+    
+    # ✅ 新增：HTTP API处理器
+    async def _handle_api_root(self, request):
+        """API根路径"""
+        api_docs = {
+            "service": "智能大脑数据管理器API",
+            "version": "1.0.0",
+            "endpoints": {
+                "/health": "健康检查",
+                "/data": "查看所有存储数据",
+                "/data/market": "查看市场数据",
+                "/data/private": "查看私人数据",
+                "/apis": "查看API凭证状态",
+                "/status": "查看数据状态",
+                "/data/clear": "清空数据（谨慎使用）"
+            },
+            "current_time": datetime.now().isoformat(),
+            "port": self.api_port
+        }
+        return web.json_response(api_docs)
+    
+    async def _handle_health(self, request):
+        """健康检查"""
+        return web.json_response({
+            "status": "healthy",
+            "service": "data_manager",
+            "timestamp": datetime.now().isoformat(),
+            "memory_store_stats": {
+                "market_data_count": len(self.memory_store['market_data']),
+                "private_data_count": len(self.memory_store['private_data']),
+                "encrypted_keys_count": len(self.memory_store['encrypted_keys']),
+                "exchange_tokens_count": len(self.memory_store['exchange_tokens'])
+            }
+        })
+    
+    async def _handle_get_all_data(self, request):
+        """查看所有存储数据（概览）"""
+        response = {
+            "timestamp": datetime.now().isoformat(),
+            "market_data": {
+                "count": len(self.memory_store['market_data']),
+                "keys": list(self.memory_store['market_data'].keys()),
+                "last_update": self._format_time_diff(self.last_market_time) if self.last_market_time else "从未更新"
+            },
+            "private_data": {
+                "count": len(self.memory_store['private_data']),
+                "keys": list(self.memory_store['private_data'].keys()),
+                "last_account_update": self._format_time_diff(self.last_account_time) if self.last_account_time else "从未更新",
+                "last_trade_update": self._format_time_diff(self.last_trade_time) if self.last_trade_time else "从未更新"
+            },
+            "encrypted_keys": {
+                "count": len(self.memory_store['encrypted_keys']),
+                "keys": list(self.memory_store['encrypted_keys'].keys())
+            },
+            "exchange_tokens": {
+                "count": len(self.memory_store['exchange_tokens']),
+                "keys": list(self.memory_store['exchange_tokens'].keys())
+            }
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_market_data(self, request):
+        """查看所有市场数据"""
+        # 格式化市场数据以便阅读
+        formatted_market_data = {}
+        for key, data in self.memory_store['market_data'].items():
+            formatted_market_data[key] = {
+                "symbol": data.get('symbol'),
+                "data_type": data.get('data_type'),
+                "count": data.get('count', 0),
+                "received_at": data.get('received_at'),
+                "raw_data_sample": data.get('raw_data')[:1] if isinstance(data.get('raw_data'), list) and len(data.get('raw_data')) > 0 else data.get('raw_data')
+            }
+        
+        response = {
+            "timestamp": datetime.now().isoformat(),
+            "total_count": len(self.memory_store['market_data']),
+            "market_data": formatted_market_data,
+            "stats": {
+                "last_update": self._format_time_diff(self.last_market_time) if self.last_market_time else "从未更新",
+                "last_count": self.last_market_count
+            }
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_market_data_by_exchange(self, request):
+        """按交易所查看市场数据"""
+        exchange = request.match_info.get('exchange', '').lower()
+        
+        # 过滤出该交易所的数据
+        exchange_data = {}
+        for key, data in self.memory_store['market_data'].items():
+            if exchange in key.lower():
+                exchange_data[key] = {
+                    "symbol": data.get('symbol'),
+                    "data_type": data.get('data_type'),
+                    "count": data.get('count', 0),
+                    "received_at": data.get('received_at'),
+                    "raw_data": data.get('raw_data')
+                }
+        
+        response = {
+            "exchange": exchange,
+            "timestamp": datetime.now().isoformat(),
+            "count": len(exchange_data),
+            "data": exchange_data
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_market_data_detail(self, request):
+        """查看特定市场数据详情"""
+        exchange = request.match_info.get('exchange', '').lower()
+        symbol = request.match_info.get('symbol', '').upper()
+        key = f"market_{symbol}"
+        
+        if key in self.memory_store['market_data']:
+            data = self.memory_store['market_data'][key]
+            response = {
+                "key": key,
+                "exchange": exchange,
+                "symbol": symbol,
+                "data": data,
+                "timestamp": datetime.now().isoformat()
+            }
+            return web.json_response(response)
+        else:
+            return web.json_response({
+                "error": f"未找到数据: {key}",
+                "available_keys": list(self.memory_store['market_data'].keys())
+            }, status=404)
+    
+    async def _handle_get_private_data(self, request):
+        """查看所有私人数据"""
+        formatted_private_data = {}
+        for key, data in self.memory_store['private_data'].items():
+            formatted_private_data[key] = {
+                "exchange": data.get('exchange'),
+                "data_type": data.get('data_type'),
+                "received_at": data.get('received_at'),
+                "raw_data_keys": list(data.get('raw_data', {}).keys()) if isinstance(data.get('raw_data'), dict) else type(data.get('raw_data')).__name__
+            }
+        
+        response = {
+            "timestamp": datetime.now().isoformat(),
+            "total_count": len(self.memory_store['private_data']),
+            "private_data": formatted_private_data,
+            "stats": {
+                "last_account_update": self._format_time_diff(self.last_account_time) if self.last_account_time else "从未更新",
+                "last_trade_update": self._format_time_diff(self.last_trade_time) if self.last_trade_time else "从未更新"
+            }
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_private_data_by_exchange(self, request):
+        """按交易所查看私人数据"""
+        exchange = request.match_info.get('exchange', '').lower()
+        
+        # 过滤出该交易所的数据
+        exchange_data = {}
+        for key, data in self.memory_store['private_data'].items():
+            if key.startswith(f"{exchange}_"):
+                exchange_data[key] = {
+                    "exchange": data.get('exchange'),
+                    "data_type": data.get('data_type'),
+                    "received_at": data.get('received_at'),
+                    "raw_data": data.get('raw_data')
+                }
+        
+        response = {
+            "exchange": exchange,
+            "timestamp": datetime.now().isoformat(),
+            "count": len(exchange_data),
+            "data": exchange_data
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_private_data_detail(self, request):
+        """查看特定私人数据详情"""
+        exchange = request.match_info.get('exchange', '').lower()
+        data_type = request.match_info.get('data_type', '').lower()
+        key = f"{exchange}_{data_type}"
+        
+        if key in self.memory_store['private_data']:
+            data = self.memory_store['private_data'][key]
+            response = {
+                "key": key,
+                "exchange": exchange,
+                "data_type": data_type,
+                "data": data,
+                "timestamp": datetime.now().isoformat()
+            }
+            return web.json_response(response)
+        else:
+            return web.json_response({
+                "error": f"未找到数据: {key}",
+                "available_keys": list(self.memory_store['private_data'].keys())
+            }, status=404)
+    
+    async def _handle_get_apis(self, request):
+        """查看API凭证状态（隐藏敏感信息）"""
+        safe_apis = {}
+        for exchange, creds in self.memory_store['env_apis'].items():
+            safe_apis[exchange] = {
+                "api_key_exists": bool(creds.get('api_key')),
+                "api_secret_exists": bool(creds.get('api_secret')),
+                "passphrase_exists": bool(creds.get('passphrase', '')),
+                "api_key_preview": creds.get('api_key', '')[:8] + "..." if creds.get('api_key') else None
+            }
+        
+        response = {
+            "timestamp": datetime.now().isoformat(),
+            "apis": safe_apis,
+            "warning": "敏感信息已隐藏，只显示存在性和预览"
+        }
+        return web.json_response(response)
+    
+    async def _handle_get_status(self, request):
+        """查看数据状态"""
+        status = {
+            "market_data": {
+                "last_update": self._format_time_diff(self.last_market_time) if self.last_market_time else "从未更新",
+                "last_count": self.last_market_count,
+                "stored_count": len(self.memory_store['market_data'])
+            },
+            "private_data": {
+                "account": {
+                    "last_update": self._format_time_diff(self.last_account_time) if self.last_account_time else "从未更新",
+                    "stored_count": len([k for k in self.memory_store['private_data'].keys() if 'account' in k])
+                },
+                "trade": {
+                    "last_update": self._format_time_diff(self.last_trade_time) if self.last_trade_time else "从未更新",
+                    "stored_count": len([k for k in self.memory_store['private_data'].keys() if 'order' in k or 'trade' in k])
+                },
+                "position": {
+                    "stored_count": len([k for k in self.memory_store['private_data'].keys() if 'position' in k])
+                }
+            },
+            "frontend_connection": {
+                "enabled": self.brain.frontend_relay is not None,
+                "stats": self.brain.frontend_relay.get_stats_summary() if self.brain.frontend_relay else {}
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        return web.json_response(status)
+    
+    async def _handle_clear_data(self, request):
+        """清空所有数据"""
+        try:
+            # 记录清空前状态
+            before_stats = {
+                "market_data_count": len(self.memory_store['market_data']),
+                "private_data_count": len(self.memory_store['private_data'])
+            }
+            
+            # 清空数据
+            self.memory_store['market_data'].clear()
+            self.memory_store['private_data'].clear()
+            
+            # 重置状态
+            self.last_market_time = None
+            self.last_market_count = 0
+            self.last_account_time = None
+            self.last_trade_time = None
+            
+            logger.warning(f"⚠️【智能大脑】通过API清空所有数据: {before_stats}")
+            
+            return web.json_response({
+                "success": True,
+                "message": "所有数据已清空",
+                "before_stats": before_stats,
+                "after_stats": {
+                    "market_data_count": 0,
+                    "private_data_count": 0
+                },
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】清空数据失败: {e}")
+            return web.json_response({
+                "success": False,
+                "error": str(e)
+            }, status=500)
+    
+    async def _handle_clear_data_type(self, request):
+        """清空特定类型数据"""
+        data_type = request.match_info.get('data_type', '').lower()
+        
+        try:
+            if data_type == 'market':
+                before_count = len(self.memory_store['market_data'])
+                self.memory_store['market_data'].clear()
+                self.last_market_time = None
+                self.last_market_count = 0
+                message = f"清空市场数据，共{before_count}条"
+                
+            elif data_type == 'private':
+                before_count = len(self.memory_store['private_data'])
+                self.memory_store['private_data'].clear()
+                self.last_account_time = None
+                self.last_trade_time = None
+                message = f"清空私人数据，共{before_count}条"
+                
+            else:
+                return web.json_response({
+                    "success": False,
+                    "error": f"不支持的数据类型: {data_type}",
+                    "supported_types": ["market", "private"]
+                }, status=400)
+            
+            logger.warning(f"⚠️【智能大脑】通过API清空{data_type}数据")
+            
+            return web.json_response({
+                "success": True,
+                "message": message,
+                "data_type": data_type,
+                "before_count": before_count,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】清空{data_type}数据失败: {e}")
+            return web.json_response({
+                "success": False,
+                "error": str(e)
+            }, status=500)
+    
+    # ✅ 新增：API服务器控制方法
+    async def start_api_server(self):
+        """启动HTTP API服务器"""
+        try:
+            if self.api_runner is not None:
+                logger.warning("⚠️【智能大脑】API服务器已经在运行")
+                return True
+            
+            logger.info(f"🚀【智能大脑】启动HTTP API服务器，端口: {self.api_port}")
+            
+            self.api_runner = web.AppRunner(self.api_app)
+            await self.api_runner.setup()
+            
+            self.api_site = web.TCPSite(self.api_runner, '0.0.0.0', self.api_port)
+            await self.api_site.start()
+            
+            logger.info(f"✅【智能大脑】HTTP API服务器启动成功")
+            logger.info(f"📊【智能大脑】数据查看API: http://0.0.0.0:{self.api_port}/")
+            logger.info(f"❤️【智能大脑】健康检查: http://0.0.0.0:{self.api_port}/health")
+            logger.info(f"📈【智能大脑】市场数据: http://0.0.0.0:{self.api_port}/data/market")
+            logger.info(f"🔐【智能大脑】私人数据: http://0.0.0.0:{self.api_port}/data/private")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】启动API服务器失败: {e}")
+            return False
+    
+    async def stop_api_server(self):
+        """停止HTTP API服务器"""
+        if self.api_runner:
+            logger.info("🛑【智能大脑】停止HTTP API服务器...")
+            await self.api_runner.cleanup()
+            self.api_runner = None
+            self.api_site = None
+            logger.info("✅【智能大脑】HTTP API服务器已停止")
+    
     async def receive_market_data(self, processed_data):
         """
         接收市场数据处理后的数据
@@ -68,6 +479,9 @@ class DataManager:
             
             self.last_market_time = datetime.now()
             
+            # ✅【新增】存储市场数据到memory_store
+            await self.store_market_data(processed_data)
+            
             # 推送到前端
             if self.brain.frontend_relay:
                 try:
@@ -83,7 +497,7 @@ class DataManager:
     async def receive_private_data(self, private_data):
         """
         接收私人数据
-        并推送到前端
+        先存储，再推送到前端
         """
         try:
             data_type = private_data.get('data_type', 'unknown')
@@ -91,20 +505,43 @@ class DataManager:
             
             now = datetime.now()
             
+            # ✅【步骤1】先存储私人数据
+            storage_key = f"{exchange}_{data_type}"
+            stored_data = {
+                'raw_data': private_data,
+                'exchange': exchange,
+                'data_type': data_type,
+                'received_at': now.isoformat(),
+                'timestamp': private_data.get('timestamp', now.isoformat())
+            }
+            self.memory_store['private_data'][storage_key] = stored_data
+            
+            # ✅【步骤2】记录日志
             if data_type == 'account_update' or data_type == 'account':
                 self.last_account_time = now
                 logger.info(f"💰【智能大脑】 收到账户私人数据: {exchange}")
             elif data_type == 'order_update' or data_type == 'trade':
                 self.last_trade_time = now
                 logger.info(f"📝【智能大脑】 收到交易私人数据: {exchange}")
+            elif data_type == 'position_update':
+                self.last_account_time = now
+                logger.info(f"📊【智能大脑】 收到持仓私人数据: {exchange}")
             else:
                 self.last_account_time = now
                 logger.info(f"⚠️【智能大脑】 收到未知类型私人数据: {exchange}.{data_type}")
             
-            # 推送到前端
+            # ✅【步骤3】后推送到前端
             if self.brain.frontend_relay:
                 try:
-                    await self.brain.frontend_relay.broadcast_private_data(private_data)
+                    # 这里推送的是存储后的数据（可以包含处理结果）
+                    await self.brain.frontend_relay.broadcast_private_data({
+                        'type': 'private_data',
+                        'exchange': exchange,
+                        'data_type': data_type,
+                        'data': private_data,  # 原始数据或处理后的数据
+                        'stored_at': now.isoformat(),
+                        'has_stored': True  # 标记已存储
+                    })
                     logger.debug(f"✅【智能大脑】 已推送私人数据到前端: {exchange}.{data_type}")
                 except Exception as e:
                     logger.error(f"❌【智能大脑】推送私人数据到前端失败: {e}")
@@ -191,15 +628,61 @@ class DataManager:
                 await asyncio.sleep(10)
     
     async def store_market_data(self, data):
-        """存储市场数据到内存"""
-        # 实现数据存储逻辑
-        pass
+        """存储市场数据到内存 - 新的覆盖旧的"""
+        try:
+            if not data:
+                return
+                
+            if isinstance(data, list) and len(data) > 0:
+                # 批量数据：存储整个列表，按第一个symbol作为键
+                first_item = data[0]
+                symbol = first_item.get('symbol', 'batch_data')
+                storage_key = f"market_{symbol}"
+                
+                stored_data = {
+                    'raw_data': data,  # 存储整个列表
+                    'received_at': datetime.now().isoformat(),
+                    'count': len(data),
+                    'symbol': symbol,
+                    'data_type': 'batch'
+                }
+                
+                # ✅ 新的覆盖旧的
+                self.memory_store['market_data'][storage_key] = stored_data
+                logger.debug(f"✅【智能大脑】存储市场数据: {storage_key}, {len(data)}条")
+                
+            elif isinstance(data, dict):
+                # 单个数据对象
+                symbol = data.get('symbol', 'single_data')
+                storage_key = f"market_{symbol}"
+                
+                stored_data = {
+                    'raw_data': data,
+                    'received_at': datetime.now().isoformat(),
+                    'count': 1,
+                    'symbol': symbol,
+                    'data_type': 'single'
+                }
+                
+                # ✅ 新的覆盖旧的
+                self.memory_store['market_data'][storage_key] = stored_data
+                logger.debug(f"✅【智能大脑】存储市场数据: {storage_key}")
+                
+            else:
+                logger.warning(f"⚠️【智能大脑】无法存储未知类型的市场数据: {type(data)}")
+                
+        except Exception as e:
+            logger.error(f"❌【智能大脑】存储市场数据失败: {e}")
     
     async def store_private_data(self, data):
         """存储私人数据到内存"""
+        # 注意：这个方法现在被receive_private_data直接替代了
+        # 保留这个空方法是为了接口兼容
         pass
     
     async def push_to_frontend(self, data_type, data):
         """推送数据到前端"""
+        # 这个通用方法可能被更专门的推送方法替代
+        # 保留这个空方法是为了接口兼容
         pass
       
