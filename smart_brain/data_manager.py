@@ -4,10 +4,8 @@
 import asyncio
 import logging
 import os
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, Optional
-from aiohttp import web
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +28,6 @@ class DataManager:
             'exchange_tokens': {}  # 存放币安listenKey等令牌
         }
         
-        # ✅ 新增：HTTP API服务器相关
-        self.api_port = 10002  # 与前端中继端口10001区分开
-        self.api_app = None
-        self.api_runner = None
-        self.api_site = None
-        
-        # ✅ 初始化API服务器
-        self._setup_api_routes()
     
     def _load_apis_from_env(self):
         """从环境变量加载API凭证"""
@@ -61,64 +51,29 @@ class DataManager:
         logger.info(f"✅【智能大脑】已从环境变量加载API凭证")
         return apis
     
-    # ✅ 新增：API路由设置
-    def _setup_api_routes(self):
-        """设置HTTP API路由"""
-        self.api_app = web.Application()
-        
-        # 1. 根路径：显示所有可用的API
-        self.api_app.router.add_get('/', self._handle_api_root)
-        
-        # 2. 健康检查
-        self.api_app.router.add_get('/health', self._handle_health)
-        
-        # 3. 查看所有存储数据
-        self.api_app.router.add_get('/data', self._handle_get_all_data)
-        
-        # 4. 查看市场数据
-        self.api_app.router.add_get('/data/market', self._handle_get_market_data)
-        self.api_app.router.add_get('/data/market/{exchange}', self._handle_get_market_data_by_exchange)
-        self.api_app.router.add_get('/data/market/{exchange}/{symbol}', self._handle_get_market_data_detail)
-        
-        # 5. 查看私人数据
-        self.api_app.router.add_get('/data/private', self._handle_get_private_data)
-        self.api_app.router.add_get('/data/private/{exchange}', self._handle_get_private_data_by_exchange)
-        self.api_app.router.add_get('/data/private/{exchange}/{data_type}', self._handle_get_private_data_detail)
-        
-        # 6. 查看API凭证状态
-        self.api_app.router.add_get('/apis', self._handle_get_apis)
-        
-        # 7. 查看数据状态
-        self.api_app.router.add_get('/status', self._handle_get_status)
-        
-        # 8. 清空数据（谨慎使用）
-        self.api_app.router.add_delete('/data/clear', self._handle_clear_data)
-        self.api_app.router.add_delete('/data/clear/{data_type}', self._handle_clear_data_type)
-        
-        logger.info(f"✅【智能大脑】HTTP API路由设置完成，端口: {self.api_port}")
+    # ✅ 注意：以下处理器方法保持不变，只是移除了装饰器
+    # 路由将由launcher.py在主服务器中统一注册
     
-    # ✅ 新增：HTTP API处理器
-    async def _handle_api_root(self, request):
+    async def handle_api_root(self, request):
         """API根路径"""
+        from aiohttp import web
         api_docs = {
             "service": "智能大脑数据管理器API",
             "version": "1.0.0",
             "endpoints": {
-                "/health": "健康检查",
-                "/data": "查看所有存储数据",
-                "/data/market": "查看市场数据",
-                "/data/private": "查看私人数据",
-                "/apis": "查看API凭证状态",
-                "/status": "查看数据状态",
-                "/data/clear": "清空数据（谨慎使用）"
+                "/api/brain/health": "健康检查",
+                "/api/brain/data": "查看所有存储数据",
+                "/api/brain/data/market": "查看市场数据",
+                "/api/brain/data/private": "查看私人数据",
+                "/api/brain/status": "查看数据状态"
             },
-            "current_time": datetime.now().isoformat(),
-            "port": self.api_port
+            "current_time": datetime.now().isoformat()
         }
         return web.json_response(api_docs)
     
-    async def _handle_health(self, request):
+    async def handle_health(self, request):
         """健康检查"""
+        from aiohttp import web
         return web.json_response({
             "status": "healthy",
             "service": "data_manager",
@@ -131,8 +86,9 @@ class DataManager:
             }
         })
     
-    async def _handle_get_all_data(self, request):
+    async def handle_get_all_data(self, request):
         """查看所有存储数据（概览）"""
+        from aiohttp import web
         response = {
             "timestamp": datetime.now().isoformat(),
             "market_data": {
@@ -157,9 +113,9 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_market_data(self, request):
+    async def handle_get_market_data(self, request):
         """查看所有市场数据"""
-        # 格式化市场数据以便阅读
+        from aiohttp import web
         formatted_market_data = {}
         for key, data in self.memory_store['market_data'].items():
             formatted_market_data[key] = {
@@ -181,11 +137,11 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_market_data_by_exchange(self, request):
+    async def handle_get_market_data_by_exchange(self, request):
         """按交易所查看市场数据"""
+        from aiohttp import web
         exchange = request.match_info.get('exchange', '').lower()
         
-        # 过滤出该交易所的数据
         exchange_data = {}
         for key, data in self.memory_store['market_data'].items():
             if exchange in key.lower():
@@ -205,8 +161,9 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_market_data_detail(self, request):
+    async def handle_get_market_data_detail(self, request):
         """查看特定市场数据详情"""
+        from aiohttp import web
         exchange = request.match_info.get('exchange', '').lower()
         symbol = request.match_info.get('symbol', '').upper()
         key = f"market_{symbol}"
@@ -227,8 +184,9 @@ class DataManager:
                 "available_keys": list(self.memory_store['market_data'].keys())
             }, status=404)
     
-    async def _handle_get_private_data(self, request):
+    async def handle_get_private_data(self, request):
         """查看所有私人数据"""
+        from aiohttp import web
         formatted_private_data = {}
         for key, data in self.memory_store['private_data'].items():
             formatted_private_data[key] = {
@@ -249,11 +207,11 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_private_data_by_exchange(self, request):
+    async def handle_get_private_data_by_exchange(self, request):
         """按交易所查看私人数据"""
+        from aiohttp import web
         exchange = request.match_info.get('exchange', '').lower()
         
-        # 过滤出该交易所的数据
         exchange_data = {}
         for key, data in self.memory_store['private_data'].items():
             if key.startswith(f"{exchange}_"):
@@ -272,8 +230,9 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_private_data_detail(self, request):
+    async def handle_get_private_data_detail(self, request):
         """查看特定私人数据详情"""
+        from aiohttp import web
         exchange = request.match_info.get('exchange', '').lower()
         data_type = request.match_info.get('data_type', '').lower()
         key = f"{exchange}_{data_type}"
@@ -294,8 +253,9 @@ class DataManager:
                 "available_keys": list(self.memory_store['private_data'].keys())
             }, status=404)
     
-    async def _handle_get_apis(self, request):
+    async def handle_get_apis(self, request):
         """查看API凭证状态（隐藏敏感信息）"""
+        from aiohttp import web
         safe_apis = {}
         for exchange, creds in self.memory_store['env_apis'].items():
             safe_apis[exchange] = {
@@ -312,8 +272,9 @@ class DataManager:
         }
         return web.json_response(response)
     
-    async def _handle_get_status(self, request):
+    async def handle_get_status(self, request):
         """查看数据状态"""
+        from aiohttp import web
         status = {
             "market_data": {
                 "last_update": self._format_time_diff(self.last_market_time) if self.last_market_time else "从未更新",
@@ -341,124 +302,7 @@ class DataManager:
         }
         return web.json_response(status)
     
-    async def _handle_clear_data(self, request):
-        """清空所有数据"""
-        try:
-            # 记录清空前状态
-            before_stats = {
-                "market_data_count": len(self.memory_store['market_data']),
-                "private_data_count": len(self.memory_store['private_data'])
-            }
-            
-            # 清空数据
-            self.memory_store['market_data'].clear()
-            self.memory_store['private_data'].clear()
-            
-            # 重置状态
-            self.last_market_time = None
-            self.last_market_count = 0
-            self.last_account_time = None
-            self.last_trade_time = None
-            
-            logger.warning(f"⚠️【智能大脑】通过API清空所有数据: {before_stats}")
-            
-            return web.json_response({
-                "success": True,
-                "message": "所有数据已清空",
-                "before_stats": before_stats,
-                "after_stats": {
-                    "market_data_count": 0,
-                    "private_data_count": 0
-                },
-                "timestamp": datetime.now().isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】清空数据失败: {e}")
-            return web.json_response({
-                "success": False,
-                "error": str(e)
-            }, status=500)
-    
-    async def _handle_clear_data_type(self, request):
-        """清空特定类型数据"""
-        data_type = request.match_info.get('data_type', '').lower()
-        
-        try:
-            if data_type == 'market':
-                before_count = len(self.memory_store['market_data'])
-                self.memory_store['market_data'].clear()
-                self.last_market_time = None
-                self.last_market_count = 0
-                message = f"清空市场数据，共{before_count}条"
-                
-            elif data_type == 'private':
-                before_count = len(self.memory_store['private_data'])
-                self.memory_store['private_data'].clear()
-                self.last_account_time = None
-                self.last_trade_time = None
-                message = f"清空私人数据，共{before_count}条"
-                
-            else:
-                return web.json_response({
-                    "success": False,
-                    "error": f"不支持的数据类型: {data_type}",
-                    "supported_types": ["market", "private"]
-                }, status=400)
-            
-            logger.warning(f"⚠️【智能大脑】通过API清空{data_type}数据")
-            
-            return web.json_response({
-                "success": True,
-                "message": message,
-                "data_type": data_type,
-                "before_count": before_count,
-                "timestamp": datetime.now().isoformat()
-            })
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】清空{data_type}数据失败: {e}")
-            return web.json_response({
-                "success": False,
-                "error": str(e)
-            }, status=500)
-    
-    # ✅ 新增：API服务器控制方法
-    async def start_api_server(self):
-        """启动HTTP API服务器"""
-        try:
-            if self.api_runner is not None:
-                logger.warning("⚠️【智能大脑】API服务器已经在运行")
-                return True
-            
-            logger.info(f"🚀【智能大脑】启动HTTP API服务器，端口: {self.api_port}")
-            
-            self.api_runner = web.AppRunner(self.api_app)
-            await self.api_runner.setup()
-            
-            self.api_site = web.TCPSite(self.api_runner, '0.0.0.0', self.api_port)
-            await self.api_site.start()
-            
-            logger.info(f"✅【智能大脑】HTTP API服务器启动成功")
-            logger.info(f"📊【智能大脑】数据查看API: http://0.0.0.0:{self.api_port}/")
-            logger.info(f"❤️【智能大脑】健康检查: http://0.0.0.0:{self.api_port}/health")
-            logger.info(f"📈【智能大脑】市场数据: http://0.0.0.0:{self.api_port}/data/market")
-            logger.info(f"🔐【智能大脑】私人数据: http://0.0.0.0:{self.api_port}/data/private")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】启动API服务器失败: {e}")
-            return False
-    
-    async def stop_api_server(self):
-        """停止HTTP API服务器"""
-        if self.api_runner:
-            logger.info("🛑【智能大脑】停止HTTP API服务器...")
-            await self.api_runner.cleanup()
-            self.api_runner = None
-            self.api_site = None
-            logger.info("✅【智能大脑】HTTP API服务器已停止")
+    # ✅ 以下原有方法保持不变
     
     async def receive_market_data(self, processed_data):
         """

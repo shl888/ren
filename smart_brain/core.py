@@ -72,21 +72,11 @@ class SmartBrain:
             else:
                 logger.warning("⚠️ 私人连接管理器初始化失败，私人功能将不可用")
             
-            # 3. ✅ 启动DataManager的API服务器
-            logger.info("🧠 正在启动DataManager API服务器...")
-            try:
-                api_success = await self.data_manager.start_api_server()
-                if api_success:
-                    logger.info("✅ DataManager API服务器启动成功")
-                else:
-                    logger.warning("⚠️ DataManager API服务器启动失败，数据查看功能可能不可用")
-            except Exception as e:
-                logger.error(f"❌ 启动DataManager API服务器失败: {e}")
             
-            # 4. 启动状态日志任务
+            # 3. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 5. 完成初始化
+            # 4. 完成初始化
             self.running = True
             logger.info("✅ 大脑核心初始化完成")
             
@@ -141,11 +131,11 @@ class SmartBrain:
             if self.private_connection_manager:
                 await self.private_connection_manager.shutdown()
             
-            # 2. ✅ 关闭DataManager API服务器
-            if self.data_manager:
-                await self.data_manager.stop_api_server()
+            # ✅ 删除：不再需要关闭独立的API服务器
+            # if self.data_manager:
+            #     await self.data_manager.stop_api_server()
             
-            # 3. 取消状态日志任务
+            # 2. 取消状态日志任务
             if self.status_log_task:
                 self.status_log_task.cancel()
                 try:
@@ -153,11 +143,11 @@ class SmartBrain:
                 except asyncio.CancelledError:
                     pass
             
-            # 4. 关闭前端中继服务器
+            # 3. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 5. 停止WebSocket管理员
+            # 4. 停止WebSocket管理员
             if self.ws_admin:
                 await self.ws_admin.stop()
             
