@@ -37,7 +37,7 @@ class DataManager:
             'okx': {
                 'api_key': os.getenv('OKX_API_KEY'),
                 'api_secret': os.getenv('OKX_API_SECRET'),
-                # 注意：根据我们的讨论，OKX可能不需要passphrase
+                'passphrase': os.getenv('OKX_passphrase', ''),  # ← 添加这一行！
             }
         }
         
