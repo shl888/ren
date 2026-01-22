@@ -144,7 +144,7 @@ class ListenKeyManager:
                 
                 if result.get('success'):
                     new_key = result['listenKey']
-                    logger.info(f"✅ 获取到新的{exchange} listenKey: {new_key[:15]}...")
+                    logger.info(f"✅ 获取到新的{exchange} listenKey: {new_key[:5]}...")
                     
                     # 保存到大脑
                     await self.brain.save_listen_key(exchange, new_key)
@@ -170,7 +170,7 @@ class ListenKeyManager:
                 )
                 
                 if result.get('success'):
-                    logger.debug(f"✅ {exchange} listenKey续期成功: {listen_key[:15]}...")
+                    logger.debug(f"✅ {exchange} listenKey续期成功: {listen_key[:5]}...")
                     return listen_key  # listenKey不变
                 else:
                     logger.warning(f"⚠️ {exchange} listenKey续期失败，尝试获取新Key: {result.get('error')}")
