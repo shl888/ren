@@ -118,14 +118,13 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
         
-        # （币安实盘地址）
+        # ✅ 币安测试网备用域名（更稳定）
+        # 虽然官方推荐 testnet.binancefuture.com，但经常502
+        # fstream.binancefuture.com 是旧域名，但更稳定
+        self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        
+        # ✅ 真实交易域名（生产环境）
         # self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
-        
-        # ✅ 币安测试网地址（官方推荐）
-        self.ws_url = f"wss://testnet.binancefuture.com/ws/{listen_key}"
-        
-        # ⚠️ 备用地址（如果主域名失败，可降级使用）
-        # self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
         
     async def connect(self):
         """建立币安私人连接"""
@@ -163,7 +162,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                         raise
                     await asyncio.sleep(2 ** attempt)  # 指数退避
                 except Exception as e:
-                    logger.error(f"[币安私人] 第{attempt + 1}次连接失败: {type(e).__name__}: {e}")
+                    logger.error(f"[币安私人] 第{attempt + 1}次失败: {type(e).__name__}: {e}")
                     if attempt == max_retries - 1:
                         raise
                     await asyncio.sleep(2 ** attempt)
