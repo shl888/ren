@@ -315,7 +315,7 @@ class PrivateWebSocketPool:
             try:
                 raw_formatted_data['processing_error'] = str(e)
                 await self.data_callback(raw_formatted_data)
-            except:
+            except Exception:
                 pass
     
     async def shutdown(self):
