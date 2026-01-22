@@ -116,20 +116,21 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
         # （币安实盘地址）
-#        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
+        # self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
         
-        # （币安测试网地址）
-        self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        # （币安测试网地址）✅ 问题1：修正域名
+        self.ws_url = f"wss://testnet.binancefuture.com/ws/{listen_key}"
         
     async def connect(self):
         """建立币安私人连接"""
         try:
             logger.info(f"[币安私人] 正在连接: {self.ws_url[:50]}...")
             
+            # ✅ 问题2：启用WebSocket心跳机制
             self.ws = await websockets.connect(
                 self.ws_url,
-                ping_interval=None,
-                ping_timeout=None,
+                ping_interval=20,  # 每20秒发送ping
+                ping_timeout=10,    # 10秒内收不到pong认为断开
                 close_timeout=5
             )
             
@@ -138,8 +139,10 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             
             # 启动接收任务
             self.receive_task = asyncio.create_task(self._receive_messages())
-            # 启动健康检查
-            self.health_check_task = asyncio.create_task(self._start_health_check())
+            
+            # ✅ 问题3：禁用应用层健康检查（币安是静默模式）
+            # self.health_check_task = asyncio.create_task(self._start_health_check())
+            logger.debug(f"[币安私人] 跳过应用层健康检查（交易所静默模式）")
             
             await self._report_status('connection_established')
             logger.info(f"[币安私人] 连接建立成功")
@@ -205,11 +208,16 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     
     def _map_binance_event_type(self, event_type: str) -> str:
         """映射币安事件类型到标准类型"""
+        # ✅ 问题4：更新为新版事件类型
         mapping = {
-            'outboundAccountPosition': 'account_update',
-            'executionReport': 'order_update',
-            'balanceUpdate': 'balance_update',
-            'listenKeyExpired': 'listenkey_expired'
+            'ACCOUNT_UPDATE': 'account_update',        # 账户余额/持仓更新
+            'ORDER_TRADE_UPDATE': 'order_update',      # 订单状态更新
+            'TRADE_LITE': 'trade_update',              # 2024-09新增：仅成交推送
+            'listenKeyExpired': 'system_event',        # listenKey过期
+            'MARGIN_CALL': 'risk_event',               # 保证金预警
+            'balanceUpdate': 'balance_update',         # 兼容旧版余额更新
+            'outboundAccountPosition': 'account_update',  # 兼容旧版账户
+            'executionReport': 'order_update'          # 兼容旧版订单
         }
         return mapping.get(event_type, 'unknown')
 
@@ -223,7 +231,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_secret = api_secret
         self.passphrase = passphrase
         # 欧意真实交易地址
-#        self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"   
+        # self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"   
         
         # 欧意模拟交易地址
         self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
@@ -328,17 +336,17 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     async def _subscribe_channels(self) -> bool:
         """订阅欧意私人频道"""
         try:
-            # (真实交易)订阅账户、订单、持仓频道
-#            subscribe_msg = {
-#                "op": "subscribe",
-#                "args": [
-#                    {"channel": "account"},
-#                    {"channel": "orders", "instType": "SWAP"},
-#                    {"channel": "positions", "instType": "SWAP"}
-#                ]
-#            }
+            # （真实交易）订阅账户、订单、持仓频道
+            # subscribe_msg = {
+            #     "op": "subscribe",
+            #     "args": [
+            #         {"channel": "account"},
+            #         {"channel": "orders", "instType": "SWAP"},
+            #         {"channel": "positions", "instType": "SWAP"}
+            #     ]
+            # }
             
-            # (模拟交易)修改为带brokerId的订阅
+            # （模拟交易）修改为带brokerId的订阅
             subscribe_msg = {
                 "op": "subscribe",
                 "args": [
@@ -428,7 +436,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         mapping = {
             'account': 'account_update',
             'orders': 'order_update',
-            'positions': 'position_update'
+            'positions': 'position_update',
+            'balance_and_position': 'account_position_update'
         }
         return mapping.get(channel, 'unknown')
-        
