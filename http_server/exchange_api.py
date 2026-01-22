@@ -1,7 +1,7 @@
 """
 交易所REST API封装
 处理账户、交易、订单等操作，支持私人WebSocket连接
-按照新流程：所有API由大脑传入，本模块不自取环境变量
+新增：集成ListenKey管理器
 """
 import asyncio
 import logging
@@ -14,7 +14,7 @@ import urllib.parse
 import ccxt.async_support as ccxt
 import aiohttp
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,49 +22,26 @@ root_dir = os.path.dirname(os.path.dirname(current_dir))  # smart_brain目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-# ✅ 只导入签名函数，不导入get_api_config
-from .auth import generate_binance_signature, generate_okx_signature
+from .auth import get_api_config, generate_binance_signature, generate_okx_signature
 
 logger = logging.getLogger(__name__)
 
 class ExchangeAPI:
-    """交易所API封装 - 重构版：不自取API，由调用者传入"""
+    """交易所API封装 - 支持币安listenKey管理"""
     
-    def __init__(self, exchange: str, api_key: str = "", api_secret: str = "", passphrase: str = ""):
-        """
-        重构：接收API参数，而不是从环境变量获取
-        
-        参数:
-            exchange: 交易所名称 (binance, okx)
-            api_key: API Key（可选，某些方法需要）
-            api_secret: API Secret（可选，某些方法需要）
-            passphrase: Passphrase（可选，欧意需要）
-        """
-        self.exchange = exchange.lower()
-        # ✅ 存储传入的API，而不是从环境变量获取
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.passphrase = passphrase
-        
+    def __init__(self, exchange: str):
+        self.exchange = exchange
+        self.api_config = get_api_config(exchange)
         self.client = None
-        
-        # 临时存储用于重试
-        self.temp_api_storage = {}
-        self.last_token_refresh = None
-        
-        logger.info(f"[{self.exchange}] ExchangeAPI实例已创建（API由调用者提供）")
+        self.listen_key_manager = None  # 新增：ListenKey管理器实例
         
     async def initialize(self):
-        """初始化API客户端（使用传入的API）"""
+        """初始化API客户端"""
         try:
             if self.exchange == "binance":
-                if not self.api_key or not self.api_secret:
-                    logger.warning(f"[{self.exchange}] 缺少API凭证，交易功能可能不可用")
-                    return False
-                    
                 self.client = ccxt.binance({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
+                    'apiKey': self.api_config.get('api_key', ''),
+                    'secret': self.api_config.get('api_secret', ''),
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'future',
@@ -72,19 +49,12 @@ class ExchangeAPI:
                     }
                 })
             elif self.exchange == "okx":
-                if not self.api_key or not self.api_secret:
-                    logger.warning(f"[{self.exchange}] 缺少API凭证，交易功能可能不可用")
-                    return False
-                    
                 self.client = ccxt.okx({
-                    'apiKey': self.api_key,
-                    'secret': self.api_secret,
-                    'password': self.passphrase,
+                    'apiKey': self.api_config.get('api_key', ''),
+                    'secret': self.api_config.get('api_secret', ''),
+                    'password': self.api_config.get('passphrase', ''),
                     'enableRateLimit': True,
                 })
-            else:
-                logger.error(f"[{self.exchange}] 不支持的交易所")
-                return False
             
             # 加载市场数据
             if self.client:
@@ -97,20 +67,59 @@ class ExchangeAPI:
         
         return False
     
-    # ==================== 币安listenKey管理（静态方法） ====================
+    # ==================== ListenKey管理器集成 ====================
+    
+    def init_listen_key_manager(self, brain_store):
+        """初始化ListenKey管理器"""
+        try:
+            from .listen_key_manager import ListenKeyManager
+            self.listen_key_manager = ListenKeyManager(self, brain_store)
+            logger.info(f"[{self.exchange}] ListenKey管理器初始化完成")
+            return True
+        except ImportError as e:
+            logger.error(f"无法导入ListenKey管理器: {e}")
+        except Exception as e:
+            logger.error(f"初始化ListenKey管理器失败: {e}")
+        return False
+    
+    async def start_listen_key_service(self):
+        """启动ListenKey服务"""
+        if not self.listen_key_manager:
+            logger.error("ListenKey管理器未初始化")
+            return False
+        
+        return await self.listen_key_manager.start()
+    
+    async def stop_listen_key_service(self):
+        """停止ListenKey服务"""
+        if self.listen_key_manager:
+            await self.listen_key_manager.stop()
+    
+    async def get_current_listen_key(self) -> Optional[str]:
+        """获取当前有效的listenKey"""
+        if self.listen_key_manager:
+            return await self.listen_key_manager.get_current_key(self.exchange)
+        return None
+    
+    async def force_renew_listen_key(self) -> Optional[str]:
+        """强制更新listenKey"""
+        if self.listen_key_manager:
+            return await self.listen_key_manager.force_renew_key(self.exchange)
+        return None
+    
+    # ==================== 原有的币安私人连接HTTP服务 ====================
     
     @staticmethod
     async def get_binance_listen_key(api_key: str, api_secret: str) -> Dict[str, Any]:
         """
         获取币安私人WebSocket的listenKey（静态方法）
-        由大脑调用，传入API参数
         
         参数:
             api_key: 币安API Key
             api_secret: 币安Secret Key
             
         返回:
-            {"success": True, "listenKey": "xxx"} 或 {"success": False, "error": "message"}
+            {"listenKey": "xxx"} 或 {"error": "message"}
         """
         try:
             # (实盘地址)币安 API 端点
@@ -137,53 +146,9 @@ class ExchangeAPI:
                         logger.error(f"❌ [HTTP] 币安listenKey获取失败: {error_msg}")
                         return {"success": False, "error": error_msg}
                         
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ [HTTP] 获取币安listenKey网络错误: {e}")
-            return {"success": False, "error": f"网络错误: {e}"}
         except Exception as e:
             logger.error(f"❌ [HTTP] 获取币安listenKey异常: {e}")
             return {"success": False, "error": str(e)}
-    
-    @staticmethod
-    async def get_binance_listen_key_with_retry(api_key: str, api_secret: str, max_retries: int = 3) -> Dict[str, Any]:
-        """
-        获取币安listenKey（带重试）
-        
-        参数:
-            api_key: 币安API Key
-            api_secret: 币安Secret Key
-            max_retries: 最大重试次数
-            
-        返回:
-            {"success": True, "listenKey": "xxx"} 或 {"success": False, "error": "message"}
-        """
-        for attempt in range(max_retries):
-            try:
-                current_attempt = attempt + 1
-                logger.info(f"🔄 获取币安listenKey (尝试{current_attempt}/{max_retries})...")
-                
-                result = await ExchangeAPI.get_binance_listen_key(api_key, api_secret)
-                
-                if result.get('success'):
-                    logger.info(f"✅ 获取币安listenKey成功（第{current_attempt}次尝试）")
-                    return result
-                else:
-                    logger.warning(f"⚠️ 获取listenKey失败: {result.get('error')}")
-                    
-                    if current_attempt < max_retries:
-                        wait_time = 2 ** attempt  # 指数退避
-                        logger.info(f"⏸️ 等待{wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                        
-            except Exception as e:
-                logger.error(f"❌ 获取listenKey异常: {e}")
-                if current_attempt < max_retries:
-                    await asyncio.sleep(2)
-        
-        # 所有重试都失败
-        error_msg = f"获取币安listenKey所有{max_retries}次尝试均失败"
-        logger.error(f"❌ {error_msg}")
-        return {"success": False, "error": error_msg}
     
     @staticmethod
     async def keep_alive_binance_listen_key(api_key: str, api_secret: str, listen_key: str) -> Dict[str, Any]:
@@ -219,9 +184,6 @@ class ExchangeAPI:
                         logger.warning(f"⚠️ [HTTP] 币安listenKey续期失败: {error_msg}")
                         return {"success": False, "error": error_msg}
                         
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ [HTTP] 币安listenKey续期网络错误: {e}")
-            return {"success": False, "error": f"网络错误: {e}"}
         except Exception as e:
             logger.error(f"❌ [HTTP] 币安listenKey续期异常: {e}")
             return {"success": False, "error": str(e)}
@@ -260,14 +222,11 @@ class ExchangeAPI:
                         logger.warning(f"⚠️ [HTTP] 币安listenKey关闭失败: {error_msg}")
                         return {"success": False, "error": error_msg}
                         
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ [HTTP] 关闭币安listenKey网络错误: {e}")
-            return {"success": False, "error": f"网络错误: {e}"}
         except Exception as e:
             logger.error(f"❌ [HTTP] 关闭币安listenKey异常: {e}")
             return {"success": False, "error": str(e)}
     
-    # ==================== 交易相关API方法（使用传入的API） ====================
+    # ==================== 原有方法保持不变（用于交易指令）====================
     
     async def fetch_account_balance(self) -> Dict[str, Any]:
         """获取账户余额"""
@@ -534,97 +493,16 @@ class ExchangeAPI:
             logger.error(f"[{self.exchange}] 获取ticker失败: {e}")
             return {"error": str(e)}
     
-    # ==================== 新增：静态版本的方法 ====================
-    
-    @staticmethod
-    async def fetch_account_balance_static(api_key: str, api_secret: str, exchange: str, passphrase: str = "") -> Dict[str, Any]:
-        """获取账户余额（静态方法，接收API参数）"""
-        try:
-            api = ExchangeAPI(exchange, api_key, api_secret, passphrase)
-            return await api.fetch_account_balance()
-        except Exception as e:
-            logger.error(f"[{exchange}] 获取余额失败: {e}")
-            return {"error": str(e)}
-    
-    @staticmethod
-    async def fetch_positions_static(api_key: str, api_secret: str, exchange: str, passphrase: str = "") -> List[Dict[str, Any]]:
-        """获取持仓（静态方法，接收API参数）"""
-        try:
-            api = ExchangeAPI(exchange, api_key, api_secret, passphrase)
-            return await api.fetch_positions()
-        except Exception as e:
-            logger.error(f"[{exchange}] 获取持仓失败: {e}")
-            return [{"error": str(e)}]
-    
-    # ==================== 定时刷新服务 ====================
-    
-    async def start_token_refresh_service(self, brain_instance = None):
-        """
-        启动令牌刷新服务
-        可以作为一个后台任务运行，定期刷新令牌
-        
-        参数:
-            brain_instance: 大脑实例，用于保存新令牌
-        """
-        logger.info("⏰ 启动令牌刷新服务...")
-        
-        refresh_interval = 50 * 60  # 50分钟（币安listenKey 60分钟过期）
-        
-        while True:
-            try:
-                await asyncio.sleep(refresh_interval)
-                
-                logger.info("🔄 定时刷新币安listenKey...")
-                
-                # 使用传入的API
-                if not self.api_key or not self.api_secret:
-                    logger.error("❌ 没有币安API，跳过刷新")
-                    continue
-                
-                # 如果提供了大脑实例，可以获取当前令牌
-                current_token = None
-                if brain_instance and hasattr(brain_instance, 'data_manager'):
-                    current_token = brain_instance.data_manager.get_binance_token()
-                
-                if current_token:
-                    # 刷新现有令牌
-                    result = await self.keep_alive_binance_listen_key(self.api_key, self.api_secret, current_token)
-                    
-                    if result.get('success'):
-                        logger.info("✅ 币安listenKey定时刷新成功")
-                        
-                        # 如果提供了大脑实例，更新令牌时间戳
-                        if brain_instance and hasattr(brain_instance, 'data_manager'):
-                            brain_instance.data_manager.update_token_expiry('binance', 60)
-                    else:
-                        logger.warning(f"⚠️ 定时刷新失败: {result.get('error')}")
-                else:
-                    # 没有当前令牌，获取新的
-                    logger.info("📝 没有当前令牌，获取新的...")
-                    result = await self.get_binance_listen_key(self.api_key, self.api_secret)
-                    
-                    if result.get('success'):
-                        new_token = result['listenKey']
-                        logger.info(f"✅ 获取新令牌成功: {new_token[:15]}...")
-                        
-                        # 如果提供了大脑实例，保存新令牌
-                        if brain_instance and hasattr(brain_instance, 'data_manager'):
-                            await brain_instance.data_manager.save_binance_token(new_token)
-                    else:
-                        logger.error(f"❌ 获取新令牌失败: {result.get('error')}")
-                
-            except asyncio.CancelledError:
-                logger.info("令牌刷新服务被取消")
-                break
-            except Exception as e:
-                logger.error(f"❌ 令牌刷新服务异常: {e}")
-                await asyncio.sleep(60)  # 出错后等待1分钟再试
-    
     async def close(self):
-        """关闭客户端"""
+        """关闭客户端和ListenKey服务"""
         try:
+            # 关闭ListenKey服务
+            await self.stop_listen_key_service()
+            
+            # 关闭客户端
             if self.client:
                 await self.client.close()
                 self.client = None
+                
         except Exception as e:
             logger.error(f"[{self.exchange}] 关闭客户端失败: {e}")
