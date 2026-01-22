@@ -66,7 +66,19 @@ class DataManager:
             'key': listen_key,
             'updated_at': datetime.now().isoformat()
         }
-        logger.info(f"✅【智能大脑】已保存{exchange} listenKey: {listen_key[:15]}...")
+        logger.info(f"✅【智能大脑】已保存{exchange} listenKey: {listen_key[:5]}...")
+        
+        # ✅ 新增：通知连接池（如果存在）
+        if hasattr(self.brain, 'private_pool') and self.brain.private_pool:
+            asyncio.create_task(self._notify_listen_key_updated(exchange, listen_key))
+    
+    async def _notify_listen_key_updated(self, exchange: str, listen_key: str):
+        """通知连接池listenKey已更新"""
+        try:
+            # 这里可以调用连接池的方法，或者只是记录日志
+            logger.info(f"📢【智能大脑】通知{exchange} listenKey已更新")
+        except Exception as e:
+            logger.error(f"❌【智能大脑】通知连接池失败: {e}")
     
     # ==================== 纯业务方法（供http_server/routes调用）====================
     
@@ -121,7 +133,7 @@ class DataManager:
                 "api_key_exists": bool(creds.get('api_key')),
                 "api_secret_exists": bool(creds.get('api_secret')),
                 "passphrase_exists": bool(creds.get('passphrase', '')),
-                "api_key_preview": creds.get('api_key', '')[:8] + "..." if creds.get('api_key') else None
+                "api_key_preview": creds.get('api_key', '')[:5] + "..." if creds.get('api_key') else None
             }
         
         return {
@@ -535,4 +547,3 @@ class DataManager:
     async def push_to_frontend(self, data_type, data):
         """推送数据到前端（兼容方法）"""
         pass
-      
