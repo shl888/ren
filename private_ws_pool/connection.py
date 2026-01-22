@@ -11,6 +11,8 @@ import base64
 from datetime import datetime
 from typing import Dict, Any, Optional
 import websockets
+import ssl
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -115,24 +117,56 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     def __init__(self, listen_key: str, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
+        
         # （币安实盘地址）
         # self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
         
-        # （币安测试网地址）✅ 问题1：修正域名
+        # ✅ 币安测试网地址（官方推荐）
         self.ws_url = f"wss://testnet.binancefuture.com/ws/{listen_key}"
+        
+        # ⚠️ 备用地址（如果主域名失败，可降级使用）
+        # self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
         
     async def connect(self):
         """建立币安私人连接"""
         try:
             logger.info(f"[币安私人] 正在连接: {self.ws_url[:50]}...")
             
-            # ✅ 问题2：启用WebSocket心跳机制
-            self.ws = await websockets.connect(
-                self.ws_url,
-                ping_interval=20,  # 每20秒发送ping
-                ping_timeout=10,    # 10秒内收不到pong认为断开
-                close_timeout=5
-            )
+            # ✅ 创建SSL上下文（测试网证书可能有问题）
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # ✅ 带重试的连接
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.ws = await asyncio.wait_for(
+                        websockets.connect(
+                            self.ws_url,
+                            ssl=ssl_context,
+                            ping_interval=20,    # 每20秒自动ping
+                            ping_timeout=10,     # 10秒内收不到pong认为断开
+                            close_timeout=5,
+                            # ✅ 添加必要的请求头
+                            extra_headers={
+                                "User-Agent": "Mozilla/5.0 (compatible; Python-Binance-Bot/1.0)"
+                            }
+                        ),
+                        timeout=15  # 连接超时15秒
+                    )
+                    logger.info(f"[币安私人] 第{attempt + 1}次连接成功")
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning(f"[币安私人] 第{attempt + 1}次连接超时")
+                    if attempt == max_retries - 1:
+                        raise
+                    await asyncio.sleep(2 ** attempt)  # 指数退避
+                except Exception as e:
+                    logger.error(f"[币安私人] 第{attempt + 1}次连接失败: {type(e).__name__}: {e}")
+                    if attempt == max_retries - 1:
+                        raise
+                    await asyncio.sleep(2 ** attempt)
             
             self.connected = True
             self.last_message_time = datetime.now()
@@ -140,8 +174,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             # 启动接收任务
             self.receive_task = asyncio.create_task(self._receive_messages())
             
-            # ✅ 问题3：禁用应用层健康检查（币安是静默模式）
-            # self.health_check_task = asyncio.create_task(self._start_health_check())
+            # ✅ 禁用应用层健康检查（币安是静默模式）
             logger.debug(f"[币安私人] 跳过应用层健康检查（交易所静默模式）")
             
             await self._report_status('connection_established')
@@ -150,8 +183,12 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             return True
             
         except Exception as e:
-            logger.error(f"[币安私人] 连接失败: {e}")
-            await self._report_status('connection_failed', {'error': str(e)})
+            logger.error(f"[币安私人] 连接失败: {type(e).__name__}: {e}")
+            logger.error(f"[币安私人] 详细错误追踪:\n{traceback.format_exc()}")
+            await self._report_status('connection_failed', {
+                'error': str(e),
+                'error_type': type(e).__name__
+            })
             return False
     
     async def _receive_messages(self):
@@ -200,15 +237,12 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         
         # 3. ✅ 只传递给大脑，不在连接池推送
         try:
-            # data_callback 是大脑的回调函数，只负责接收数据
-            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[币安私人] 传递给大脑失败: {e}")
     
     def _map_binance_event_type(self, event_type: str) -> str:
         """映射币安事件类型到标准类型"""
-        # ✅ 问题4：更新为新版事件类型
         mapping = {
             'ACCOUNT_UPDATE': 'account_update',        # 账户余额/持仓更新
             'ORDER_TRADE_UPDATE': 'order_update',      # 订单状态更新
@@ -425,8 +459,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         
         # 4. ✅ 只传递给大脑，不在连接池推送
         try:
-            # data_callback 是大脑的回调函数，只负责接收数据
-            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[欧意私人] 传递给大脑失败: {e}")
