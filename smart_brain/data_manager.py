@@ -70,15 +70,34 @@ class DataManager:
         
         # ✅ 新增：通知连接池（如果存在）
         if hasattr(self.brain, 'private_pool') and self.brain.private_pool:
+            # 异步通知连接池，不等待完成
             asyncio.create_task(self._notify_listen_key_updated(exchange, listen_key))
     
     async def _notify_listen_key_updated(self, exchange: str, listen_key: str):
         """通知连接池listenKey已更新"""
         try:
-            # 这里可以调用连接池的方法，或者只是记录日志
-            logger.info(f"📢【智能大脑】通知{exchange} listenKey已更新")
+            # ✅ 修复：真正调用连接池的监听方法
+            if hasattr(self.brain, 'private_pool') and self.brain.private_pool:
+                # 检查连接池是否有监听方法
+                if hasattr(self.brain.private_pool, 'on_listen_key_updated'):
+                    await self.brain.private_pool.on_listen_key_updated(exchange, listen_key)
+                    logger.info(f"📢【智能大脑】已通知连接池{exchange} listenKey更新")
+                else:
+                    # 如果连接池没有监听方法，直接重新连接
+                    logger.info(f"📢【智能大脑】连接池无监听方法，触发{exchange}重连")
+                    await self._trigger_pool_reconnect(exchange)
         except Exception as e:
             logger.error(f"❌【智能大脑】通知连接池失败: {e}")
+    
+    async def _trigger_pool_reconnect(self, exchange: str):
+        """触发连接池重新连接"""
+        try:
+            if exchange == 'binance' and hasattr(self.brain.private_pool, '_reconnect_exchange'):
+                await self.brain.private_pool._reconnect_exchange('binance')
+            elif exchange == 'okx' and hasattr(self.brain.private_pool, '_reconnect_exchange'):
+                await self.brain.private_pool._reconnect_exchange('okx')
+        except Exception as e:
+            logger.error(f"❌【智能大脑】触发重连失败: {e}")
     
     # ==================== 纯业务方法（供http_server/routes调用）====================
     
