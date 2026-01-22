@@ -1,6 +1,5 @@
 """
 私人WebSocket连接实现 - 支持币安和欧意
-按照新流程修改：币安连接接收credentials参数用于可能的令牌刷新
 """
 import asyncio
 import json
@@ -113,26 +112,14 @@ class PrivateWebSocketConnection:
 class BinancePrivateConnection(PrivateWebSocketConnection):
     """币安私人连接"""
     
-    def __init__(self, listen_key: str, credentials: Dict[str, str] = None, **kwargs):
-        """
-        初始化币安私人连接
-        
-        参数:
-            listen_key: 币安listen_key令牌
-            credentials: API凭证 (包含api_key, api_secret，用于可能的令牌刷新)
-            **kwargs: 其他参数 (status_callback, data_callback, raw_data_cache等)
-        """
+    def __init__(self, listen_key: str, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
-        self.credentials = credentials  # ✅ 新增：保存凭证用于可能的令牌刷新
-        
-        # (币安实盘地址)
+        # （币安实盘地址）
 #        self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
         
-        # (币安测试网地址)
+        # （币安测试网地址）
         self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
-        
-        logger.debug(f"[币安私人] 初始化完成，listen_key: {listen_key[:15]}...")
         
     async def connect(self):
         """建立币安私人连接"""
@@ -196,15 +183,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         event_type = data.get('e', 'unknown')
         await self._save_raw_data(event_type, data)
         
-        # 2. 检查是否是listenKey过期事件
-        if event_type == 'listenKeyExpired':
-            logger.warning(f"[币安私人] listenKey已过期: {self.listen_key[:15]}...")
-            await self._report_status('listenkey_expired', {
-                'listen_key': self.listen_key[:15] + '...',
-                'credentials_available': bool(self.credentials)
-            })
-        
-        # 3. 格式化处理
+        # 2. 格式化处理
         formatted = {
             'exchange': 'binance',
             'data_type': self._map_binance_event_type(event_type),
@@ -216,8 +195,10 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             }
         }
         
-        # 4. ✅ 只传递给大脑，不在连接池推送
+        # 3. ✅ 只传递给大脑，不在连接池推送
         try:
+            # data_callback 是大脑的回调函数，只负责接收数据
+            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[币安私人] 传递给大脑失败: {e}")
@@ -228,13 +209,9 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             'outboundAccountPosition': 'account_update',
             'executionReport': 'order_update',
             'balanceUpdate': 'balance_update',
-            'listenKeyExpired': 'listenkey_expired'  # 新增：专门处理过期事件
+            'listenKeyExpired': 'listenkey_expired'
         }
         return mapping.get(event_type, 'unknown')
-    
-    def has_credentials(self) -> bool:
-        """检查是否有可用的凭证用于刷新"""
-        return bool(self.credentials and self.credentials.get('api_key'))
 
 
 class OKXPrivateConnection(PrivateWebSocketConnection):
@@ -274,9 +251,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             auth_success = await self._authenticate()
             if not auth_success:
                 logger.error("[欧意私人] 认证失败")
-                await self._report_status('authentication_failed', {
-                    'api_key': self.api_key[:8] + '...'
-                })
                 await self.disconnect()
                 return False
             
@@ -422,10 +396,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 logger.debug(f"[欧意私人] 订阅事件: {data.get('arg')}")
             elif event == 'error':
                 logger.error(f"[欧意私人] 错误事件: {data}")
-                await self._report_status('okx_error', {
-                    'code': data.get('code'),
-                    'msg': data.get('msg')
-                })
             return
         
         # 2. 保存原始数据
@@ -447,6 +417,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         
         # 4. ✅ 只传递给大脑，不在连接池推送
         try:
+            # data_callback 是大脑的回调函数，只负责接收数据
+            # 推送由大脑的data_manager负责
             await self.data_callback(formatted)
         except Exception as e:
             logger.error(f"[欧意私人] 传递给大脑失败: {e}")
