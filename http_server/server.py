@@ -25,13 +25,14 @@ logger = logging.getLogger(__name__)
 class HTTPServer:
     """HTTP服务器，内部包含WebSocket连接池"""
     
-    def __init__(self, host='0.0.0.0', port=None):
+    def __init__(self, host='0.0.0.0', port=None, brain=None):
         # 如果没有指定端口，使用环境变量或Render默认端口
         if port is None:
             port = int(os.getenv('PORT', 10000))  # Render默认端口
         
         self.host = host
         self.port = port
+        self.brain = brain  # 保存大脑引用
         self.app = web.Application()
         self.runner = None
         self.site = None
@@ -39,8 +40,12 @@ class HTTPServer:
         # WebSocket连接池（隐藏在HTTP服务内部）
         self.ws_pool_manager = None
         
-        # 设置路由
+        # 设置基础路由
         setup_routes(self.app)
+        
+        # 如果提供了大脑实例，注册大脑路由
+        if self.brain:
+            self._setup_brain_routes()
         
         # 添加启动和关闭钩子
         self.app.on_startup.append(self.on_startup)
@@ -48,6 +53,34 @@ class HTTPServer:
         self.app.on_cleanup.append(self.on_cleanup)
         
         # ❌ 移除信号处理，由bsmart_brain统一管理
+    
+    def _setup_brain_routes(self):
+        """设置大脑数据路由"""
+        try:
+            from .routes.brain import BrainRoutes
+            brain_routes = BrainRoutes(self.brain)
+            
+            # 注册大脑路由
+            self.app.router.add_get('/api/brain/', brain_routes.api_root)
+            self.app.router.add_get('/api/brain/health', brain_routes.health)
+            self.app.router.add_get('/api/brain/data', brain_routes.get_all_data)
+            self.app.router.add_get('/api/brain/data/market', brain_routes.get_market_data)
+            self.app.router.add_get('/api/brain/data/market/{exchange}', brain_routes.get_market_data_by_exchange)
+            self.app.router.add_get('/api/brain/data/market/{exchange}/{symbol}', brain_routes.get_market_data_detail)
+            self.app.router.add_get('/api/brain/data/private', brain_routes.get_private_data)
+            self.app.router.add_get('/api/brain/data/private/{exchange}', brain_routes.get_private_data_by_exchange)
+            self.app.router.add_get('/api/brain/data/private/{exchange}/{data_type}', brain_routes.get_private_data_detail)
+            self.app.router.add_get('/api/brain/apis', brain_routes.get_apis)
+            self.app.router.add_get('/api/brain/status', brain_routes.get_status)
+            self.app.router.add_delete('/api/brain/data/clear', brain_routes.clear_data)
+            self.app.router.add_delete('/api/brain/data/clear/{data_type}', brain_routes.clear_data_type)
+            
+            logger.info(f"✅ 已注册大脑数据API路由（共13个端点）")
+            
+        except ImportError as e:
+            logger.warning(f"无法导入大脑路由: {e}")
+        except Exception as e:
+            logger.error(f"设置大脑路由失败: {e}")
     
     async def on_startup(self, app):
         """应用启动时 - 快速初始化"""
