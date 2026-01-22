@@ -5,6 +5,7 @@ HTTP API认证和签名工具
 import hmac
 import hashlib
 import base64
+import os
 from typing import Dict, Any, Optional
 from functools import wraps
 from aiohttp import web
