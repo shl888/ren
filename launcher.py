@@ -1,5 +1,6 @@
 """
 极简启动器 - 重构版：接管所有模块启动
+按照新流程：大脑初始化时会获取令牌，然后启动连接管理器
 """
 
 import asyncio
@@ -77,6 +78,45 @@ async def delayed_ws_init(ws_admin):
     except Exception as e:
         logger.error(f"WebSocket初始化失败: {e}")
 
+async def delayed_start_private_connections(brain):
+    """延迟启动私人连接（等HTTP服务器就绪后）"""
+    await asyncio.sleep(8)  # 等待HTTP服务器稳定
+    
+    try:
+        logger.info("🔄 准备启动私人连接...")
+        
+        # 检查连接管理器状态
+        cm_status = brain.get_connection_manager_status()
+        if cm_status.get('initialized'):
+            logger.info("✅ 私人连接管理器已初始化，开始启动连接...")
+            
+            # 启动私人连接
+            success = await brain.start_private_connections()
+            
+            if success:
+                logger.info("✅ 私人连接启动命令已发送")
+                
+                # 检查连接状态
+                await asyncio.sleep(5)
+                final_status = brain.get_connection_manager_status()
+                
+                logger.info(f"📊 私人连接状态:")
+                logger.info(f"  • 币安: {final_status.get('connections', {}).get('binance', {}).get('status', 'unknown')}")
+                logger.info(f"  • 欧意: {final_status.get('connections', {}).get('okx', {}).get('status', 'unknown')}")
+                
+                # 检查令牌状态
+                if hasattr(brain.data_manager, 'has_binance_token'):
+                    has_token = brain.data_manager.has_binance_token()
+                    token_status = "✅ 有效" if has_token else "❌ 缺失"
+                    logger.info(f"  • 币安令牌: {token_status}")
+            else:
+                logger.error("❌ 启动私人连接失败")
+        else:
+            logger.warning("⚠️ 私人连接管理器未初始化，跳过连接启动")
+            
+    except Exception as e:
+        logger.error(f"❌ 启动私人连接异常: {e}")
+
 async def main():
     """主启动函数 - 完全按照大脑原来的启动顺序"""
     logging.basicConfig(
@@ -89,7 +129,7 @@ async def main():
     start_keep_alive_background()
     
     logger.info("=" * 60)
-    logger.info("🚀 智能大脑启动中（重构版：启动器负责所有模块启动）...")
+    logger.info("🚀 智能大脑启动中（新流程：启动器负责所有模块启动）...")
     logger.info("=" * 60)
     
     brain = None  # 提前声明变量
@@ -160,6 +200,10 @@ async def main():
         app.router.add_get('/api/brain/status', brain.data_manager.handle_get_status)
         brain_routes_count += 1
         
+        # 新增：令牌状态路由
+        app.router.add_get('/api/brain/token-status', brain.data_manager.handle_get_token_status)
+        brain_routes_count += 1
+        
         # 清空数据路由
         app.router.add_delete('/api/brain/data/clear', brain.data_manager.handle_clear_data)
         brain_routes_count += 1
@@ -174,6 +218,7 @@ async def main():
         logger.info(f"  • 私人数据: /api/brain/data/private")
         logger.info(f"  • 系统状态: /api/brain/status")
         logger.info(f"  • API状态: /api/brain/apis")
+        logger.info(f"  • 令牌状态: /api/brain/token-status")
         logger.info(f"  • 清空数据: /api/brain/data/clear (谨慎使用)")
         
         # 2.3 注册基础路由（资金费率）
@@ -205,8 +250,10 @@ async def main():
         # 设置数据存储的引用
         data_store.pipeline_manager = pipeline_manager
         
-        # ==================== 7. 大脑初始化（现在会自动初始化私人连接） ====================
-        logger.info("【7️⃣】大脑初始化...")
+        # ==================== 7. 大脑初始化（新流程：获取令牌 → 初始化连接管理器） ====================
+        logger.info("【7️⃣】大脑初始化（新流程）...")
+        logger.info("📝 新流程：大脑 → HTTP模块 → 获取令牌 → 初始化连接管理器")
+        
         brain_init_success = await brain.initialize()
         
         if not brain_init_success:
@@ -215,8 +262,15 @@ async def main():
         
         # 检查私人连接管理器状态
         if hasattr(brain, 'private_connection_manager'):
-            pm_status = "✅ 已初始化" if brain.private_connection_manager.running else "❌ 初始化失败"
+            cm_status = brain.get_connection_manager_status()
+            pm_status = "✅ 已初始化" if cm_status.get('initialized') else "❌ 初始化失败"
             logger.info(f"🧠 私人连接管理器状态: {pm_status}")
+            
+            # 显示详细状态
+            logger.info(f"📊 连接管理器详情:")
+            logger.info(f"  • 运行状态: {'✅ 运行中' if cm_status.get('running') else '❌ 已停止'}")
+            logger.info(f"  • 币安状态: {cm_status.get('connections', {}).get('binance', {}).get('status', 'unknown')}")
+            logger.info(f"  • 欧意状态: {cm_status.get('connections', {}).get('okx', {}).get('status', 'unknown')}")
         
         # ==================== 8. 初始化前端中继（需要大脑实例） ====================
         logger.info("【8️⃣】初始化前端中继服务器...")
@@ -252,13 +306,42 @@ async def main():
         asyncio.create_task(delayed_ws_init(ws_admin))
         brain.ws_admin = ws_admin  # 传递给大脑
         
+        # ==================== 12. 延迟启动私人连接（等HTTP服务器完全就绪） ====================
+        logger.info("【1️⃣2️⃣】准备启动私人连接（延迟执行）...")
+        asyncio.create_task(delayed_start_private_connections(brain))
+        
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # ==================== 12. 运行大脑 ====================
+        # 显示最终状态汇总
+        await asyncio.sleep(3)
+        logger.info("📋 系统状态汇总:")
+        logger.info(f"  • HTTP服务器: ✅ 运行中 (端口: {port})")
+        logger.info(f"  • 数据处理管道: ✅ 已启动")
+        logger.info(f"  • WebSocket连接池: ⏳ 延迟启动中")
+        
+        # 检查大脑数据管理器状态
+        if brain.data_manager:
+            has_binance_token = brain.data_manager.has_binance_token()
+            token_status = "✅ 有效" if has_binance_token else "❌ 缺失"
+            logger.info(f"  • 币安令牌状态: {token_status}")
+            
+            # 检查API状态
+            binance_apis = brain.data_manager.memory_store['env_apis'].get('binance', {})
+            okx_apis = brain.data_manager.memory_store['env_apis'].get('okx', {})
+            
+            binance_api_status = "✅ 可用" if binance_apis.get('api_key') else "❌ 缺失"
+            okx_api_status = "✅ 可用" if okx_apis.get('api_key') else "❌ 缺失"
+            
+            logger.info(f"  • 币安API: {binance_api_status}")
+            logger.info(f"  • 欧意API: {okx_api_status}")
+        
+        logger.info("=" * 60)
+        
+        # ==================== 13. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
@@ -279,3 +362,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
