@@ -57,6 +57,25 @@ class PrivateWebSocketPool:
         logger.info("✅ [私人连接池] 已启动，进入自主管理模式")
         return True
     
+    # ✅ 新增：监听listenKey更新方法
+    async def on_listen_key_updated(self, exchange: str, listen_key: str):
+        """监听listenKey更新事件"""
+        try:
+            logger.info(f"📢 [私人连接池] 收到{exchange} listenKey更新通知: {listen_key[:5]}...")
+            
+            if exchange == 'binance':
+                logger.info(f"🔗 [私人连接池] 立即尝试建立币安连接...")
+                # 直接调用币安连接方法
+                await self._setup_binance_connection()
+            elif exchange == 'okx':
+                logger.info(f"🔗 [私人连接池] listenKey更新，但OKX使用API key连接，跳过")
+                # OKX不需要listenKey，跳过
+            else:
+                logger.warning(f"⚠️ [私人连接池] 未知交易所: {exchange}")
+                
+        except Exception as e:
+            logger.error(f"❌ [私人连接池] 处理listenKey更新失败: {e}")
+    
     async def _connection_monitor_loop(self):
         """连接监控循环"""
         while self.running:
