@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta  # ✅ 添加timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,9 @@ class DataManager:
             'market_data': {},
             'private_data': {},
             'encrypted_keys': {},
-            'env_apis': self._load_apis_from_env(),
-            'exchange_tokens': {}
+            'env_apis': self._load_apis_from_env(),  # ✅ 从环境变量加载的API
+            'exchange_tokens': {},  # ✅ 新增：存储交易所令牌（如币安listen_key）
+            'token_refresh_time': {},  # ✅ 新增：记录令牌刷新时间
         }
     
     def _load_apis_from_env(self):
@@ -49,20 +50,170 @@ class DataManager:
         logger.info(f"✅【智能大脑】已从环境变量加载API凭证")
         return apis
     
-    # ==================== HTTP API处理器 ====================
+    # ==================== 新增：令牌管理接口 ====================
+    
+    async def save_binance_token(self, listen_key: str):
+        """
+        保存币安listen_key令牌
+        由HTTP模块调用，当获取到新令牌时使用
+        """
+        try:
+            if not listen_key:
+                logger.warning("⚠️ 尝试保存空的币安令牌")
+                return False
+            
+            self.memory_store['exchange_tokens']['binance'] = {
+                'listen_key': listen_key,
+                'saved_at': datetime.now().isoformat(),
+                'expires_at': None,  # 币安listen_key默认60分钟过期
+            }
+            
+            self.memory_store['token_refresh_time']['binance'] = datetime.now().isoformat()
+            
+            logger.info(f"✅【智能大脑】已保存币安令牌: {listen_key[:15]}...")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌【智能大脑】保存币安令牌失败: {e}")
+            return False
+    
+    def get_binance_token(self) -> str:
+        """
+        获取币安令牌
+        由连接管理器调用
+        """
+        tokens = self.memory_store['exchange_tokens']
+        if 'binance' in tokens and tokens['binance'].get('listen_key'):
+            return tokens['binance']['listen_key']
+        return None
+    
+    def has_binance_token(self) -> bool:
+        """检查是否有有效的币安令牌"""
+        tokens = self.memory_store['exchange_tokens']
+        return 'binance' in tokens and bool(tokens['binance'].get('listen_key'))
+    
+    def update_token_expiry(self, exchange: str, expires_in_minutes: int = 60):
+        """更新令牌过期时间"""
+        if exchange not in self.memory_store['exchange_tokens']:
+            return
+        
+        expiry_time = datetime.now() + timedelta(minutes=expires_in_minutes)
+        self.memory_store['exchange_tokens'][exchange]['expires_at'] = expiry_time.isoformat()
+        logger.debug(f"⏰ 更新{exchange}令牌过期时间: {expiry_time}")
+    
+    # ==================== 新增：资源提供接口 ====================
+    
+    async def provide_resources_for_connection(self, exchange: str) -> dict:
+        """
+        向连接管理器提供连接所需的资源
+        返回格式：{'token': 'xxx', 'apis': {...}} 或 {'apis': {...}}
+        """
+        try:
+            if exchange == 'binance':
+                return {
+                    'token': self.get_binance_token(),
+                    'apis': self.memory_store['env_apis'].get('binance', {}).copy()
+                }
+            elif exchange == 'okx':
+                return {
+                    'apis': self.memory_store['env_apis'].get('okx', {}).copy()
+                }
+            else:
+                logger.error(f"❌ 不支持的交易所: {exchange}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ 提供{exchange}资源失败: {e}")
+            return None
+    
+    def get_apis_for_exchange(self, exchange: str) -> dict:
+        """
+        获取指定交易所的API凭证
+        返回副本以防止意外修改
+        """
+        return self.memory_store['env_apis'].get(exchange, {}).copy()
+    
+    # ==================== 新增：令牌状态检查 ====================
+    
+    def is_token_expired(self, exchange: str) -> bool:
+        """检查令牌是否过期"""
+        if exchange not in self.memory_store['exchange_tokens']:
+            return True
+        
+        token_info = self.memory_store['exchange_tokens'][exchange]
+        if not token_info.get('expires_at'):
+            return False  # 没有设置过期时间，认为未过期
+        
+        try:
+            expiry_time = datetime.fromisoformat(token_info['expires_at'])
+            return datetime.now() > expiry_time
+        except:
+            return False
+    
+    def get_token_status(self, exchange: str) -> dict:
+        """获取令牌状态信息"""
+        if exchange not in self.memory_store['exchange_tokens']:
+            return {'has_token': False, 'message': '没有令牌'}
+        
+        token_info = self.memory_store['exchange_tokens'][exchange]
+        status = {
+            'has_token': bool(token_info.get('listen_key')),
+            'saved_at': token_info.get('saved_at'),
+            'expires_at': token_info.get('expires_at'),
+            'is_expired': self.is_token_expired(exchange)
+        }
+        
+        if token_info.get('listen_key'):
+            status['token_preview'] = token_info['listen_key'][:15] + '...'
+        
+        return status
+    
+    # ==================== 新增：API使用统计 ====================
+    
+    async def record_api_usage(self, exchange: str, purpose: str):
+        """记录API使用情况"""
+        try:
+            if 'api_usage_stats' not in self.memory_store:
+                self.memory_store['api_usage_stats'] = {}
+            
+            if exchange not in self.memory_store['api_usage_stats']:
+                self.memory_store['api_usage_stats'][exchange] = {}
+            
+            stats = self.memory_store['api_usage_stats'][exchange]
+            if purpose not in stats:
+                stats[purpose] = 0
+            
+            stats[purpose] += 1
+            stats['last_used'] = datetime.now().isoformat()
+            
+            logger.debug(f"📊 {exchange} API使用记录: {purpose} (总次数: {stats[purpose]})")
+            
+        except Exception as e:
+            logger.error(f"❌ 记录API使用失败: {e}")
+    
+    # ==================== 原有HTTP API处理器保持不变 ====================
     
     async def handle_api_root(self, request):
         """API根路径"""
         from aiohttp import web
+        
+        # 获取令牌状态
+        token_status = {
+            'binance': self.get_token_status('binance'),
+            'okx': self.get_token_status('okx')
+        }
+        
         api_docs = {
             "service": "智能大脑数据管理器API",
             "version": "1.0.0",
+            "token_status": token_status,  # ✅ 新增：显示令牌状态
             "endpoints": {
                 "/api/brain/health": "健康检查",
                 "/api/brain/data": "查看所有存储数据",
                 "/api/brain/data/market": "查看市场数据",
                 "/api/brain/data/private": "查看私人数据",
                 "/api/brain/status": "查看数据状态",
+                "/api/brain/token-status": "查看令牌状态",  # ✅ 新增
                 "/api/brain/data/clear": "清空数据（谨慎使用）"
             },
             "current_time": datetime.now().isoformat()
@@ -252,20 +403,23 @@ class DataManager:
             }, status=404)
     
     async def handle_get_apis(self, request):
-        """查看API凭证状态（隐藏敏感信息）"""
+        """查看API凭证状态（隐藏敏感信息）- 增强版"""
         from aiohttp import web
+        
         safe_apis = {}
         for exchange, creds in self.memory_store['env_apis'].items():
             safe_apis[exchange] = {
                 "api_key_exists": bool(creds.get('api_key')),
                 "api_secret_exists": bool(creds.get('api_secret')),
                 "passphrase_exists": bool(creds.get('passphrase', '')),
-                "api_key_preview": creds.get('api_key', '')[:8] + "..." if creds.get('api_key') else None
+                "api_key_preview": creds.get('api_key', '')[:8] + "..." if creds.get('api_key') else None,
+                "token_status": self.get_token_status(exchange)  # ✅ 新增：包含令牌状态
             }
         
         response = {
             "timestamp": datetime.now().isoformat(),
             "apis": safe_apis,
+            "api_usage_stats": self.memory_store.get('api_usage_stats', {}),
             "warning": "敏感信息已隐藏，只显示存在性和预览"
         }
         return web.json_response(response)
@@ -299,6 +453,20 @@ class DataManager:
             "timestamp": datetime.now().isoformat()
         }
         return web.json_response(status)
+    
+    async def handle_get_token_status(self, request):
+        """查看令牌状态"""
+        from aiohttp import web
+        
+        response = {
+            "timestamp": datetime.now().isoformat(),
+            "tokens": {
+                "binance": self.get_token_status("binance"),
+                "okx": self.get_token_status("okx")
+            },
+            "note": "币安需要listen_key令牌，欧意直接使用API"
+        }
+        return web.json_response(response)
     
     async def handle_clear_data(self, request):
         """清空所有数据"""
@@ -384,7 +552,7 @@ class DataManager:
                 "error": str(e)
             }, status=500)
     
-    # ==================== 核心数据处理方法 ====================
+    # ==================== 核心数据处理方法保持不变 ====================
     
     async def receive_market_data(self, processed_data):
         """
@@ -517,10 +685,14 @@ class DataManager:
                     frontend_status = "⚠️【智能大脑】未启用"
                     frontend_clients = 0
                 
+                # ✅ 新增：令牌状态
+                binance_token_status = "✅ 有效" if self.has_binance_token() else "❌ 缺失"
+                
                 status_msg = f"""【智能大脑】【大脑数据状态】
 成品数据，{market_count}条，已更新。{market_time}
 私人数据-账户：{account_status}
 私人数据-交易：{trade_status}
+币安令牌：{binance_token_status}
 前端连接：{frontend_status}"""
                 
                 logger.info(status_msg)
@@ -536,6 +708,9 @@ class DataManager:
                             'private_data': {
                                 'account': account_status,
                                 'trade': trade_status
+                            },
+                            'tokens': {
+                                'binance': binance_token_status
                             },
                             'frontend': {
                                 'clients': frontend_clients,
