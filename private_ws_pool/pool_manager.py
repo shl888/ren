@@ -1,12 +1,11 @@
 """
-私人WebSocket连接池管理器 - 重构版：增强自主管理能力
+私人WebSocket连接池管理器 - 修复版：禁用币安应用层健康检查
 """
 import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 
-# 导入我们刚刚创建的组件
 from .connection import BinancePrivateConnection, OKXPrivateConnection
 from .raw_data_cache import RawDataCache
 from .data_formatter import PrivateDataFormatter
@@ -17,10 +16,7 @@ class PrivateWebSocketPool:
     """私人连接池 - 自主管理版"""
     
     def __init__(self, data_callback: Callable):
-        """
-        参数:
-            data_callback: 数据回调函数 (连接池 → 大脑DataManager)
-        """
+        """参数: data_callback: 数据回调函数 (连接池 → 大脑DataManager)"""
         self.data_callback = data_callback
         
         # 组件初始化
@@ -35,7 +31,7 @@ class PrivateWebSocketPool:
         
         # 状态管理
         self.running = False
-        self.brain_store = None  # 大脑存储接口
+        self.brain_store = None
         self.reconnect_tasks = {}
         self.health_check_tasks = {}
         
@@ -57,7 +53,6 @@ class PrivateWebSocketPool:
         logger.info("✅ [私人连接池] 已启动，进入自主管理模式")
         return True
     
-    # ✅ 新增：监听listenKey更新方法
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """监听listenKey更新事件"""
         try:
@@ -65,11 +60,9 @@ class PrivateWebSocketPool:
             
             if exchange == 'binance':
                 logger.info(f"🔗 [私人连接池] 立即尝试建立币安连接...")
-                # 直接调用币安连接方法
                 await self._setup_binance_connection()
             elif exchange == 'okx':
                 logger.info(f"🔗 [私人连接池] listenKey更新，但OKX使用API key连接，跳过")
-                # OKX不需要listenKey，跳过
             else:
                 logger.warning(f"⚠️ [私人连接池] 未知交易所: {exchange}")
                 
@@ -80,7 +73,6 @@ class PrivateWebSocketPool:
         """连接监控循环"""
         while self.running:
             try:
-                # 检查所有连接状态
                 for exchange in ['binance', 'okx']:
                     connection = self.connections[exchange]
                     
@@ -158,22 +150,18 @@ class PrivateWebSocketPool:
                 self.connections['binance'] = connection
                 logger.info("✅ [私人连接池] 币安私人连接建立成功")
                 
-                # 启动健康检查
+                # ✅ 启动健康检查（币安在内部会跳过检查）
                 self.health_check_tasks['binance'] = asyncio.create_task(
                     self._health_check_loop('binance')
                 )
             else:
                 logger.error("❌ [私人连接池] 币安私人连接建立失败")
-                
-                # 安排重连
                 await self._schedule_reconnect('binance')
             
             return success
             
         except Exception as e:
             logger.error(f"❌ [私人连接池] 设置币安连接异常: {e}")
-            
-            # 安排重连
             await self._schedule_reconnect('binance')
             return False
     
@@ -212,16 +200,12 @@ class PrivateWebSocketPool:
                 )
             else:
                 logger.error("❌ [私人连接池] 欧意私人连接建立失败")
-                
-                # 安排重连
                 await self._schedule_reconnect('okx')
             
             return success
             
         except Exception as e:
             logger.error(f"❌ [私人连接池] 设置欧意连接异常: {e}")
-            
-            # 安排重连
             await self._schedule_reconnect('okx')
             return False
     
@@ -231,14 +215,24 @@ class PrivateWebSocketPool:
             try:
                 connection = self.connections[exchange]
                 if connection and connection.connected:
-                    # 检查最后消息时间
+                    
+                    # ✅ 关键修复：币安跳过消息间隔检查
+                    if exchange == 'binance':
+                        # 币安是静默模式，只检查ws连接是否存活
+                        if connection.ws.closed:
+                            logger.warning(f"⚠️ [私人连接池] {exchange} WebSocket已关闭")
+                            connection.connected = False
+                        await asyncio.sleep(10)
+                        continue  # 跳过下面的消息间隔检查
+                
+                    # 其他交易所（欧意）保持原有逻辑
                     if connection.last_message_time:
                         seconds_since_last = (datetime.now() - connection.last_message_time).total_seconds()
-                        if seconds_since_last > 45:  # 45秒没收到消息认为有问题
-                            logger.warning(f"⚠️ [私人连接池] {exchange} 45秒未收到消息，可能已断开")
+                        if seconds_since_last > 45:
+                            logger.warning(f"⚠️ [私人连接池] {exchange} 45秒未收到消息")
                             connection.connected = False
-                
-                await asyncio.sleep(10)  # 每10秒检查一次
+            
+            await asyncio.sleep(10)
                 
             except asyncio.CancelledError:
                 break
@@ -249,7 +243,6 @@ class PrivateWebSocketPool:
     async def _schedule_reconnect(self, exchange: str, delay: int = 5):
         """安排重连"""
         if exchange in self.reconnect_tasks:
-            # 已经有重连任务，取消旧的
             self.reconnect_tasks[exchange].cancel()
         
         async def reconnect_task():
@@ -287,7 +280,6 @@ class PrivateWebSocketPool:
             logger.info(f"📡 [私人连接池] {exchange}状态事件: {event}")
             
             if event == 'connection_closed':
-                # 连接断开，安排重连
                 logger.warning(f"⚠️ [私人连接池] {exchange}连接断开")
                 await self._schedule_reconnect(exchange)
                 
@@ -296,8 +288,6 @@ class PrivateWebSocketPool:
                 
             elif event == 'listenkey_expired':
                 logger.error(f"🚨 [私人连接池] {exchange} listenKey已过期")
-                # listenKey过期，需要等待http模块更新
-                # 这里可以断开连接，让重连逻辑处理
                 if self.connections[exchange]:
                     await self.connections[exchange].disconnect()
                     self.connections[exchange] = None
@@ -322,7 +312,6 @@ class PrivateWebSocketPool:
             
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理转发数据失败: {e}")
-            # 即使格式化失败，也尝试转发原始数据
             try:
                 raw_formatted_data['processing_error'] = str(e)
                 await self.data_callback(raw_formatted_data)
