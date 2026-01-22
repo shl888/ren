@@ -1,474 +1,380 @@
 """
-私人WebSocket连接实现 - 支持币安和欧意
+私人WebSocket连接池管理器 - 重构版：增强自主管理能力
 """
 import asyncio
-import json
 import logging
-import time
-import hmac
-import hashlib
-import base64
 from datetime import datetime
-from typing import Dict, Any, Optional
-import websockets
-import ssl
-import traceback
+from typing import Dict, Any, Optional, Callable
+
+# 导入我们刚刚创建的组件
+from .connection import BinancePrivateConnection, OKXPrivateConnection
+from .raw_data_cache import RawDataCache
+from .data_formatter import PrivateDataFormatter
 
 logger = logging.getLogger(__name__)
 
-class PrivateWebSocketConnection:
-    """私人WebSocket连接基类"""
+class PrivateWebSocketPool:
+    """私人连接池 - 自主管理版"""
     
-    def __init__(self, exchange: str, connection_id: str,
-                 status_callback, data_callback, raw_data_cache):
-        self.exchange = exchange
-        self.connection_id = connection_id
-        self.status_callback = status_callback
+    def __init__(self, data_callback: Callable):
+        """
+        参数:
+            data_callback: 数据回调函数 (连接池 → 大脑DataManager)
+        """
         self.data_callback = data_callback
-        self.raw_data_cache = raw_data_cache
         
-        # 连接状态
-        self.ws = None
-        self.connected = False
-        self.subscribed = False
-        self.last_message_time = None
-        self.reconnect_count = 0
+        # 组件初始化
+        self.raw_data_cache = RawDataCache()
+        self.data_formatter = PrivateDataFormatter()
         
-        # 任务
-        self.receive_task = None
-        self.health_check_task = None
+        # 连接存储
+        self.connections = {
+            'binance': None,
+            'okx': None
+        }
         
-        logger.debug(f"[私人连接] {connection_id} 初始化")
+        # 状态管理
+        self.running = False
+        self.brain_store = None  # 大脑存储接口
+        self.reconnect_tasks = {}
+        self.health_check_tasks = {}
+        
+        logger.info("🔗 [私人连接池] 初始化完成")
     
-    async def connect(self):
-        """建立连接（由子类实现）"""
-        raise NotImplementedError
+    async def start(self, brain_store):
+        """启动连接池 - 自主启动"""
+        logger.info("🚀 [私人连接池] 正在启动...")
+        
+        self.brain_store = brain_store
+        self.running = True
+        
+        # 启动连接检查任务
+        asyncio.create_task(self._connection_monitor_loop())
+        
+        # 立即尝试连接
+        asyncio.create_task(self._try_connect_all())
+        
+        logger.info("✅ [私人连接池] 已启动，进入自主管理模式")
+        return True
     
-    async def disconnect(self):
-        """断开连接"""
+    # ✅ 新增：监听listenKey更新方法
+    async def on_listen_key_updated(self, exchange: str, listen_key: str):
+        """监听listenKey更新事件"""
         try:
-            self.connected = False
-            self.subscribed = False
+            logger.info(f"📢 [私人连接池] 收到{exchange} listenKey更新通知: {listen_key[:5]}...")
             
-            if self.health_check_task:
-                self.health_check_task.cancel()
-            
-            if self.ws:
-                await self.ws.close()
-                self.ws = None
-            
-            if self.receive_task:
-                self.receive_task.cancel()
-            
-            logger.info(f"[私人连接] {connection_id} 已断开")
-            
+            if exchange == 'binance':
+                logger.info(f"🔗 [私人连接池] 立即尝试建立币安连接...")
+                # 直接调用币安连接方法
+                await self._setup_binance_connection()
+            elif exchange == 'okx':
+                logger.info(f"🔗 [私人连接池] listenKey更新，但OKX使用API key连接，跳过")
+                # OKX不需要listenKey，跳过
+            else:
+                logger.warning(f"⚠️ [私人连接池] 未知交易所: {exchange}")
+                
         except Exception as e:
-            logger.error(f"[私人连接] 断开连接失败: {e}")
+            logger.error(f"❌ [私人连接池] 处理listenKey更新失败: {e}")
     
-    async def _start_health_check(self):
-        """启动健康检查（每5秒检查一次）"""
-        while self.connected:
-            await asyncio.sleep(5)
-            
-            # 检查是否收到消息
-            if self.last_message_time:
-                seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
-                if seconds_since_last > 30:  # 30秒没收到消息认为有问题
-                    logger.warning(f"[私人连接] {self.connection_id} 30秒未收到消息，可能已断开")
-                    await self._report_status('health_check_failed', {
-                        'seconds_since_last': seconds_since_last
-                    })
-                    self.connected = False
-                    break
+    async def _connection_monitor_loop(self):
+        """连接监控循环"""
+        while self.running:
+            try:
+                # 检查所有连接状态
+                for exchange in ['binance', 'okx']:
+                    connection = self.connections[exchange]
+                    
+                    if connection and not connection.connected:
+                        logger.warning(f"🔁 [私人连接池] {exchange}连接断开，尝试重连...")
+                        await self._reconnect_exchange(exchange)
+                
+                await asyncio.sleep(10)  # 每10秒检查一次
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌ [私人连接池] 监控循环异常: {e}")
+                await asyncio.sleep(30)
     
-    async def _report_status(self, event: str, extra_data: Dict[str, Any] = None):
-        """上报状态给大脑"""
-        try:
-            status = {
-                'exchange': self.exchange,
-                'connection_id': self.connection_id,
-                'event': event,
-                'timestamp': datetime.now().isoformat()
-            }
-            if extra_data:
-                status.update(extra_data)
-            
-            await self.status_callback(status)
-            
-        except Exception as e:
-            logger.error(f"[私人连接] 上报状态失败: {e}")
-    
-    async def _save_raw_data(self, data_type: str, raw_data: Dict[str, Any]):
-        """保存原始数据到缓存"""
-        try:
-            if self.raw_data_cache:
-                await self.raw_data_cache.save(
-                    exchange=self.exchange,
-                    data_type=data_type,
-                    raw_data=raw_data
-                )
-        except Exception as e:
-            logger.error(f"[私人连接] 保存原始数据失败: {e}")
-
-
-class BinancePrivateConnection(PrivateWebSocketConnection):
-    """币安私人连接"""
-    
-    def __init__(self, listen_key: str, **kwargs):
-        super().__init__('binance', 'binance_private', **kwargs)
-        self.listen_key = listen_key
+    async def _try_connect_all(self):
+        """尝试连接所有交易所"""
+        tasks = []
+        for exchange in ['binance', 'okx']:
+            tasks.append(self._setup_exchange_connection(exchange))
         
-        # ✅ 币安测试网备用域名（更稳定）
-        # 虽然官方推荐 testnet.binancefuture.com，但经常502
-        # fstream.binancefuture.com 是旧域名，但更稳定
-        self.ws_url = f"wss://fstream.binancefuture.com/ws/{listen_key}"
+        # 并发尝试连接
+        results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # ✅ 真实交易域名（生产环境）
-        # self.ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
-        
-    async def connect(self):
-        """建立币安私人连接"""
+        success_count = sum(1 for r in results if r is True)
+        logger.info(f"🎯 [私人连接池] 连接尝试完成: {success_count}/{len(tasks)} 成功")
+    
+    async def _setup_exchange_connection(self, exchange: str) -> bool:
+        """设置指定交易所的私人连接"""
         try:
-            logger.info(f"[币安私人] 正在连接: {self.ws_url[:50]}...")
+            logger.info(f"🔗 [私人连接池] 正在设置 {exchange} 私人连接...")
             
-            # ✅ 创建SSL上下文（测试网证书可能有问题）
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = False
-            ssl_context.verify_mode = ssl.CERT_NONE
-            
-            # ✅ 带重试的连接
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    self.ws = await asyncio.wait_for(
-                        websockets.connect(
-                            self.ws_url,
-                            ssl=ssl_context,
-                            ping_interval=20,    # ✅ 每20秒自动ping（保活关键）
-                            ping_timeout=10,     # ✅ 10秒内收不到pong认为断开
-                            close_timeout=5,
-                            # ✅ 添加必要的请求头
-                            extra_headers={
-                                "User-Agent": "Mozilla/5.0 (compatible; Python-Binance-Bot/1.0)"
-                            }
-                        ),
-                        timeout=15  # 连接超时15秒
-                    )
-                    logger.info(f"[币安私人] 第{attempt + 1}次连接成功")
-                    break
-                except asyncio.TimeoutError:
-                    logger.warning(f"[币安私人] 第{attempt + 1}次连接超时")
-                    if attempt == max_retries - 1:
-                        raise
-                    await asyncio.sleep(2 ** attempt)  # 指数退避
-                except Exception as e:
-                    logger.error(f"[币安私人] 第{attempt + 1}次失败: {type(e).__name__}: {e}")
-                    if attempt == max_retries - 1:
-                        raise
-                    await asyncio.sleep(2 ** attempt)
-            
-            self.connected = True
-            self.last_message_time = datetime.now()
-            
-            # 启动接收任务
-            self.receive_task = asyncio.create_task(self._receive_messages())
-            
-            # ✅ 禁用应用层健康检查（币安是静默模式）
-            # 这里已经注释掉了，所以不会启动健康检查任务
-            logger.debug(f"[币安私人] 跳过应用层健康检查（交易所静默模式）")
-            
-            await self._report_status('connection_established')
-            logger.info(f"[币安私人] 连接建立成功")
-            
-            return True
-            
+            if exchange == 'binance':
+                return await self._setup_binance_connection()
+            elif exchange == 'okx':
+                return await self._setup_okx_connection()
+            else:
+                logger.error(f"❌ [私人连接池] 不支持的交易所: {exchange}")
+                return False
+                
         except Exception as e:
-            logger.error(f"[币安私人] 连接失败: {type(e).__name__}: {e}")
-            logger.error(f"[币安私人] 详细错误追踪:\n{traceback.format_exc()}")
-            await self._report_status('connection_failed', {
-                'error': str(e),
-                'error_type': type(e).__name__
-            })
+            logger.error(f"❌ [私人连接池] 设置{exchange}连接失败: {e}")
             return False
     
-    async def _receive_messages(self):
-        """接收币安私人消息"""
+    async def _setup_binance_connection(self) -> bool:
+        """设置币安私人连接"""
         try:
-            async for message in self.ws:
-                self.last_message_time = datetime.now()
-                
-                try:
-                    data = json.loads(message)
-                    await self._process_binance_message(data)
-                except json.JSONDecodeError:
-                    logger.warning(f"[币安私人] 无法解析JSON消息: {message[:100]}")
-                except Exception as e:
-                    logger.error(f"[币安私人] 处理消息错误: {e}")
-                    
-        except websockets.ConnectionClosed as e:
-            logger.warning(f"[币安私人] 连接关闭: code={e.code}, reason={e.reason}")
-            await self._report_status('connection_closed', {
-                'code': e.code,
-                'reason': e.reason
-            })
-        except Exception as e:
-            logger.error(f"[币安私人] 接收消息错误: {e}")
-            await self._report_status('error', {'error': str(e)})
-        finally:
-            self.connected = False
-    
-    async def _process_binance_message(self, data: Dict[str, Any]):
-        """处理币安私人消息"""
-        # 1. 保存原始数据到缓存
-        event_type = data.get('e', 'unknown')
-        await self._save_raw_data(event_type, data)
-        
-        # 2. 格式化处理
-        formatted = {
-            'exchange': 'binance',
-            'data_type': self._map_binance_event_type(event_type),
-            'timestamp': datetime.now().isoformat(),
-            'raw_data': data,
-            'standardized': {
-                'event_type': event_type,
-                'status': 'raw_data_only'
-            }
-        }
-        
-        # 3. ✅ 只传递给大脑，不在连接池推送
-        try:
-            await self.data_callback(formatted)
-        except Exception as e:
-            logger.error(f"[币安私人] 传递给大脑失败: {e}")
-    
-    def _map_binance_event_type(self, event_type: str) -> str:
-        """映射币安事件类型到标准类型"""
-        mapping = {
-            'ACCOUNT_UPDATE': 'account_update',        # 账户余额/持仓更新
-            'ORDER_TRADE_UPDATE': 'order_update',      # 订单状态更新
-            'TRADE_LITE': 'trade_update',              # 2024-09新增：仅成交推送
-            'listenKeyExpired': 'system_event',        # listenKey过期
-            'MARGIN_CALL': 'risk_event',               # 保证金预警
-            'balanceUpdate': 'balance_update',         # 兼容旧版余额更新
-            'outboundAccountPosition': 'account_update',  # 兼容旧版账户
-            'executionReport': 'order_update'          # 兼容旧版订单
-        }
-        return mapping.get(event_type, 'unknown')
-
-
-class OKXPrivateConnection(PrivateWebSocketConnection):
-    """欧意私人连接"""
-    
-    def __init__(self, api_key: str, api_secret: str, passphrase: str = '', **kwargs):
-        super().__init__('okx', 'okx_private', **kwargs)
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.passphrase = passphrase
-        # 欧意真实交易地址
-        # self.ws_url = "wss://ws.okx.com:8443/ws/v5/private"   
-        
-        # 欧意模拟交易地址
-        self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
-        
-        # 欧意模拟交易时,需要添加这一行
-        self.broker_id = "9999"
-        
-        self.authenticated = False
-    
-    async def connect(self):
-        """建立欧意私人连接（包含认证）"""
-        try:
-            logger.info(f"[欧意私人] 正在连接: {self.ws_url}")
+            if not self.brain_store:
+                logger.error("❌ [私人连接池] 未设置大脑存储接口")
+                return False
             
-            self.ws = await websockets.connect(
-                self.ws_url,
-                ping_interval=3,     # OKX需要更频繁的ping
-                ping_timeout=5,
-                close_timeout=5
+            # 1. 从大脑获取listenKey
+            listen_key = await self.brain_store.get_listen_key('binance')
+            if not listen_key:
+                logger.warning("⚠️ [私人连接池] 币安listenKey不存在，等待中...")
+                return False
+            
+            # 2. 获取API凭证（用于可能的重新获取）
+            api_creds = await self.brain_store.get_api_credentials('binance')
+            if not api_creds:
+                logger.error("❌ [私人连接池] 币安API凭证不存在")
+                return False
+            
+            # 3. 创建连接实例
+            connection = BinancePrivateConnection(
+                listen_key=listen_key,
+                status_callback=self._handle_connection_status,
+                data_callback=self._process_and_forward_data,
+                raw_data_cache=self.raw_data_cache
             )
             
-            self.connected = True
-            
-            # 1. 首先进行认证
-            auth_success = await self._authenticate()
-            if not auth_success:
-                logger.error("[欧意私人] 认证失败")
-                await self.disconnect()
-                return False
-            
-            self.authenticated = True
-            
-            # 2. 订阅频道
-            subscribe_success = await self._subscribe_channels()
-            if not subscribe_success:
-                logger.warning("[欧意私人] 订阅频道失败，但连接已建立")
-            
-            # 3. 启动任务
-            self.receive_task = asyncio.create_task(self._receive_messages())
-            self.health_check_task = asyncio.create_task(self._start_health_check())
-            
-            await self._report_status('connection_established')
-            logger.info(f"[欧意私人] 连接建立成功")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"[欧意私人] 连接失败: {e}")
-            await self._report_status('connection_failed', {'error': str(e)})
-            return False
-    
-    async def _authenticate(self) -> bool:
-        """欧意WebSocket认证"""
-        try:
-            # ✅ 生成Unix时间戳（秒）
-            timestamp = str(int(time.time()))
-            
-            # ✅ 正确的签名消息：timestamp + "GET" + "/users/self/verify"
-            message = timestamp + 'GET' + '/users/self/verify'
-            
-            # ✅ 生成HMAC-SHA256签名
-            signature = hmac.new(
-                self.api_secret.encode('utf-8'),
-                message.encode('utf-8'),
-                hashlib.sha256
-            ).digest()
-            
-            # ✅ Base64编码
-            signature_base64 = base64.b64encode(signature).decode('utf-8')
-            
-            # 构造认证消息
-            auth_msg = {
-                "op": "login",
-                "args": [
-                    {
-                        "apiKey": self.api_key,
-                        "passphrase": self.passphrase,
-                        "timestamp": timestamp,  # ✅ 使用Unix时间戳
-                        "sign": signature_base64
-                    }
-                ]
-            }
-            
-            logger.debug(f"[欧意私人] 发送认证请求: timestamp={timestamp}")
-            await self.ws.send(json.dumps(auth_msg))
-            
-            # 等待认证响应
-            response = await asyncio.wait_for(self.ws.recv(), timeout=10)
-            response_data = json.loads(response)
-            
-            if response_data.get('event') == 'login' and response_data.get('code') == '0':
-                logger.info("[欧意私人] 认证成功")
-                return True
+            # 4. 建立连接
+            success = await connection.connect()
+            if success:
+                self.connections['binance'] = connection
+                logger.info("✅ [私人连接池] 币安私人连接建立成功")
+                
+                # 启动健康检查
+                self.health_check_tasks['binance'] = asyncio.create_task(
+                    self._health_check_loop('binance')
+                )
             else:
-                logger.error(f"[欧意私人] 认证失败: {response_data}")
+                logger.error("❌ [私人连接池] 币安私人连接建立失败")
+                
+                # 安排重连
+                await self._schedule_reconnect('binance')
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"❌ [私人连接池] 设置币安连接异常: {e}")
+            
+            # 安排重连
+            await self._schedule_reconnect('binance')
+            return False
+    
+    async def _setup_okx_connection(self) -> bool:
+        """设置欧意私人连接"""
+        try:
+            if not self.brain_store:
+                logger.error("❌ [私人连接池] 未设置大脑存储接口")
                 return False
+            
+            # 1. 从大脑获取API凭证
+            api_creds = await self.brain_store.get_api_credentials('okx')
+            if not api_creds:
+                logger.warning("⚠️ [私人连接池] 欧意API凭证不存在，等待中...")
+                return False
+            
+            # 2. 创建连接实例
+            connection = OKXPrivateConnection(
+                api_key=api_creds['api_key'],
+                api_secret=api_creds['api_secret'],
+                passphrase=api_creds.get('passphrase', ''),
+                status_callback=self._handle_connection_status,
+                data_callback=self._process_and_forward_data,
+                raw_data_cache=self.raw_data_cache
+            )
+            
+            # 3. 建立连接
+            success = await connection.connect()
+            if success:
+                self.connections['okx'] = connection
+                logger.info("✅ [私人连接池] 欧意私人连接建立成功")
                 
+                # 启动健康检查
+                self.health_check_tasks['okx'] = asyncio.create_task(
+                    self._health_check_loop('okx')
+                )
+            else:
+                logger.error("❌ [私人连接池] 欧意私人连接建立失败")
+                
+                # 安排重连
+                await self._schedule_reconnect('okx')
+            
+            return success
+            
         except Exception as e:
-            logger.error(f"[欧意私人] 认证异常: {e}")
+            logger.error(f"❌ [私人连接池] 设置欧意连接异常: {e}")
+            
+            # 安排重连
+            await self._schedule_reconnect('okx')
             return False
     
-    async def _subscribe_channels(self) -> bool:
-        """订阅欧意私人频道"""
-        try:
-            # （真实交易）订阅账户、订单、持仓频道
-            # subscribe_msg = {
-            #     "op": "subscribe",
-            #     "args": [
-            #         {"channel": "account"},
-            #         {"channel": "orders", "instType": "SWAP"},
-            #         {"channel": "positions", "instType": "SWAP"}
-            #     ]
-            # }
-            
-            # （模拟交易）修改为带brokerId的订阅
-            subscribe_msg = {
-                "op": "subscribe",
-                "args": [
-                    {"channel": "account", "brokerId": self.broker_id},
-                    {"channel": "orders", "instType": "SWAP", "brokerId": self.broker_id},
-                    {"channel": "positions", "instType": "SWAP", "brokerId": self.broker_id}
-                ]
-            }
-            
-            await self.ws.send(json.dumps(subscribe_msg))
-            logger.info("[欧意私人] 已发送订阅请求")
-            
-            # 这里可以等待订阅响应，但为了简单我们先返回成功
-            return True
-            
-        except Exception as e:
-            logger.error(f"[欧意私人] 订阅失败: {e}")
-            return False
-    
-    async def _receive_messages(self):
-        """接收欧意私人消息"""
-        try:
-            async for message in self.ws:
-                self.last_message_time = datetime.now()
-                
-                try:
-                    data = json.loads(message)
-                    await self._process_okx_message(data)
-                except json.JSONDecodeError:
-                    logger.warning(f"[欧意私人] 无法解析JSON消息: {message[:100]}")
-                except Exception as e:
-                    logger.error(f"[欧意私人] 处理消息错误: {e}")
+    async def _health_check_loop(self, exchange: str):
+        """健康检查循环"""
+        while self.running and exchange in self.connections:
+            try:
+                # 🔇 如果是币安，跳过健康检查
+                if exchange == 'binance':
+                    await asyncio.sleep(10)
+                    continue
                     
-        except websockets.ConnectionClosed as e:
-            logger.warning(f"[欧意私人] 连接关闭: code={e.code}, reason={e.reason}")
-            await self._report_status('connection_closed', {
-                'code': e.code,
-                'reason': e.reason
-            })
-        except Exception as e:
-            logger.error(f"[欧意私人] 接收消息错误: {e}")
-            await self._report_status('error', {'error': str(e)})
-        finally:
-            self.connected = False
-            self.authenticated = False
+                connection = self.connections[exchange]
+                if connection and connection.connected:
+                    # 检查最后消息时间
+                    if connection.last_message_time:
+                        seconds_since_last = (datetime.now() - connection.last_message_time).total_seconds()
+                        if seconds_since_last > 45:  # 45秒没收到消息认为有问题
+                            logger.warning(f"⚠️ [私人连接池] {exchange} 45秒未收到消息，可能已断开")
+                            connection.connected = False
+                
+                await asyncio.sleep(10)  # 每10秒检查一次
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌ [私人连接池] {exchange}健康检查异常: {e}")
+                await asyncio.sleep(30)
     
-    async def _process_okx_message(self, data: Dict[str, Any]):
-        """处理欧意私人消息"""
-        # 1. 检查是否是事件消息（如登录、订阅响应）
-        if data.get('event'):
-            event = data['event']
-            if event == 'login':
-                logger.debug(f"[欧意私人] 登录事件: {data.get('code')}")
-            elif event == 'subscribe':
-                logger.debug(f"[欧意私人] 订阅事件: {data.get('arg')}")
-            elif event == 'error':
-                logger.error(f"[欧意私人] 错误事件: {data}")
-            return
+    async def _schedule_reconnect(self, exchange: str, delay: int = 5):
+        """安排重连"""
+        if exchange in self.reconnect_tasks:
+            # 已经有重连任务，取消旧的
+            self.reconnect_tasks[exchange].cancel()
         
-        # 2. 保存原始数据
-        arg = data.get('arg', {})
-        channel = arg.get('channel', 'unknown')
-        await self._save_raw_data(channel, data)
+        async def reconnect_task():
+            await asyncio.sleep(delay)
+            if self.running:
+                logger.info(f"🔁 [私人连接池] 执行{exchange}重连...")
+                if exchange == 'binance':
+                    await self._setup_binance_connection()
+                elif exchange == 'okx':
+                    await self._setup_okx_connection()
         
-        # 3. 格式化处理
-        formatted = {
-            'exchange': 'okx',
-            'data_type': self._map_okx_channel_type(channel),
+        self.reconnect_tasks[exchange] = asyncio.create_task(reconnect_task())
+    
+    async def _reconnect_exchange(self, exchange: str):
+        """重连指定交易所"""
+        logger.info(f"🔁 [私人连接池] 正在重连{exchange}...")
+        
+        # 断开现有连接
+        if self.connections[exchange]:
+            await self.connections[exchange].disconnect()
+            self.connections[exchange] = None
+        
+        # 重新连接
+        if exchange == 'binance':
+            await self._setup_binance_connection()
+        elif exchange == 'okx':
+            await self._setup_okx_connection()
+    
+    async def _handle_connection_status(self, status_data: Dict[str, Any]):
+        """处理连接状态事件"""
+        try:
+            exchange = status_data.get('exchange')
+            event = status_data.get('event')
+            
+            logger.info(f"📡 [私人连接池] {exchange}状态事件: {event}")
+            
+            if event == 'connection_closed':
+                # 连接断开，安排重连
+                logger.warning(f"⚠️ [私人连接池] {exchange}连接断开")
+                await self._schedule_reconnect(exchange)
+                
+            elif event == 'connection_established':
+                logger.info(f"✅ [私人连接池] {exchange}私人连接已建立")
+                
+            elif event == 'listenkey_expired':
+                logger.error(f"🚨 [私人连接池] {exchange} listenKey已过期")
+                # listenKey过期，需要等待http模块更新
+                # 这里可以断开连接，让重连逻辑处理
+                if self.connections[exchange]:
+                    await self.connections[exchange].disconnect()
+                    self.connections[exchange] = None
+                
+        except Exception as e:
+            logger.error(f"❌ [私人连接池] 处理状态事件失败: {e}")
+    
+    async def _process_and_forward_data(self, raw_formatted_data: Dict[str, Any]):
+        """处理并转发数据（连接 → 格式化器 → 大脑）"""
+        try:
+            # 1. 进一步格式化数据
+            formatted_data = await self.data_formatter.format(raw_formatted_data)
+            
+            # 2. 添加处理元数据
+            formatted_data['processed_timestamp'] = datetime.now().isoformat()
+            formatted_data['formatter_version'] = self.data_formatter.formatter_version
+            
+            # 3. 转发给大脑
+            await self.data_callback(formatted_data)
+            
+            logger.debug(f"📨 [私人连接池] 已转发数据: {formatted_data['exchange']}.{formatted_data['data_type']}")
+            
+        except Exception as e:
+            logger.error(f"❌ [私人连接池] 处理转发数据失败: {e}")
+            # 即使格式化失败，也尝试转发原始数据
+            try:
+                raw_formatted_data['processing_error'] = str(e)
+                await self.data_callback(raw_formatted_data)
+            except:
+                pass
+    
+    async def shutdown(self):
+        """关闭所有连接和组件"""
+        logger.info("🛑 [私人连接池] 正在关闭...")
+        self.running = False
+        
+        # 取消所有任务
+        for task in self.reconnect_tasks.values():
+            task.cancel()
+        
+        for task in self.health_check_tasks.values():
+            task.cancel()
+        
+        # 关闭所有连接
+        shutdown_tasks = []
+        for exchange, connection in self.connections.items():
+            if connection:
+                shutdown_tasks.append(connection.disconnect())
+        
+        if shutdown_tasks:
+            await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+        
+        self.connections = {'binance': None, 'okx': None}
+        logger.info("✅ [私人连接池] 已关闭")
+    
+    def get_status(self) -> Dict[str, Any]:
+        """获取连接池状态"""
+        status = {
             'timestamp': datetime.now().isoformat(),
-            'raw_data': data,
-            'standardized': {
-                'channel': channel,
-                'status': 'raw_data_only'
+            'running': self.running,
+            'connections': {},
+            'components': {
+                'raw_data_cache': 'active' if self.raw_data_cache else 'inactive',
+                'data_formatter': self.data_formatter.get_status() if self.data_formatter else 'inactive'
             }
         }
         
-        # 4. ✅ 只传递给大脑，不在连接池推送
-        try:
-            await self.data_callback(formatted)
-        except Exception as e:
-            logger.error(f"[欧意私人] 传递给大脑失败: {e}")
-    
-    def _map_okx_channel_type(self, channel: str) -> str:
-        """映射欧意频道到标准类型"""
-        mapping = {
-            'account': 'account_update',
-            'orders': 'order_update',
-            'positions': 'position_update',
-            'balance_and_position': 'account_position_update'
-        }
-        return mapping.get(channel, 'unknown')
+        for exchange in ['binance', 'okx']:
+            connection = self.connections[exchange]
+            status['connections'][exchange] = {
+                'connected': connection.connected if connection else False,
+                'has_listen_key': self.brain_store is not None
+            }
+        
+        return status
