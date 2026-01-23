@@ -1,16 +1,17 @@
+# http_server/listen_key_manager.py
 """
-ListenKey管理器 - 负责币安listenKey的生命周期管理
-集成在http模块内部，作为exchange_api的扩展
+ListenKey管理器 - 改为直接HTTP实现，删除ExchangeAPI依赖
 """
 import asyncio
 import logging
+import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
 class ListenKeyManager:
-    """ListenKey生命周期管理器"""
+    """ListenKey生命周期管理器 - 直接HTTP实现"""
     
     def __init__(self, brain_store):
         """
@@ -18,7 +19,8 @@ class ListenKeyManager:
             brain_store: 大脑数据存储接口（需实现get_api_credentials和save_listen_key方法）
         """
         self.brain = brain_store
-        self.exchange_api = None  # 懒加载，不立即创建
+        # 🚨 删除：self.exchange_api = None
+        # 🚨 删除所有ExchangeAPI相关引用
         
         # 状态管理
         self.running = False
@@ -28,7 +30,10 @@ class ListenKeyManager:
         self.renewal_interval = 25 * 60  # 25分钟（秒）
         self.api_check_interval = 5  # 5秒检查API
         
-        logger.info("🔑 ListenKey管理器初始化完成")
+        # HTTP配置
+        self.binance_testnet_url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
+        
+        logger.info("🔑 ListenKey管理器初始化完成（直接HTTP版）")
     
     async def start(self) -> bool:
         """启动ListenKey管理服务"""
@@ -57,20 +62,15 @@ class ListenKeyManager:
             except asyncio.CancelledError:
                 pass
         
-        # 清理ExchangeAPI
-        if self.exchange_api:
-            await self.exchange_api.close()
-            self.exchange_api = None
-        
         logger.info("✅ ListenKey管理服务已停止")
     
     async def _maintenance_loop(self):
-        """ListenKey维护主循环 - 严格按老板的方案"""
-        logger.info("⏰ ListenKey维护循环已启动")
+        """ListenKey维护主循环 - 直接HTTP实现"""
+        logger.info("⏰ ListenKey维护循环已启动（直接HTTP）")
         
         while self.running:
             try:
-                # 步骤1：检查并获取令牌（内部会循环等API）
+                # 步骤1：检查并获取令牌
                 await self._check_and_renew_keys()
                 
                 # 步骤5：等待25分钟再续期
@@ -86,18 +86,16 @@ class ListenKeyManager:
     async def _check_and_renew_keys(self):
         """检查并续期所有交易所的listenKey"""
         try:
-            # 币安令牌获取
+            # 币安令牌获取（现在只有这个）
             await self._check_binance_key()
         except Exception as e:
             logger.error(f"检查续期失败: {e}")
     
     async def _check_binance_key(self):
-        """检查并续期币安listenKey - 严格按老板的方案实现"""
+        """检查并续期币安listenKey - 直接HTTP实现"""
         logger.info("🔍 开始币安令牌检查流程...")
         
-        # 步骤1：任务已启动 ✅
-        
-        # 步骤2：循环5秒获取API文件
+        # 步骤1：循环5秒获取API文件
         api_creds = None
         api_check_count = 0
         
@@ -116,22 +114,15 @@ class ListenKeyManager:
         if not self.running:
             return
         
-        # 步骤3：向币安交易所连接，获取令牌
+        # 步骤3：直接HTTP请求币安API
         try:
-            # 懒加载创建ExchangeAPI
-            if not self.exchange_api:
-                from .exchange_api import ExchangeAPI
-                self.exchange_api = ExchangeAPI("binance", api_creds)
-                # 不调用initialize()，让它在需要时才初始化
-                logger.info("✅ 懒加载创建币安ExchangeAPI")
-            
             # 获取当前listenKey
             current_key = await self.brain.get_listen_key('binance')
             
             if current_key:
                 logger.info("🔄 尝试续期现有币安listenKey")
-                # 步骤5：执行令牌续期
-                result = await self.exchange_api.keep_alive_binance_listen_key(current_key)
+                # 步骤5：执行令牌续期（直接HTTP）
+                result = await self._keep_alive_binance_key(api_creds['api_key'], current_key)
                 
                 if result.get('success'):
                     logger.info(f"✅ 币安listenKey续期成功: {current_key[:5]}...")
@@ -139,14 +130,14 @@ class ListenKeyManager:
                 else:
                     logger.warning(f"⚠️ 币安listenKey续期失败，重新获取新令牌: {result.get('error')}")
                     # 步骤6：续期失败，重新获取新令牌
-                    result = await self.exchange_api.get_binance_listen_key()
+                    result = await self._get_binance_listen_key(api_creds['api_key'])
                     if result.get('success'):
                         new_key = result['listenKey']
                     else:
                         raise Exception(f"获取新令牌失败: {result.get('error')}")
             else:
                 logger.info("🆕 首次获取币安listenKey")
-                result = await self.exchange_api.get_binance_listen_key()
+                result = await self._get_binance_listen_key(api_creds['api_key'])
                 if result.get('success'):
                     new_key = result['listenKey']
                 else:
@@ -161,6 +152,72 @@ class ListenKeyManager:
             logger.error(f"❌ 币安令牌获取失败: {e}")
             # 出错后等待一段时间再重试
             await asyncio.sleep(30)
+    
+    async def _get_binance_listen_key(self, api_key: str) -> Dict[str, Any]:
+        """直接HTTP获取币安listenKey"""
+        try:
+            url = self.binance_testnet_url
+            headers = {"X-MBX-APIKEY": api_key}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as response:
+                    data = await response.json()
+                    
+                    if 'listenKey' in data:
+                        logger.info("✅ [HTTP] 币安listenKey获取成功")
+                        return {"success": True, "listenKey": data['listenKey']}
+                    else:
+                        error_msg = data.get('msg', 'Unknown error')
+                        logger.error(f"❌ [HTTP] 币安listenKey获取失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 获取币安listenKey异常: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _keep_alive_binance_key(self, api_key: str, listen_key: str) -> Dict[str, Any]:
+        """直接HTTP延长币安listenKey有效期"""
+        try:
+            url = self.binance_testnet_url
+            headers = {"X-MBX-APIKEY": api_key}
+            
+            # 币安使用PUT方法延长listenKey
+            async with aiohttp.ClientSession() as session:
+                async with session.put(url, headers=headers) as response:
+                    if response.status == 200:
+                        logger.debug(f"✅ [HTTP] 币安listenKey续期成功: {listen_key[:10]}...")
+                        return {"success": True}
+                    else:
+                        data = await response.json()
+                        error_msg = data.get('msg', f'HTTP {response.status}')
+                        logger.warning(f"⚠️ [HTTP] 币安listenKey续期失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 币安listenKey续期异常: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _close_binance_listen_key(self, api_key: str, listen_key: str) -> Dict[str, Any]:
+        """直接HTTP关闭币安listenKey"""
+        try:
+            url = self.binance_testnet_url
+            headers = {"X-MBX-APIKEY": api_key}
+            
+            # 币安使用DELETE方法关闭listenKey
+            async with aiohttp.ClientSession() as session:
+                async with session.delete(url, headers=headers) as response:
+                    if response.status == 200:
+                        logger.info(f"✅ [HTTP] 币安listenKey关闭成功: {listen_key[:10]}...")
+                        return {"success": True}
+                    else:
+                        data = await response.json()
+                        error_msg = data.get('msg', f'HTTP {response.status}')
+                        logger.warning(f"⚠️ [HTTP] 币安listenKey关闭失败: {error_msg}")
+                        return {"success": False, "error": error_msg}
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 关闭币安listenKey异常: {e}")
+            return {"success": False, "error": str(e)}
     
     async def get_current_key(self, exchange: str) -> Optional[str]:
         """获取当前有效的listenKey - 从大脑获取"""
@@ -178,10 +235,11 @@ class ListenKeyManager:
         return {
             'running': self.running,
             'current_key': await self.brain.get_listen_key('binance'),
-            'exchange_api_ready': self.exchange_api is not None,
             'config': {
                 'renewal_interval': self.renewal_interval,
-                'api_check_interval': self.api_check_interval
+                'api_check_interval': self.api_check_interval,
+                'binance_url': self.binance_testnet_url
             },
+            'implementation': 'direct_http',
             'timestamp': datetime.now().isoformat()
         }
