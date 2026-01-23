@@ -56,8 +56,14 @@ class HTTPModuleService:
             return True
         
         try:
-            # 创建ListenKeyManager（直接HTTP实现）
-            manager = ListenKeyManager(self.brain)
+            # ✅ 关键修改：传入data_manager（和私人连接池一样）
+            # 确保大脑有data_manager
+            if not hasattr(self.brain, 'data_manager'):
+                logger.error("❌ 大脑没有data_manager属性")
+                return False
+            
+            # 创建ListenKeyManager，传入data_manager
+            manager = ListenKeyManager(self.brain.data_manager)  # ✅ 传入data_manager
             
             if await manager.start():
                 self.listen_key_managers[exchange] = manager
