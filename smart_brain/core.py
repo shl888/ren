@@ -29,19 +29,21 @@ class SmartBrain:
         self.funding_manager = funding_manager
         self.frontend_relay = frontend_relay
         
-        # 自己的管理器 - ✅ 立即创建data_manager，其他保持延迟
+        # 自己的管理器
         from .data_manager import DataManager
-        self.data_manager = DataManager(self)  # ✅ 关键：这里立即创建
+        self.data_manager = DataManager(self)
         
         self.command_router = None
         self.security_manager = None
-        # ❌ 删除：private_connection_manager 不再需要
         
         # WebSocket管理员
         self.ws_admin = None
         
         # 私人连接池实例
         self.private_pool = None
+        
+        # ✅ 新增：HTTP模块服务
+        self.http_module = None
         
         # 运行状态
         self.running = False
@@ -52,7 +54,7 @@ class SmartBrain:
         signal.signal(signal.SIGTERM, self.handle_signal)
     
     async def initialize(self):
-        """初始化大脑核心 - 只初始化耗时的组件"""
+        """初始化大脑核心"""
         logger.info("🧠 大脑核心初始化中...")
         
         try:
@@ -63,18 +65,42 @@ class SmartBrain:
             self.command_router = CommandRouter(self)
             self.security_manager = SecurityManager(self)
             
-            # 2. 启动私人连接池（直接管理，不需要中间管理器）
+            # 2. ✅ 新增：初始化HTTP模块服务
+            try:
+                from http_server.service import HTTPModuleService
+                self.http_module = HTTPModuleService()
+                http_init_success = await self.http_module.initialize(self)
+                if not http_init_success:
+                    logger.error("❌ HTTP模块服务初始化失败")
+                    return False
+                logger.info("✅ HTTP模块服务初始化成功")
+            except ImportError as e:
+                logger.error(f"❌ 无法导入HTTP模块服务: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"❌ HTTP模块服务初始化异常: {e}")
+                return False
+            
+            # 3. 启动私人连接池
             await self._start_private_connections()
             
-            # 3. 启动HTTP模块的令牌服务
-            await self._start_listen_key_service()
+            # 4. ✅ 修改：通过HTTP模块服务启动令牌服务
+            if self.http_module:
+                listen_key_started = await self.http_module.start_listen_key_service('binance')
+                if not listen_key_started:
+                    logger.warning("⚠️ 币安令牌服务启动失败（可能API未就绪）")
             
-            # 4. 启动状态日志任务
+            # 5. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 5. 完成初始化
+            # 6. 完成初始化
             self.running = True
             logger.info("✅ 大脑核心初始化完成")
+            
+            # 输出HTTP模块状态
+            if self.http_module:
+                http_status = self.http_module.get_status()
+                logger.info(f"📊 HTTP模块状态: {http_status}")
             
             return True
             
@@ -110,34 +136,6 @@ class SmartBrain:
         except Exception as e:
             logger.error(f"❌ 启动私人连接异常: {e}")
             return False
-    
-    async def _start_listen_key_service(self):
-        """启动HTTP模块的令牌服务"""
-        try:
-            if not self.http_server:
-                logger.warning("⚠️ HTTP服务器未注入，跳过令牌服务启动")
-                return
-            
-            logger.info("🔑 正在启动ListenKey服务...")
-            
-            # 创建并初始化币安ExchangeAPI
-            from http_server.exchange_api import ExchangeAPI
-            
-            # 创建币安API实例
-            binance_api = ExchangeAPI('binance')
-            
-            # 初始化ListenKey管理器（传入大脑存储接口）
-            if binance_api.init_listen_key_manager(self.data_manager):
-                # 启动ListenKey服务
-                await binance_api.start_listen_key_service()
-                logger.info("✅ ListenKey服务已启动")
-            else:
-                logger.warning("⚠️ ListenKey服务初始化失败，私人连接可能受影响")
-                
-        except ImportError as e:
-            logger.error(f"❌ 无法导入ExchangeAPI模块: {e}")
-        except Exception as e:
-            logger.error(f"❌ 启动ListenKey服务失败: {e}")
     
     async def receive_market_data(self, processed_data):
         """接收市场数据（委托给data_manager）"""
@@ -179,11 +177,15 @@ class SmartBrain:
         logger.info("正在关闭大脑核心...")
         
         try:
-            # 1. 关闭私人连接池
+            # 1. 关闭HTTP模块服务
+            if self.http_module:
+                await self.http_module.shutdown()
+            
+            # 2. 关闭私人连接池
             if self.private_pool:
                 await self.private_pool.shutdown()
             
-            # 2. 取消状态日志任务
+            # 3. 取消状态日志任务
             if self.status_log_task:
                 self.status_log_task.cancel()
                 try:
@@ -191,11 +193,11 @@ class SmartBrain:
                 except asyncio.CancelledError:
                     pass
             
-            # 3. 关闭前端中继服务器
+            # 4. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 4. 停止WebSocket管理员
+            # 5. 停止WebSocket管理员
             if self.ws_admin:
                 await self.ws_admin.stop()
             
