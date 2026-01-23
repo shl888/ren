@@ -22,26 +22,41 @@ root_dir = os.path.dirname(os.path.dirname(current_dir))  # smart_brain目录
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
-from .auth import get_api_config, generate_binance_signature, generate_okx_signature
+from .auth import generate_binance_signature, generate_okx_signature
 
 logger = logging.getLogger(__name__)
 
 class ExchangeAPI:
     """交易所API封装 - 支持币安listenKey管理"""
     
-    def __init__(self, exchange: str):
+    def __init__(self, exchange: str, api_credentials: dict):
+        """
+        参数:
+            exchange: 交易所名称 "binance" 或 "okx"
+            api_credentials: 从大脑获取的API凭证字典
+        """
         self.exchange = exchange
-        self.api_config = get_api_config(exchange)
-        self.client = None
-        self.listen_key_manager = None  # 新增：ListenKey管理器实例
+        self.api_credentials = api_credentials or {}  # 允许空字典
         
-    async def initialize(self):
-        """初始化API客户端"""
+        # ============ 【修改：警告而非崩溃】============
+        if not api_credentials or not api_credentials.get('api_key'):
+            logger.warning(f"⚠️ {exchange} ExchangeAPI创建时缺少API凭证，将以等待模式运行")
+        
+        self.client = None
+        self.listen_key_manager = None
+        
+    async def initialize(self) -> bool:
+        """初始化API客户端 - 没API也能初始化（等待模式）"""
         try:
+            # 检查是否有API
+            if not self.api_credentials or not self.api_credentials.get('api_key'):
+                logger.warning(f"[{self.exchange}] API凭证不存在，客户端无法连接交易所")
+                return True  # ✅ 仍然返回True，表示初始化完成（等待模式）
+            
             if self.exchange == "binance":
                 self.client = ccxt.binance({
-                    'apiKey': self.api_config.get('api_key', ''),
-                    'secret': self.api_config.get('api_secret', ''),
+                    'apiKey': self.api_credentials['api_key'],
+                    'secret': self.api_credentials['api_secret'],
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'future',
@@ -50,9 +65,9 @@ class ExchangeAPI:
                 })
             elif self.exchange == "okx":
                 self.client = ccxt.okx({
-                    'apiKey': self.api_config.get('api_key', ''),
-                    'secret': self.api_config.get('api_secret', ''),
-                    'password': self.api_config.get('passphrase', ''),
+                    'apiKey': self.api_credentials['api_key'],
+                    'secret': self.api_credentials['api_secret'],
+                    'password': self.api_credentials.get('passphrase', ''),
                     'enableRateLimit': True,
                 })
             
@@ -69,7 +84,7 @@ class ExchangeAPI:
     
     # ==================== ListenKey管理器集成 ====================
     
-    def init_listen_key_manager(self, brain_store):
+    def init_listen_key_manager(self, brain_store) -> bool:
         """初始化ListenKey管理器"""
         try:
             from .listen_key_manager import ListenKeyManager
@@ -82,7 +97,7 @@ class ExchangeAPI:
             logger.error(f"初始化ListenKey管理器失败: {e}")
         return False
     
-    async def start_listen_key_service(self):
+    async def start_listen_key_service(self) -> bool:
         """启动ListenKey服务"""
         if not self.listen_key_manager:
             logger.error("ListenKey管理器未初始化")
@@ -107,30 +122,29 @@ class ExchangeAPI:
             return await self.listen_key_manager.force_renew_key(self.exchange)
         return None
     
-    # ==================== 原有的币安私人连接HTTP服务 ====================
+    # ==================== 币安listenKey HTTP方法 ====================
     
-    @staticmethod
-    async def get_binance_listen_key(api_key: str, api_secret: str) -> Dict[str, Any]:
+    async def get_binance_listen_key(self) -> Dict[str, Any]:
         """
-        获取币安私人WebSocket的listenKey（静态方法）
+        获取币安私人WebSocket的listenKey
         
-        参数:
-            api_key: 币安API Key
-            api_secret: 币安Secret Key
-            
         返回:
             {"listenKey": "xxx"} 或 {"error": "message"}
         """
         try:
+            # 检查API是否存在
+            if not self.api_credentials or not self.api_credentials.get('api_key'):
+                return {"success": False, "error": "API凭证不存在"}
+            
             # (实盘地址)币安 API 端点
-#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # url = "https://fapi.binance.com/fapi/v1/listenKey"
             
             # (模拟地址)币安Futures API 端点
             url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
             
-            # 生成请求头 (币安此端点只需要API-KEY)
+            # 生成请求头
             headers = {
-                "X-MBX-APIKEY": api_key
+                "X-MBX-APIKEY": self.api_credentials['api_key']
             }
             
             # 发送POST请求
@@ -150,27 +164,28 @@ class ExchangeAPI:
             logger.error(f"❌ [HTTP] 获取币安listenKey异常: {e}")
             return {"success": False, "error": str(e)}
     
-    @staticmethod
-    async def keep_alive_binance_listen_key(api_key: str, api_secret: str, listen_key: str) -> Dict[str, Any]:
+    async def keep_alive_binance_listen_key(self, listen_key: str) -> Dict[str, Any]:
         """
-        延长币安listenKey有效期（静态方法）
+        延长币安listenKey有效期
         
         参数:
-            api_key: 币安API Key
-            api_secret: 币安Secret Key
             listen_key: 要延长的listenKey
             
         返回:
             {"success": True/False, "error": "message"}
         """
         try:
+            # 检查API是否存在
+            if not self.api_credentials or not self.api_credentials.get('api_key'):
+                return {"success": False, "error": "API凭证不存在"}
+            
             # (实盘地址)币安 API 端点
-#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # url = "https://fapi.binance.com/fapi/v1/listenKey"
             
             # (模拟地址)币安Futures API 端点
             url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
             
-            headers = {"X-MBX-APIKEY": api_key}
+            headers = {"X-MBX-APIKEY": self.api_credentials['api_key']}
             
             # 币安使用PUT方法延长listenKey
             async with aiohttp.ClientSession() as session:
@@ -188,27 +203,28 @@ class ExchangeAPI:
             logger.error(f"❌ [HTTP] 币安listenKey续期异常: {e}")
             return {"success": False, "error": str(e)}
     
-    @staticmethod
-    async def close_binance_listen_key(api_key: str, api_secret: str, listen_key: str) -> Dict[str, Any]:
+    async def close_binance_listen_key(self, listen_key: str) -> Dict[str, Any]:
         """
-        关闭/删除币安listenKey（静态方法）
+        关闭/删除币安listenKey
         
         参数:
-            api_key: 币安API Key
-            api_secret: 币安Secret Key
             listen_key: 要关闭的listenKey
             
         返回:
             {"success": True/False, "error": "message"}
         """
         try:
+            # 检查API是否存在
+            if not self.api_credentials or not self.api_credentials.get('api_key'):
+                return {"success": False, "error": "API凭证不存在"}
+            
             # (实盘地址)币安 API 端点
-#            url = "https://fapi.binance.com/fapi/v1/listenKey"
+            # url = "https://fapi.binance.com/fapi/v1/listenKey"
             
             # (模拟地址)币安Futures API 端点
             url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
             
-            headers = {"X-MBX-APIKEY": api_key}
+            headers = {"X-MBX-APIKEY": self.api_credentials['api_key']}
             
             # 币安使用DELETE方法关闭listenKey
             async with aiohttp.ClientSession() as session:
@@ -226,81 +242,7 @@ class ExchangeAPI:
             logger.error(f"❌ [HTTP] 关闭币安listenKey异常: {e}")
             return {"success": False, "error": str(e)}
     
-    # ==================== 原有方法保持不变（用于交易指令）====================
-    
-    async def fetch_account_balance(self) -> Dict[str, Any]:
-        """获取账户余额"""
-        try:
-            if not self.client:
-                await self.initialize()
-                if not self.client:
-                    return {"error": "API客户端初始化失败"}
-            
-            balance = await self.client.fetch_balance()
-            
-            # 格式化余额数据
-            formatted = {
-                "total": balance.get("total", {}),
-                "free": balance.get("free", {}),
-                "used": balance.get("used", {}),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            return formatted
-            
-        except Exception as e:
-            logger.error(f"[{self.exchange}] 获取余额失败: {e}")
-            return {"error": str(e)}
-    
-    async def fetch_positions(self) -> List[Dict[str, Any]]:
-        """获取持仓"""
-        try:
-            if not self.client:
-                await self.initialize()
-                if not self.client:
-                    return [{"error": "API客户端初始化失败"}]
-            
-            if self.exchange == "binance":
-                # 币安持仓
-                positions = await self.client.fetch_positions()
-                formatted = []
-                for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
-                        formatted.append({
-                            "symbol": pos['symbol'],
-                            "side": pos['side'],
-                            "contracts": float(pos['contracts']),
-                            "entry_price": float(pos['entryPrice']),
-                            "mark_price": float(pos['markPrice']),
-                            "unrealized_pnl": float(pos['unrealizedPnl']),
-                            "liquidation_price": float(pos['liquidationPrice']) if pos.get('liquidationPrice') else None,
-                            "leverage": float(pos['leverage']) if pos.get('leverage') else 1,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                return formatted
-                
-            elif self.exchange == "okx":
-                # 欧意持仓
-                positions = await self.client.fetch_positions()
-                formatted = []
-                for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
-                        formatted.append({
-                            "symbol": pos['symbol'],
-                            "side": pos['side'],
-                            "contracts": float(pos['contracts']),
-                            "entry_price": float(pos['entryPrice']),
-                            "mark_price": float(pos['markPrice']),
-                            "unrealized_pnl": float(pos['unrealizedPnl']),
-                            "liquidation_price": float(pos['liquidationPrice']) if pos.get('liquidationPrice') else None,
-                            "leverage": float(pos['leverage']) if pos.get('leverage') else 1,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                return formatted
-                
-        except Exception as e:
-            logger.error(f"[{self.exchange}] 获取持仓失败: {e}")
-            return [{"error": str(e)}]
+    # ==================== 交易相关方法 ====================
     
     async def create_order(
         self,
@@ -434,6 +376,77 @@ class ExchangeAPI:
             
         except Exception as e:
             logger.error(f"[{self.exchange}] 获取订单历史失败: {e}")
+            return [{"error": str(e)}]
+    
+    async def fetch_account_balance(self) -> Dict[str, Any]:
+        """获取账户余额"""
+        try:
+            if not self.client:
+                await self.initialize()
+                if not self.client:
+                    return {"error": "API客户端初始化失败"}
+            
+            balance = await self.client.fetch_balance()
+            
+            formatted = {
+                "total": balance.get("total", {}),
+                "free": balance.get("free", {}),
+                "used": balance.get("used", {}),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            return formatted
+            
+        except Exception as e:
+            logger.error(f"[{self.exchange}] 获取余额失败: {e}")
+            return {"error": str(e)}
+    
+    async def fetch_positions(self) -> List[Dict[str, Any]]:
+        """获取持仓"""
+        try:
+            if not self.client:
+                await self.initialize()
+                if not self.client:
+                    return [{"error": "API客户端初始化失败"}]
+            
+            if self.exchange == "binance":
+                positions = await self.client.fetch_positions()
+                formatted = []
+                for pos in positions:
+                    if float(pos.get('contracts', 0)) != 0:
+                        formatted.append({
+                            "symbol": pos['symbol'],
+                            "side": pos['side'],
+                            "contracts": float(pos['contracts']),
+                            "entry_price": float(pos['entryPrice']),
+                            "mark_price": float(pos['markPrice']),
+                            "unrealized_pnl": float(pos['unrealizedPnl']),
+                            "liquidation_price": float(pos['liquidationPrice']) if pos.get('liquidationPrice') else None,
+                            "leverage": float(pos['leverage']) if pos.get('leverage') else 1,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                return formatted
+                
+            elif self.exchange == "okx":
+                positions = await self.client.fetch_positions()
+                formatted = []
+                for pos in positions:
+                    if float(pos.get('contracts', 0)) != 0:
+                        formatted.append({
+                            "symbol": pos['symbol'],
+                            "side": pos['side'],
+                            "contracts": float(pos['contracts']),
+                            "entry_price": float(pos['entryPrice']),
+                            "mark_price": float(pos['markPrice']),
+                            "unrealized_pnl": float(pos['unrealizedPnl']),
+                            "liquidation_price": float(pos['liquidationPrice']) if pos.get('liquidationPrice') else None,
+                            "leverage": float(pos['leverage']) if pos.get('leverage') else 1,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                return formatted
+                
+        except Exception as e:
+            logger.error(f"[{self.exchange}] 获取持仓失败: {e}")
             return [{"error": str(e)}]
     
     async def set_leverage(self, symbol: str, leverage: int) -> Dict[str, Any]:
