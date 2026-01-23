@@ -18,8 +18,9 @@ if root_dir not in sys.path:
 # ============ 导入各模块路由 ============
 from .main import setup_main_routes
 from .debug import setup_debug_routes
-from .trade import setup_trade_routes
-from .account import setup_account_routes
+# ❌ 删除交易相关路由导入
+# from .trade import setup_trade_routes  
+# from .account import setup_account_routes
 from .monitor import setup_monitor_routes
 from funding_settlement.api_routes import setup_funding_settlement_routes  # ✅ 新增
 
@@ -38,8 +39,9 @@ def setup_routes(app: web.Application):
     
     # 功能路由
     setup_debug_routes(app)
-    setup_trade_routes(app)
-    setup_account_routes(app)
+    # ❌ 删除交易相关路由设置
+    # setup_trade_routes(app)
+    # setup_account_routes(app)
     setup_monitor_routes(app)
     
     # ✅ 新增：资金费率结算路由
@@ -50,8 +52,9 @@ def setup_routes(app: web.Application):
     logger.info("📊 路由统计:")
     logger.info(f"   - 总路由数: {len(app.router.routes())}")
     logger.info(f"   - 调试接口: /api/debug/* (4个)")
-    logger.info(f"   - 交易接口: /api/trade/* (5个)")
-    logger.info(f"   - 账户接口: /api/account/* (2个)")
+    # ❌ 删除交易相关路由统计
+    # logger.info(f"   - 交易接口: /api/trade/* (5个)")
+    # logger.info(f"   - 账户接口: /api/account/* (2个)")
     logger.info(f"   - 市场数据: /api/market/*, /api/data/* (3个)")
     logger.info(f"   - 监控接口: /api/monitor/* (3个)")
     logger.info(f"   - 资金费率: /api/funding/settlement/* (3个)")
