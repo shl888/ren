@@ -131,15 +131,11 @@ class HTTPModuleService:
     async def _get_or_create_exchange_api(self, exchange: str, api_creds: Dict[str, str]) -> Optional[ExchangeAPI]:
         """获取或创建ExchangeAPI工具"""
         if exchange not in self.exchange_apis:
-            # 创建新工具
+            # 创建新工具 - 不初始化
             try:
                 api = ExchangeAPI(exchange, api_creds)
-                if await api.initialize():
-                    self.exchange_apis[exchange] = api
-                    logger.info(f"✅ HTTP模块创建{exchange} ExchangeAPI工具")
-                else:
-                    logger.error(f"❌ HTTP模块初始化{exchange} ExchangeAPI失败")
-                    return None
+                self.exchange_apis[exchange] = api
+                logger.info(f"✅ HTTP模块创建{exchange} ExchangeAPI工具（懒加载）")
             except Exception as e:
                 logger.error(f"❌ HTTP模块创建{exchange} ExchangeAPI异常: {e}")
                 return None
@@ -147,7 +143,7 @@ class HTTPModuleService:
         return self.exchange_apis[exchange]
     
     async def start_listen_key_service(self, exchange: str = 'binance') -> bool:
-        """启动令牌服务 - HTTP模块自己管理"""
+        """启动令牌服务 - 简化版本，严格按老板方案"""
         if not self.initialized:
             logger.error("HTTP模块未初始化")
             return False
@@ -157,20 +153,10 @@ class HTTPModuleService:
             return True
         
         try:
-            # 1. 从大脑获取API（HTTP模块自己有权限）
-            api_creds = await self.brain.data_manager.get_api_credentials(exchange)
-            if not api_creds or not api_creds.get('api_key'):
-                logger.warning(f"⚠️ {exchange} API凭证不存在，令牌服务等待中")
-                return False
+            # 步骤1：启动任务 - 不需要API
+            # 创建ListenKeyManager，不传ExchangeAPI
+            manager = ListenKeyManager(self.brain.data_manager)
             
-            # 2. 创建ExchangeAPI工具
-            api = await self._get_or_create_exchange_api(exchange, api_creds)
-            if not api:
-                logger.error(f"❌ 无法创建{exchange} API工具，令牌服务启动失败")
-                return False
-            
-            # 3. 创建并启动ListenKeyManager
-            manager = ListenKeyManager(api, self.brain.data_manager)
             if await manager.start():
                 self.listen_key_managers[exchange] = manager
                 logger.info(f"✅ HTTP模块启动{exchange}令牌服务")
