@@ -56,7 +56,7 @@ class DataManager:
         return self.memory_store['env_apis'].get(exchange)
     
     async def get_listen_key(self, exchange: str):
-        """获取指定交易所的listenKey（供连接池调用）"""
+        """获取指定交易所的listenKey（供连接池和listen_key_manager调用）"""
         token_info = self.memory_store['exchange_tokens'].get(exchange)
         return token_info.get('key') if token_info else None
     
