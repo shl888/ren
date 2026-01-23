@@ -11,35 +11,9 @@ from typing import Dict, Any, Optional
 from functools import wraps
 from aiohttp import web
 
-# 从环境变量获取API密钥
-API_KEYS = {
-    "binance": {
-        "api_key": os.getenv("BINANCE_API_KEY", ""),
-        "api_secret": os.getenv("BINANCE_API_SECRET", "")
-    },
-    "okx": {
-        "api_key": os.getenv("OKX_API_KEY", ""),
-        "api_secret": os.getenv("OKX_API_SECRET", ""),
-        "passphrase": os.getenv("OKX_PASSPHRASE", "")
-    }
-}
+# ============ 【完全删除：API_KEYS字典和所有读取环境变量的代码】============
 
-# 服务器访问密码
-ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "default_password_change_me")
-
-def has_api_keys(exchange: str) -> bool:
-    """检查是否有API密钥"""
-    config = API_KEYS.get(exchange, {})
-    if exchange == "binance":
-        return bool(config.get("api_key")) and bool(config.get("api_secret"))
-    elif exchange == "okx":
-        return bool(config.get("api_key")) and bool(config.get("api_secret")) and bool(config.get("passphrase"))
-    return False
-
-def get_api_config(exchange: str) -> Dict[str, str]:
-    """获取API配置"""
-    return API_KEYS.get(exchange, {}).copy()
-
+# ============ 【保留：签名工具函数】============
 def generate_binance_signature(secret: str, data: str) -> str:
     """生成币安签名"""
     return hmac.new(
@@ -58,11 +32,15 @@ def generate_okx_signature(secret: str, timestamp: str, method: str, request_pat
     )
     return base64.b64encode(mac.digest()).decode()
 
+# ============ 【保留：HTTP密码认证】============
+# 服务器访问密码
+ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "default_password_change_me")
+
 def require_auth(func):
     """认证装饰器 - 基于HTTP Header的密码认证"""
     @wraps(func)
     async def wrapper(request):
-        # ============ 【新增】公开路径定义 ============
+        # ============ 公开路径定义 ============
         public_paths = [
             '/',                     # 首页
             '/public/ping',          # 保活ping
@@ -74,7 +52,7 @@ def require_auth(func):
         if request.path in public_paths:
             return await func(request)
         
-        # ============ 【新增】检查路径是否为公开监控端点 ============
+        # ============ 检查路径是否为公开监控端点 ============
         if request.path.startswith('/api/monitor/health'):
             return await func(request)
         
@@ -92,20 +70,11 @@ def require_auth(func):
                 status=401
             )
         
-        # 对于需要交易所API的接口，额外检查是否有配置密钥
-        if '/api/trade/' in request.path or '/api/account/' in request.path:
-            exchange = request.match_info.get('exchange', '')
-            if exchange and not has_api_keys(exchange):
-                return web.json_response(
-                    {"error": f"{exchange} API密钥未配置"},
-                    status=400
-                )
-        
         return await func(request)
     
     return wrapper
 
-# ============ 【新增】系统监控专用装饰器 ============
+# ============ 【保留：系统监控专用装饰器】============
 def require_monitor_auth(func):
     """系统监控认证装饰器 - 仅检查密码，不检查交易所API"""
     @wraps(func)
