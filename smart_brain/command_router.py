@@ -3,7 +3,6 @@
 """
 import logging
 from datetime import datetime
-from http_server.exchange_api import ExchangeAPI
 
 logger = logging.getLogger(__name__)
 
@@ -12,24 +11,32 @@ class CommandRouter:
         self.brain = brain
     
     async def _execute_exchange_api(self, exchange_name, api_method, **kwargs):
-        """执行交易所API调用"""
+        """执行交易所API调用 - 通过HTTP模块服务"""
         try:
-            api = ExchangeAPI(exchange_name)
-            if not await api.initialize():
-                return {"success": False, "error": f"❌【智能大脑】{exchange_name} API初始化失败"}
+            # ✅ 修改：检查HTTP模块服务是否就绪
+            if not hasattr(self.brain, 'http_module') or not self.brain.http_module:
+                return {
+                    "success": False, 
+                    "error": f"❌【智能大脑】HTTP模块服务未就绪"
+                }
             
-            method = getattr(api, api_method)
-            result = await method(**kwargs)
-            await api.close()
+            # ✅ 修改：通过HTTP模块服务执行
+            result = await self.brain.http_module.execute_api(
+                exchange=exchange_name,
+                method=api_method,
+                **kwargs
+            )
             
-            if "error" in result:
-                return {"success": False, "error": result["error"]}
-            
-            return {"success": True, "data": result}
+            return result
             
         except Exception as e:
             logger.error(f"❌【智能大脑】执行API失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {"success": False, "error": str(e)}
+    
+    # ============ 【后面所有方法保持不变】============
+    # 全部保留原有逻辑，只是调用方式改为通过HTTP模块服务
     
     async def handle_frontend_command(self, command_data):
         """
@@ -364,4 +371,3 @@ class CommandRouter:
                 "client_id": client_id,
                 "timestamp": datetime.now().isoformat()
             }
-            
