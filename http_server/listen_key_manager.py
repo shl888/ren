@@ -1,43 +1,40 @@
 # listen_key_manager.py
 """
-ListenKey管理器 - 智能重试版
-🚨 添加完整的失败重试机制，区分错误类型
+ListenKey管理器 - 推送版本
 """
 import asyncio
 import logging
 import aiohttp
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 import re
 
 logger = logging.getLogger(__name__)
 
 class ListenKeyManager:
-    """ListenKey生命周期管理器 - 智能重试版"""
+    """ListenKey生命周期管理器 - 推送模式"""
     
     def __init__(self, brain_store):
-        """
-        参数:
-            brain_store: 大脑数据存储接口
-        """
         self.brain = brain_store
         
         # 状态管理
         self.running = False
         self.maintenance_task = None
         
+        # 🎯 新增：关键时间戳
+        self.last_token_time = None  # 上次成功获取/续期令牌的时间
+        
         # 配置
-        self.renewal_interval = 25 * 60  # 25分钟正常续期间隔
+        self.renewal_interval = 25 * 60  # 25分钟 = 1500秒
         self.api_check_interval = 5  # 5秒检查API
         
         # HTTP配置
         self.binance_testnet_url = "https://testnet.binancefuture.com/fapi/v1/listenKey"
         
-        # 🎯 新增：重试配置
-        self.max_token_retries = 3  # 令牌操作最大重试次数
+        # 重试配置
+        self.max_token_retries = 3
         self.retry_strategies = {
-            # 错误码 -> (操作类型, 延迟秒数, 描述)
             -1001: ('retry_same', 30, '交易所内部错误'),
             -1003: ('wait_long', 60, '请求频率限制'),
             -1022: ('get_new', 10, '签名错误，需重新获取'),
@@ -48,7 +45,9 @@ class ListenKeyManager:
             'default': ('retry_same', 10, '临时错误')
         }
         
-        logger.info("🔑 ListenKey管理器初始化完成（智能重试版）")
+        logger.info("🔑 ListenKey管理器初始化完成（推送模式）")
+    
+    # ==================== 核心维护循环 ====================
     
     async def start(self) -> bool:
         """启动ListenKey管理服务"""
@@ -79,82 +78,136 @@ class ListenKeyManager:
         
         logger.info("✅ ListenKey管理服务已停止")
     
-    # ==================== 核心维护循环 ====================
-    
     async def _maintenance_loop(self):
-        """ListenKey维护主循环 - 智能重试版"""
-        logger.info("⏰ ListenKey维护循环已启动（智能重试）")
+        """基于时间戳的精确续期循环"""
+        logger.info("⏰ ListenKey令牌获取维护循环已启动（时间戳精确版）")
+        
+        # 🎯 首次启动：立即执行，获取初始时间戳
+        await self._execute_and_update_timestamp()
         
         while self.running:
             try:
-                # 🎯 步骤1：检查并获取令牌（带智能重试）
-                success = await self._check_and_renew_keys_with_retry()
+                # 🎯 1. 计算距离下次续期还需等待多久
+                wait_seconds = self._calculate_wait_time()
                 
-                if success:
-                    # ✅ 成功：等待25分钟正常续期
-                    logger.info(f"✅ 令牌操作成功，等待{self.renewal_interval/60}分钟后正常续期")
-                    await asyncio.sleep(self.renewal_interval)
-                else:
-                    # ❌ 失败：等待较短时间后重试完整流程
-                    logger.warning(f"⚠️ 令牌操作失败，30秒后重试完整流程")
+                if wait_seconds > 0:
+                    # 最多睡5分钟，然后重新检查（避免长时间阻塞）
+                    sleep_time = min(wait_seconds, 300)
+                    logger.debug(f"⏳ 等待{sleep_time:.0f}秒后检查...")
+                    await asyncio.sleep(sleep_time)
+                    continue
+                
+                # 🎯 2. 到达续期时间，执行操作
+                logger.info("🕐 到达续期时间，执行令牌操作")
+                success = await self._execute_and_update_timestamp()
+                
+                if not success:
+                    # ❌ 操作失败：等待30秒后重试
+                    logger.warning("⚠️ 令牌操作失败，30秒后重试")
                     await asyncio.sleep(30)
-                
+                    
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"ListenKey维护循环异常: {e}")
+                logger.error(f"续期循环异常: {e}")
                 await asyncio.sleep(60)
     
-    async def _check_and_renew_keys_with_retry(self) -> bool:
-        """检查并续期所有交易所的listenKey - 带智能重试"""
+    def _calculate_wait_time(self) -> float:
+        """🎯 核心：计算需要等待的时间（基于时间戳）"""
+        if not self.last_token_time:
+            # 没有时间戳，立即执行
+            return 0
+        
+        now = datetime.now()
+        elapsed = (now - self.last_token_time).total_seconds()
+        
+        # 如果已经超过25分钟，立即执行
+        if elapsed >= self.renewal_interval:
+            return 0
+        
+        # 否则等待剩余时间
+        wait_time = self.renewal_interval - elapsed
+        
+        # 避免负数（时钟回拨等情况）
+        return max(0, wait_time)
+    
+    async def _execute_and_update_timestamp(self) -> bool:
+        """执行令牌操作，成功后更新时间戳"""
         try:
-            # 🎯 重点：只处理币安（当前唯一需要listenKey的）
+            # 执行令牌操作
+            logger.info("🔍 执行令牌检查流程...")
+            success = await self._check_and_renew_keys_with_retry()
+            
+            if success:
+                # 🎯 成功：更新时间戳！
+                self.last_token_time = datetime.now()
+                logger.info(f"✅ 令牌操作成功，时间戳更新: {self.last_token_time.strftime('%H:%M:%S')}")
+                
+                # 计算距离下次续期时间
+                next_time = self.last_token_time + timedelta(seconds=self.renewal_interval)
+                from_now = (next_time - datetime.now()).total_seconds()
+                logger.info(f"📅 下次续期时间: {next_time.strftime('%H:%M:%S')} ({from_now/60:.1f}分钟后)")
+            else:
+                logger.error("❌ 令牌操作失败")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"执行令牌操作异常: {e}")
+            return False
+    
+    # ==================== 令牌操作逻辑 ====================
+    
+    async def _check_and_renew_keys_with_retry(self) -> bool:
+        """检查并续期所有交易所的listenKey"""
+        try:
             return await self._check_binance_key_with_retry()
         except Exception as e:
             logger.error(f"检查续期失败: {e}")
             return False
     
     async def _check_binance_key_with_retry(self) -> bool:
-        """检查并续期币安listenKey - 智能重试版"""
-        logger.info("🔍 开始币安令牌检查流程（智能重试）...")
-        
-        # ============ 阶段1：从大脑模块读取API凭证（带重试） ============
+        """检查并续期币安listenKey"""
+        # 1. 从大脑获取API凭证
         api_creds = await self._get_api_credentials_with_retry('binance')
         if not api_creds:
-            logger.warning("⚠️ 无法获取API凭证，跳过本次令牌检查")
+            logger.warning("⚠️ 无法从大脑获取API凭证，跳过本次令牌检查")
             return False
         
-        # ============ 阶段2：读取当前令牌状态 ============
+        # 2. 获取大脑当前令牌状态
         current_key = await self.brain.get_listen_key('binance')
         
-        # ============ 阶段3：连接交易所获取/续期令牌（带智能重试） ============
+        # 3. 连接交易所执行令牌操作
         if current_key:
-            logger.info("🔄 尝试续期现有币安listenKey")
-            operation = 'keep_alive'
+            logger.info(f"🔄 尝试续期现有币安listenKey: {current_key[:5]}...")
             result = await self._execute_token_operation_with_retry(
-                operation, api_creds['api_key'], current_key
+                'keep_alive', api_creds['api_key'], current_key
             )
         else:
             logger.info("🆕 首次获取币安listenKey")
-            operation = 'get_new'
             result = await self._execute_token_operation_with_retry(
-                operation, api_creds['api_key']
+                'get_new', api_creds['api_key']
             )
         
-        # ============ 阶段4：处理操作结果 ============
+        # 4. 处理结果并推送
         if result['success']:
-            # ✅ 成功：推送令牌到大脑
             new_key = result.get('listenKey', current_key)
             if new_key:
-                await self.brain.save_listen_key('binance', new_key)
-                logger.info(f"✅ 币安listenKey已获取/更新: {new_key[:5]}...")
+                # ==================== 【推送：HTTP模块将令牌推送给大脑】 ====================
+                await self.brain.receive_private_data({
+                    'exchange': 'binance',
+                    'data_type': 'listen_key',
+                    'data': {
+                        'listenKey': new_key,
+                        'source': 'http_module'
+                    }
+                })
+                logger.info(f"✅ 【推送】币安listenKey已推送给大脑: {new_key[:5]}...")
                 return True
             else:
                 logger.warning("⚠️ 操作成功但未返回新令牌")
-                return False
-        else:
-            # ❌ 失败：已记录错误，返回失败
-            return False
+        
+        return False
     
     # ==================== 智能重试核心方法 ====================
     
@@ -168,7 +221,7 @@ class ListenKeyManager:
             
             api_creds = await self.brain.get_api_credentials(exchange)
             if api_creds and api_creds.get('api_key'):
-                logger.info(f"✅ 第{retry_count}次尝试：成功获取{exchange} API凭证")
+                logger.debug(f"✅ 第{retry_count}次尝试：成功获取{exchange} API凭证")
                 return api_creds
             else:
                 if retry_count < max_retries:
@@ -456,19 +509,26 @@ class ListenKeyManager:
     
     async def get_status(self) -> Dict[str, Any]:
         """获取管理器状态"""
-        return {
+        status = {
             'running': self.running,
+            'last_token_time': self.last_token_time.isoformat() if self.last_token_time else None,
             'current_key': await self.brain.get_listen_key('binance'),
             'config': {
                 'renewal_interval': self.renewal_interval,
                 'api_check_interval': self.api_check_interval,
                 'max_token_retries': self.max_token_retries,
-                'binance_url': self.binance_testnet_url
             },
-            'retry_strategies': {
-                k: {'action': v[0], 'delay': v[1], 'reason': v[2]}
-                for k, v in self.retry_strategies.items()
-            },
-            'implementation': 'direct_http_with_smart_retry',
             'timestamp': datetime.now().isoformat()
         }
+        
+        # 计算下次续期时间
+        if self.last_token_time:
+            next_time = self.last_token_time + timedelta(seconds=self.renewal_interval)
+            now = datetime.now()
+            seconds_until_next = (next_time - now).total_seconds()
+            
+            status['next_renewal_time'] = next_time.isoformat()
+            status['seconds_until_next'] = max(0, seconds_until_next)
+            status['minutes_until_next'] = max(0, seconds_until_next / 60)
+        
+        return status
