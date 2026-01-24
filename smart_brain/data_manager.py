@@ -52,7 +52,7 @@ class DataManager:
             # ==================== 【清理：统一存储逻辑】 ====================
             if data_type == 'listen_key':
                 # 🎯 只存到 exchange_tokens，不存到 private_data
-                listen_key = private_data.get('listenKey')
+                listen_key = private_data['data'].get('listenKey')
                 if listen_key:
                     storage_key = exchange
                     storage_location = 'exchange_tokens'
