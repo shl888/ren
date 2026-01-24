@@ -34,8 +34,7 @@ class SmartBrain:
         self.data_manager = DataManager(self)
         
         self.command_router = None
-        self.security_manager = None
-        
+
         # WebSocket管理员
         self.ws_admin = None
         
@@ -60,10 +59,9 @@ class SmartBrain:
         try:
             # 1. 初始化其他管理器
             from .command_router import CommandRouter
-            from .security_manager import SecurityManager
             
             self.command_router = CommandRouter(self)
-            self.security_manager = SecurityManager(self)
+            
             
             # 2. ✅ 新增：初始化HTTP模块服务
             try:

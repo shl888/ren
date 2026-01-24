@@ -25,7 +25,6 @@ class DataManager:
         self.memory_store = {
             'market_data': {},
             'private_data': {},
-            'encrypted_keys': {},
             'env_apis': self._load_apis_from_env(),
             'exchange_tokens': {}  # 🎯 专门存储listenKey
         }
