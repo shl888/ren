@@ -52,14 +52,14 @@ class DataManager:
             # ==================== 【清理：统一存储逻辑】 ====================
             if data_type == 'listen_key':
                 # 🎯 只存到 exchange_tokens，不存到 private_data
-                listen_key = private_data['data'].get('listenKey')
+                listen_key = private_data.get('listenKey')
                 if listen_key:
                     storage_key = exchange
                     storage_location = 'exchange_tokens'
                     stored_data = {
                         'key': listen_key,
                         'updated_at': now.isoformat(),
-                        'source': private_data['data'].get('source', 'http_module'),
+                        'source': private_data.get('source', 'http_module'),
                         'exchange': exchange,
                         'data_type': 'listen_key'
                     }
@@ -77,7 +77,7 @@ class DataManager:
                 storage_key = f"{exchange}_{data_type}"
                 storage_location = 'private_data'
                 stored_data = {
-                    'raw_data': private_data['data'],
+                    'raw_data': private_data,
                     'exchange': exchange,
                     'data_type': data_type,
                     'received_at': now.isoformat()
