@@ -84,7 +84,7 @@ class PrivateWebSocketPool:
         # 等待3秒再连接欧意
         await asyncio.sleep(3)
         
-        logger.info("🔗 [私人连接池] 第二阶段：连接欧意（心跳模式）")
+        logger.info("🔗 [私人连接池] 第二阶段：连接欧意（协议层心跳模式）")
         okx_success = await self._setup_okx_connection()
         
         success_count = sum([binance_success, okx_success])
@@ -241,7 +241,7 @@ class PrivateWebSocketPool:
             return False
     
     async def _setup_okx_connection(self) -> bool:
-        """设置欧意连接（心跳模式）"""
+        """设置欧意连接（协议层心跳模式）"""
         try:
             if not self.brain_store:
                 logger.error("❌ [私人连接池] 未设置大脑存储接口")
@@ -267,7 +267,7 @@ class PrivateWebSocketPool:
             success = await connection.connect()
             if success:
                 self.connections['okx'] = connection
-                logger.info("✅ [私人连接池] 欧意连接成功（心跳模式）")
+                logger.info("✅ [私人连接池] 欧意连接成功（协议层心跳模式）")
             else:
                 logger.error("❌ [私人连接池] 欧意连接失败")
                 await self._schedule_reconnect('okx')
@@ -377,7 +377,7 @@ class PrivateWebSocketPool:
             'alerts': [],
             'exchange_modes': {
                 'binance': '主动探测模式（30秒探测）',
-                'okx': '心跳模式（25秒心跳 + 45秒检测）'
+                'okx': '协议层心跳模式（25秒协议层心跳 + 45秒被动检测）'
             }
         }
         
@@ -392,7 +392,7 @@ class PrivateWebSocketPool:
                     'connection_established_time': connection.connection_established_time.isoformat() if connection.connection_established_time else None,
                     'message_counter': connection.message_counter,
                     'first_message_received': connection.first_message_received,
-                    'mode': '主动探测' if exchange == 'binance' else '心跳'
+                    'mode': '被动探测' if exchange == 'binance' else '心跳'
                 }
                 
                 if not connection.connected:

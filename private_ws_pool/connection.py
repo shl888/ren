@@ -608,30 +608,16 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         # 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
         
-        # 启动心跳任务
-        self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # 删除应用层心跳任务（OKX不支持主动ping）
+        # self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         
-        # 启动主动模式健康检查
+        # 启动被动健康监控任务
         self.health_check_task = asyncio.create_task(self._active_mode_health_check())
         
         logger.info("[欧意私人] 维护任务已启动")
     
-    async def _heartbeat_loop(self):
-        """欧意应用层心跳"""
-        while self.connected and self.authenticated:
-            await asyncio.sleep(self.heartbeat_interval)
-            
-            try:
-                heartbeat_msg = {"op": "ping"}
-                await self.ws.send(json.dumps(heartbeat_msg))
-                self.last_heartbeat_time = datetime.now()
-                logger.debug("[欧意私人] 发送心跳")
-            except Exception as e:
-                logger.warning(f"[欧意私人] 心跳发送失败: {e}")
-                break
-    
     async def _active_mode_health_check(self):
-        """主动模式健康检查 - 消息间隔法"""
+        """主动模式健康检查 - 消息间隔法（被动监控）"""
         while self.connected and self.authenticated:
             await asyncio.sleep(12)  # 12秒检查一次
             
@@ -639,26 +625,10 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             if self.last_message_time:
                 seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
                 
-                # 如果45秒没消息，发送测试PING
+                # 超过阈值时仅记录警告，由协议层心跳处理断开
                 if seconds_since_last > self.no_message_threshold:
-                    logger.warning(f"[欧意私人] {seconds_since_last:.0f}秒未收到消息，发送测试PING")
-                    
-                    try:
-                        await self.ws.send(json.dumps({"op": "ping"}))
-                        
-                        # 等待响应
-                        try:
-                            response = await asyncio.wait_for(self.ws.recv(), timeout=3)
-                            logger.debug(f"[欧意私人] PING测试响应: {response[:50]}")
-                        except asyncio.TimeoutError:
-                            logger.error("[欧意私人] PING测试超时，连接可能已断")
-                            self.connected = False
-                            break
-                            
-                    except Exception as e:
-                        logger.error(f"[欧意私人] PING测试失败: {e}")
-                        self.connected = False
-                        break
+                    logger.warning(f"[欧意私人] {seconds_since_last:.0f}秒未收到消息，依赖协议层心跳维持连接")
+                    # 不再主动发送ping，避免"非法请求"错误
     
     async def _receive_messages(self):
         """接收欧意私人消息"""
