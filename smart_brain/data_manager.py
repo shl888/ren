@@ -1,8 +1,8 @@
+
 # data_manager.py
 """
-数据管理器 - 接收 & 保存版本
-清理版：统一令牌存储逻辑
-改进版：推送存储格式数据，前端可直接复制粘贴
+数据管理器 - 简化存储版
+只存储原始数据，不添加额外包装
 """
 import asyncio
 import logging
@@ -21,48 +21,42 @@ class DataManager:
         self.last_account_time = None
         self.last_trade_time = None
         
-        # 内存存储
+        # 内存存储（简化结构）
         self.memory_store = {
             'market_data': {},
             'private_data': {},
             'env_apis': self._load_apis_from_env(),
-            'exchange_tokens': {}  # 🎯 专门存储listenKey
+            'exchange_tokens': {}  # 专门存储listenKey
         }
     
     # ==================== 接收步骤 ====================
     
     async def receive_private_data(self, private_data):
         """
-        接收私人数据（统一入口）
-        包括：账户、订单、持仓、listenKey...
-        改进：推送存储后的数据，让前端可以直接复制粘贴
+        接收私人数据（简化版）
+        直接存储连接池传递的原始数据
         """
         try:
-            data_type = private_data.get('data_type', 'unknown')
             exchange = private_data.get('exchange', 'unknown')
+            data_type = private_data.get('data_type', 'unknown')
             
             logger.info(f"📨 【接收】DataManager收到{exchange}.{data_type}数据")
             
             now = datetime.now()
-            stored_data = None
-            storage_key = None
-            storage_location = None
+            storage_key = f"{exchange}_{data_type}"
             
-            # ==================== 【清理：统一存储逻辑】 ====================
+            # ==================== 【简化存储逻辑】 ====================
             if data_type == 'listen_key':
-                # 🎯 只存到 exchange_tokens，不存到 private_data
-                listen_key = private_data['data'].get('listenKey')
+                # 🎯 单独处理listenKey，存到 exchange_tokens
+                listen_key = private_data.get('data', {}).get('listenKey')
                 if listen_key:
-                    storage_key = exchange
-                    storage_location = 'exchange_tokens'
-                    stored_data = {
+                    self.memory_store['exchange_tokens'][exchange] = {
                         'key': listen_key,
                         'updated_at': now.isoformat(),
-                        'source': private_data.get('source', 'http_module'),
+                        'source': 'http_module',
                         'exchange': exchange,
                         'data_type': 'listen_key'
                     }
-                    self.memory_store['exchange_tokens'][exchange] = stored_data
                     logger.info(f"✅ 【保存】{exchange} listenKey已保存: {listen_key[:5]}...")
                     
                     # 通知连接池
@@ -72,17 +66,16 @@ class DataManager:
                     logger.warning(f"⚠️ 收到空的listenKey: {exchange}")
                 
             else:
-                # 🎯 其他私人数据存到 private_data
-                storage_key = f"{exchange}_{data_type}"
-                storage_location = 'private_data'
-                stored_data = {
-                    'raw_data': private_data,
+                # 🎯 直接存储私人数据，不添加包装
+                self.memory_store['private_data'][storage_key] = {
                     'exchange': exchange,
                     'data_type': data_type,
+                    'data': private_data.get('data', {}),  # 直接存储原始数据
+                    'timestamp': private_data.get('timestamp', now.isoformat()),
                     'received_at': now.isoformat()
                 }
-                self.memory_store['private_data'][storage_key] = stored_data
-                logger.debug(f"✅ 【保存】{exchange}.{data_type}已保存到private_data")
+                
+                logger.debug(f"✅ 【保存】{exchange}.{data_type}已直接保存")
             
             # 记录日志
             if data_type == 'account_update' or data_type == 'account':
@@ -101,19 +94,19 @@ class DataManager:
                 self.last_account_time = now
                 logger.info(f"⚠️【智能大脑】 收到未知类型私人数据: {exchange}.{data_type}")
             
-            # ✅ 推送到前端 - 推送存储后的数据
-            if self.brain.frontend_relay and stored_data and storage_key:
+            # ✅ 推送到前端 - 推送简化后的数据
+            if self.brain.frontend_relay:
                 try:
                     await self.brain.frontend_relay.broadcast_private_data({
                         'type': 'private_data_stored',
                         'exchange': exchange,
                         'data_type': data_type,
                         'storage_key': storage_key,
-                        'storage_location': storage_location,
-                        'stored_data': stored_data,  # 🎯 推送存储后的完整数据
-                        'stored_at': now.isoformat()
+                        'data': private_data.get('data', {}),  # 只推送原始数据
+                        'received_at': now.isoformat(),
+                        'timestamp': private_data.get('timestamp', now.isoformat())
                     })
-                    logger.debug(f"✅【智能大脑】已推送私人数据到前端: {exchange}.{data_type}，存储格式")
+                    logger.debug(f"✅【智能大脑】已推送私人数据到前端: {exchange}.{data_type}，简化格式")
                 except Exception as e:
                     logger.error(f"❌【智能大脑】推送私人数据到前端失败: {e}")
                     
@@ -122,8 +115,7 @@ class DataManager:
     
     async def receive_market_data(self, processed_data):
         """
-        接收市场数据处理后的数据
-        改进：推送存储后的数据，让前端可以直接复制粘贴
+        接收市场数据处理后的数据（保持原有逻辑）
         """
         try:
             if isinstance(processed_data, list):
@@ -145,17 +137,16 @@ class DataManager:
             # ✅ 推送到前端 - 推送存储后的数据
             if self.brain.frontend_relay:
                 try:
-                    # 🎯 关键修改：推送存储格式的数据
                     await self.brain.frontend_relay.broadcast_market_data({
                         'type': 'market_data_stored',
                         'storage_type': 'market_data',
-                        'stored_data': stored_data,  # 🎯 推送存储后的完整数据
+                        'stored_data': stored_data,
                         'stored_at': datetime.now().isoformat(),
                         'count': len(stored_data) if isinstance(stored_data, dict) else 1
                     })
                     
                     if isinstance(processed_data, list) and len(processed_data) > 0:
-                        logger.debug(f"✅【智能大脑】已推送市场数据到前端: {len(processed_data)}条，存储格式")
+                        logger.debug(f"✅【智能大脑】已推送市场数据到前端: {len(processed_data)}条")
                 except Exception as e:
                     logger.error(f"️❌【智能大脑】推送市场数据到前端失败: {e}")
             
@@ -285,17 +276,17 @@ class DataManager:
         }
     
     async def get_private_data_summary(self):
-        """获取私人数据概览"""
+        """获取私人数据概览（简化版）"""
         formatted_private_data = {}
         for key, data in self.memory_store['private_data'].items():
             formatted_private_data[key] = {
                 "exchange": data.get('exchange'),
                 "data_type": data.get('data_type'),
                 "received_at": data.get('received_at'),
-                "raw_data_keys": list(data.get('raw_data', {}).keys()) if isinstance(data.get('raw_data'), dict) else type(data.get('raw_data')).__name__
+                "timestamp": data.get('timestamp'),
+                "data_keys": list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else type(data.get('data')).__name__
             }
         
-        # 🎯 注意：exchange_tokens不包含在private_data中
         return {
             "timestamp": datetime.now().isoformat(),
             "total_count": len(self.memory_store['private_data']),
@@ -368,7 +359,7 @@ class DataManager:
             before_stats = {
                 "market_data_count": len(self.memory_store['market_data']),
                 "private_data_count": len(self.memory_store['private_data']),
-                "exchange_tokens_count": len(self.memory_store['exchange_tokens'])  # 🎯 新增
+                "exchange_tokens_count": len(self.memory_store['exchange_tokens'])
             }
             
             if data_type == 'market':
@@ -386,7 +377,7 @@ class DataManager:
                 message = f"清空私人数据，共{before_stats['private_data_count']}条"
                 
             elif data_type == 'tokens':
-                # 🎯 新增：只清空令牌数据
+                # 只清空令牌数据
                 token_count = before_stats['exchange_tokens_count']
                 self.memory_store['exchange_tokens'].clear()
                 message = f"清空令牌数据，共{token_count}条"
@@ -471,15 +462,16 @@ class DataManager:
             }
     
     async def get_private_data_by_exchange(self, exchange: str):
-        """按交易所获取私人数据"""
+        """按交易所获取私人数据（简化版）"""
         exchange_data = {}
         for key, data in self.memory_store['private_data'].items():
             if key.startswith(f"{exchange.lower()}_"):
                 exchange_data[key] = {
                     "exchange": data.get('exchange'),
                     "data_type": data.get('data_type'),
+                    "timestamp": data.get('timestamp'),
                     "received_at": data.get('received_at'),
-                    "raw_data": data.get('raw_data')
+                    "data": data.get('data')  # 直接返回原始数据
                 }
         
         return {
@@ -490,7 +482,7 @@ class DataManager:
         }
     
     async def get_private_data_detail(self, exchange: str, data_type: str):
-        """获取特定私人数据详情"""
+        """获取特定私人数据详情（简化版）"""
         key = f"{exchange.lower()}_{data_type.lower()}"
         
         if key in self.memory_store['private_data']:
@@ -499,8 +491,9 @@ class DataManager:
                 "key": key,
                 "exchange": exchange,
                 "data_type": data_type,
-                "data": data,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": data.get('timestamp'),
+                "received_at": data.get('received_at'),
+                "data": data.get('data')  # 直接返回原始数据
             }
         else:
             return {
