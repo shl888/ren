@@ -1,5 +1,6 @@
+
 """
-私人WebSocket连接池管理器 - 双模式适配版
+私人WebSocket连接池管理器 - 简化版，直接传递原始数据
 """
 import asyncio
 import logging
@@ -8,19 +9,17 @@ from typing import Dict, Any, Optional, Callable
 
 from .connection import BinancePrivateConnection, OKXPrivateConnection
 from .raw_data_cache import RawDataCache
-from .data_formatter import PrivateDataFormatter
 
 logger = logging.getLogger(__name__)
 
 class PrivateWebSocketPool:
-    """私人连接池 - 双模式适配版"""
+    """私人连接池 - 简化版，直接传递原始数据"""
     
     def __init__(self, data_callback: Callable):
         self.data_callback = data_callback
         
-        # 组件初始化
+        # 组件初始化（删除数据格式化器）
         self.raw_data_cache = RawDataCache()
-        self.data_formatter = PrivateDataFormatter()
         
         # 连接存储
         self.connections = {
@@ -56,7 +55,7 @@ class PrivateWebSocketPool:
             }
         }
         
-        logger.info("🔗 [私人连接池] 初始化完成 (双模式适配版)")
+        logger.info("🔗 [私人连接池] 初始化完成 (简化版，直接传递原始数据)")
     
     async def start(self, brain_store):
         """启动连接池"""
@@ -72,7 +71,7 @@ class PrivateWebSocketPool:
         # 分批尝试连接
         asyncio.create_task(self._staggered_connect_all())
         
-        logger.info("✅ [私人连接池] 已启动，双模式运行中")
+        logger.info("✅ [私人连接池] 已启动，直接传递模式运行中")
         return True
     
     async def _staggered_connect_all(self):
@@ -319,25 +318,16 @@ class PrivateWebSocketPool:
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理状态事件失败: {e}")
     
-    async def _process_and_forward_data(self, raw_formatted_data: Dict[str, Any]):
-        """处理并转发数据"""
+    async def _process_and_forward_data(self, raw_data: Dict[str, Any]):
+        """处理并转发数据 - 简化版：直接传递，不加包装"""
         try:
-            formatted_data = await self.data_formatter.format(raw_formatted_data)
+            # 直接传递给大脑，不做任何处理
+            await self.data_callback(raw_data)
             
-            formatted_data['processed_timestamp'] = datetime.now().isoformat()
-            formatted_data['formatter_version'] = self.data_formatter.formatter_version
-            
-            await self.data_callback(formatted_data)
-            
-            logger.debug(f"📨 [私人连接池] 已转发数据: {formatted_data['exchange']}.{formatted_data['data_type']}")
+            logger.debug(f"📨 [私人连接池] 已转发简化数据: {raw_data['exchange']}.{raw_data['data_type']}")
             
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理转发数据失败: {e}")
-            try:
-                raw_formatted_data['processing_error'] = str(e)
-                await self.data_callback(raw_formatted_data)
-            except:
-                pass
     
     async def shutdown(self):
         """关闭所有连接"""
@@ -378,7 +368,8 @@ class PrivateWebSocketPool:
             'exchange_modes': {
                 'binance': '主动探测模式（30秒探测）',
                 'okx': '协议层心跳模式（25秒协议层心跳 + 45秒被动检测）'
-            }
+            },
+            'data_format': '原始数据，无包装'
         }
         
         for exchange in ['binance', 'okx']:

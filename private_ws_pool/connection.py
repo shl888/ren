@@ -1,6 +1,8 @@
+
 """
 私人WebSocket连接实现 - 双模式稳定版
 币安：主动探测模式 | 欧意：心跳+间隔模式
+简化版：只保留原始数据，不添加额外包装
 """
 import asyncio
 import json
@@ -343,23 +345,22 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.probe_task.cancel()
     
     async def _process_binance_message(self, data: Dict[str, Any]):
-        """处理币安私人消息"""
-        event_type = data.get('e', 'unknown')
-        await self._save_raw_data(event_type, data)
-        
-        formatted = {
-            'exchange': 'binance',
-            'data_type': self._map_binance_event_type(event_type),
-            'timestamp': datetime.now().isoformat(),
-            'raw_data': data,
-            'standardized': {
-                'event_type': event_type,
-                'status': 'raw_data_only'
-            }
-        }
-        
+        """处理币安私人消息 - 简化版，只保留原始数据"""
         try:
-            await self.data_callback(formatted)
+            # 保存原始数据到缓存（可选）
+            event_type = data.get('e', 'unknown')
+            await self._save_raw_data(event_type, data)
+            
+            # 直接转发原始数据，只添加最基本元数据
+            formatted_data = {
+                'exchange': 'binance',
+                'data_type': self._map_binance_event_type(event_type),
+                'timestamp': datetime.now().isoformat(),
+                'data': data  # 直接使用原始数据，不加包装
+            }
+            
+            await self.data_callback(formatted_data)
+            
         except Exception as e:
             logger.error(f"[币安私人] 传递给大脑失败: {e}")
     
@@ -663,8 +664,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             self.authenticated = False
     
     async def _process_okx_message(self, data: Dict[str, Any]):
-        """处理欧意私人消息"""
-        # 检查是否是事件消息
+        """处理欧意私人消息 - 简化版，只保留原始数据"""
+        # 检查是否是事件消息（登录、订阅等）
         if data.get('event'):
             event = data['event']
             if event == 'login':
@@ -675,25 +676,21 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 logger.error(f"[欧意私人] 错误事件: {data}")
             return
         
-        # 保存原始数据
+        # 保存原始数据到缓存（可选）
         arg = data.get('arg', {})
         channel = arg.get('channel', 'unknown')
         await self._save_raw_data(channel, data)
         
-        # 格式化处理
-        formatted = {
+        # 直接转发原始数据，只添加最基本元数据
+        formatted_data = {
             'exchange': 'okx',
             'data_type': self._map_okx_channel_type(channel),
             'timestamp': datetime.now().isoformat(),
-            'raw_data': data,
-            'standardized': {
-                'channel': channel,
-                'status': 'raw_data_only'
-            }
+            'data': data  # 直接使用原始数据，不加包装
         }
         
         try:
-            await self.data_callback(formatted)
+            await self.data_callback(formatted_data)
         except Exception as e:
             logger.error(f"[欧意私人] 传递给大脑失败: {e}")
     
