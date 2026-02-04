@@ -1,4 +1,3 @@
-
 # data_manager.py
 """
 数据管理器 - 简化存储版
@@ -7,6 +6,7 @@
 import asyncio
 import logging
 import os
+import time  # 🔴 新增导入
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,10 @@ class DataManager:
         self.last_market_count = 0
         self.last_account_time = None
         self.last_trade_time = None
+        
+        # 🔴【新增】批量存储日志控制
+        self.last_batch_log_time = 0
+        self.batch_log_interval = 60  # 60秒打印一次
         
         # 内存存储（简化结构）
         self.memory_store = {
@@ -184,9 +188,14 @@ class DataManager:
                     # 记录结果用于推送
                     storage_results[storage_key] = stored_data
                 
-                # ✅ 记录统计信息
+                # ✅ 记录统计信息 - 🔴【修改】每分钟打印一次
                 unique_symbols = len(set([i.get('symbol') for i in data if 'symbol' in i]))
-                logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条，涉及{unique_symbols}个合约")
+                
+                current_time = time.time()
+                if current_time - self.last_batch_log_time >= self.batch_log_interval:
+                    logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条，涉及{unique_symbols}个合约")
+                    self.last_batch_log_time = current_time
+                
                 return storage_results
                 
             elif isinstance(data, dict):
