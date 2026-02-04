@@ -64,15 +64,22 @@ class PrivateHTTPFetcher:
             }
         }
         
-        # 币安API配置
-        self.BASE_URL = "https://fapi.binance.com"  # 合约API
+        # 🔴 币安API端点配置（模拟交易 vs 真实交易）
+        # 当前启用：模拟交易端点（Testnet）
+        self.BASE_URL = "https://testnet.binancefuture.com"
+        
+        # 真实交易端点（需要使用时取消下面的注释，并注释掉上面的模拟端点）
+        # self.BASE_URL = "https://fapi.binance.com"
+        
         self.ACCOUNT_ENDPOINT = "/fapi/v3/account"        # 账户资产
         self.POSITION_ENDPOINT = "/fapi/v3/positionRisk"  # 持仓盈亏
         
         # 🔴 优化：添加recvWindow配置
         self.RECV_WINDOW = 5000  # 5秒接收窗口
         
-        logger.info("🔗 [HTTP获取器] 初始化完成（带指数退避重试 + recvWindow）")
+        # 🔴 优化：记录当前使用的环境
+        self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
+        logger.info(f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 指数退避重试 + recvWindow）")
     
     async def start(self, brain_store):
         """
@@ -81,7 +88,7 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例（与私人连接池相同）
         """
-        logger.info("🚀 [HTTP获取器] 正在启动（指数退避重试 + recvWindow）...")
+        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment} | 指数退避重试 + recvWindow）...")
         
         self.brain_store = brain_store
         self.running = True
@@ -144,7 +151,7 @@ class PrivateHTTPFetcher:
         获取账户资产 - 5次指数退避重试
         第1次尝试 + 4次重试（10秒, 20秒, 40秒, 60秒后）
         
-        🔴 关键修复：418错误立即停止，不再重试
+        🔴 关键修复：418/401错误立即停止，不再重试
         """
         retry_count = 0
         total_attempts = 0
@@ -246,19 +253,24 @@ class PrivateHTTPFetcher:
                     error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                     self.quality_stats['account_fetch']['last_error'] = error_msg
                     
-                    # 🔴 关键修复：正确处理418（IP封禁）- 立即停止所有重试
+                    # 🔴 关键修复：418（IP封禁）- 立即停止所有重试
                     if resp.status == 418:
                         retry_after = int(resp.headers.get('Retry-After', 120))
-                        logger.error(f"🚨 [HTTP获取器] IP被封禁(418)，需等待{retry_after}秒，永久停止账户任务")
+                        logger.error(f"🚨 [HTTP获取器] IP被封禁(418)，需等待{retry_after}秒")
                         # 🔴 修复：返回特殊标记，让上层知道要停止所有重试
                         return 'PERMANENT_STOP'
                     
-                    # 🔴 关键修复：401错误（API密钥无效或权限不足）- 立即停止
+                    # 🔴 关键修复：401（API密钥无效或权限不足）- 立即停止
                     if resp.status == 401:
-                        logger.error(f"🚨 [HTTP获取器] API密钥无效或权限不足(401)，永久停止账户任务")
+                        logger.error(f"🚨 [HTTP获取器] API密钥无效或权限不足(401)")
+                        logger.error(f"   当前环境: {self.environment}")
+                        logger.error(f"   请检查：")
+                        logger.error(f"   1. API密钥是否匹配当前环境（模拟/真实）")
+                        logger.error(f"   2. API密钥是否启用了合约权限")
+                        logger.error(f"   3. IP白名单是否正确")
                         return 'PERMANENT_STOP'
                     
-                    # 🔴 优化：429错误（频率限制）- 等待后重试
+                    # 🔴 优化：429（频率限制）- 等待后重试
                     if resp.status == 429:
                         retry_after = int(resp.headers.get('Retry-After', 60))
                         logger.warning(f"⚠️ [HTTP获取器] 触发频率限制(429)，等待{retry_after}秒后重试")
@@ -456,6 +468,7 @@ class PrivateHTTPFetcher:
             'running': self.running,
             'account_fetched': self.account_fetched,
             'account_fetch_success': self.account_fetch_success,
+            'environment': self.environment,  # 🔴 显示当前环境（testnet/live）
             'quality_stats': self.quality_stats,
             'retry_strategy': {
                 'account_retries': f"{self.max_account_retries}次重试",
@@ -463,17 +476,17 @@ class PrivateHTTPFetcher:
                 'total_attempts': self.max_account_retries + 1
             },
             'api_config': {
-                'recvWindow': self.RECV_WINDOW,  # 🔴 优化：显示recvWindow配置
-                'session_reuse': True  # 🔴 优化：显示session复用状态
+                'recvWindow': self.RECV_WINDOW,  # 🔴 显示recvWindow配置
+                'session_reuse': True  # 🔴 显示session复用状态
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试',
-                'position': '账户成功后30秒开始，每2分钟一次'  # 🔴 优化：改为2分钟
+                'position': '账户成功后30秒开始，每2分钟一次'  # 🔴 改为2分钟
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
                 'position': self.POSITION_ENDPOINT,
-                'base_url': self.BASE_URL
+                'base_url': self.BASE_URL  # 🔴 显示实际使用的端点
             },
             'data_destination': 'private_data_processing.manager'
         }
