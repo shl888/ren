@@ -89,7 +89,7 @@ class PrivateDataProcessor:
                 'received_at': datetime.now().isoformat()
             }
             
-            logger.debeg(f"✅ [私人数据处理] 已保存: {storage_key}")  # 需要时，可改为info方便观察
+            logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")  # 需要时，可改为info方便观察
             
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
