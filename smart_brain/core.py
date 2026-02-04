@@ -35,11 +35,11 @@ class SmartBrain:
         
         self.command_router = None
 
-        # WebSocket管理员
-        self.ws_admin = None
+        # 🔴【已删除】WebSocket管理员（从未使用）
+        # self.ws_admin = None
         
-        # 私人连接池实例
-        self.private_pool = None
+        # 🔴【已删除】私人连接池实例（已移除）
+        # self.private_pool = None
         
         # ✅ 新增：HTTP模块服务
         self.http_module = None
@@ -62,7 +62,6 @@ class SmartBrain:
             
             self.command_router = CommandRouter(self)
             
-            
             # 2. ✅ 新增：初始化HTTP模块服务
             try:
                 from http_server.service import HTTPModuleService
@@ -79,8 +78,8 @@ class SmartBrain:
                 logger.error(f"❌ HTTP模块服务初始化异常: {e}")
                 return False
             
-            # 3. 启动私人连接池
-            await self._start_private_connections()
+            # 3. 🔴【已删除】启动私人连接池
+            # await self._start_private_connections()
             
             # 4. ✅ 修改：通过HTTP模块服务启动令牌服务
             if self.http_module:
@@ -105,33 +104,6 @@ class SmartBrain:
         except Exception as e:
             logger.error(f"🚨 大脑初始化失败: {e}")
             logger.error(traceback.format_exc())
-            return False
-    
-    async def _start_private_connections(self):
-        """启动私人连接池"""
-        try:
-            logger.info("🔗 正在启动私人连接池...")
-            
-            # 导入并创建私人连接池
-            try:
-                from private_ws_pool import PrivateWebSocketPool
-                
-                # 🔴 【修改点】删除回调参数，只创建实例
-                self.private_pool = PrivateWebSocketPool()  # 不传回调参数
-                
-                # 传入大脑存储接口，让连接池自主管理
-                await self.private_pool.start(self.data_manager)
-                logger.info("✅ 私人连接池已启动，进入自主管理模式")
-                
-            except ImportError as e:
-                logger.error(f"❌ 无法导入私人连接池模块: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"❌ 启动私人连接池失败: {e}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ 启动私人连接异常: {e}")
             return False
     
     async def receive_market_data(self, processed_data):
@@ -178,11 +150,11 @@ class SmartBrain:
             if self.http_module:
                 await self.http_module.shutdown()
             
-            # 2. 关闭私人连接池
-            if self.private_pool:
-                await self.private_pool.shutdown()
+            # 🔴【已删除】关闭私人连接池（已移除）
+            # if self.private_pool:
+            #     await self.private_pool.shutdown()
             
-            # 3. 取消状态日志任务
+            # 2. 取消状态日志任务
             if self.status_log_task:
                 self.status_log_task.cancel()
                 try:
@@ -190,14 +162,15 @@ class SmartBrain:
                 except asyncio.CancelledError:
                     pass
             
-            # 4. 关闭前端中继服务器
+            # 3. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 5. 停止WebSocket管理员
-            if self.ws_admin:
-                await self.ws_admin.stop()
+            # 🔴【已删除】停止WebSocket管理员（从未使用）
+            # if self.ws_admin:
+            #     await self.ws_admin.stop()
             
             logger.info("✅ 大脑核心已关闭")
         except Exception as e:
             logger.error(f"关闭出错: {e}")
+            
