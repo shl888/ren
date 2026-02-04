@@ -176,7 +176,8 @@ async def main():
         # ==================== 8. 设置PipelineManager回调 ====================
         logger.info("【8️⃣】设置数据处理回调...")
         pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
-        pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
+        # ❌ 删除这行，因为 PipelineManager 不再处理私人数据
+        # pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
         
         # ==================== 9. 启动数据处理管道 ====================
         logger.info("【9️⃣】启动数据处理管道...")
@@ -225,3 +226,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
