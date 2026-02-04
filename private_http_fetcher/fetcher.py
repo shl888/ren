@@ -45,6 +45,14 @@ class PrivateHTTPFetcher:
         self.account_retry_delays = [10, 20, 40, 60]  # 共5次尝试（第1次+4次重试）
         self.max_account_retries = 4  # 最多重试4次
         
+        # 🔴 优化：自适应频率控制
+        self.position_check_interval = 1      # 当前检查间隔（秒）
+        self.position_high_freq = 1           # 高频：1秒（有持仓时）
+        self.position_low_freq = 60           # 低频：60秒（无持仓时）
+        self.has_position = False             # 当前是否有持仓
+        self.last_log_time = 0                # 上次日志时间
+        self.log_interval = 60                # 日志间隔（秒）
+        
         # 连接质量统计（模仿pool_manager）
         self.quality_stats = {
             'account_fetch': {
@@ -79,7 +87,7 @@ class PrivateHTTPFetcher:
         
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
-        logger.info(f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 指数退避重试 + recvWindow）")
+        logger.info(f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 指数退避重试 + recvWindow）")
     
     async def start(self, brain_store):
         """
@@ -88,7 +96,7 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例（与私人连接池相同）
         """
-        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment} | 指数退避重试 + recvWindow）...")
+        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment} | 自适应频率）...")
         
         self.brain_store = brain_store
         self.running = True
@@ -108,7 +116,7 @@ class PrivateHTTPFetcher:
         受控调度器 - 严格按照时间顺序执行
         1. 等待4分钟（让其他模块先运行）
         2. 尝试获取账户资产（5次指数退避重试）
-        3. 账户成功后再启动持仓任务（低频）
+        3. 账户成功后再启动持仓任务（自适应频率）
         """
         try:
             # ========== 第一阶段：等待4分钟 ==========
@@ -129,15 +137,15 @@ class PrivateHTTPFetcher:
             if self.account_fetch_success:
                 logger.info("✅ [HTTP获取器] 账户获取成功，准备启动持仓任务")
                 
-                # ========== 第三阶段：启动持仓任务（低频） ==========
+                # ========== 第三阶段：启动持仓任务（自适应频率） ==========
                 # 再等待30秒，确保完全冷却
                 logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
                 await asyncio.sleep(30)
                 
                 # 启动持仓任务
-                position_task = asyncio.create_task(self._fetch_position_low_freq())
+                position_task = asyncio.create_task(self._fetch_position_adaptive_freq())
                 self.fetch_tasks.append(position_task)
-                logger.info("✅ [HTTP获取器] 持仓任务已启动（高频模式：每1秒）")
+                logger.info("✅ [HTTP获取器] 持仓任务已启动（自适应频率模式：有持仓1秒/无持仓60秒）")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动持仓任务")
                 
@@ -291,9 +299,9 @@ class PrivateHTTPFetcher:
             logger.error(f"❌ [HTTP获取器] 获取账户异常: {e}")
             return False
     
-    async def _fetch_position_low_freq(self):
+    async def _fetch_position_adaptive_freq(self):
         """
-        高频获取持仓盈亏（优化版：1秒间隔 + recvWindow + 权重监控）
+        自适应频率获取持仓盈亏（优化版：有持仓1秒/无持仓60秒 + 日志控制）
         """
         request_count = 0
         
@@ -303,14 +311,13 @@ class PrivateHTTPFetcher:
         while self.running:
             try:
                 request_count += 1
-                logger.info(f"📊 [HTTP获取器] 第{request_count}次获取持仓...")
                 
                 self.quality_stats['position_fetch']['total_attempts'] += 1
                 
                 api_key, api_secret = await self._get_fresh_credentials()
                 if not api_key or not api_secret:
                     logger.warning("⚠️ [HTTP获取器] 持仓请求-凭证读取失败")
-                    await asyncio.sleep(10)  # 10秒后重试
+                    await asyncio.sleep(self.position_check_interval)
                     continue
                 
                 # 🔴 优化：添加recvWindow参数
@@ -333,12 +340,34 @@ class PrivateHTTPFetcher:
                     if resp.status == 200:
                         data = await resp.json()
                         
-                        # 🔴 优化：处理V3端点空持仓情况
-                        if not data:
-                            logger.info("📊 [HTTP获取器] 当前无持仓")
+                        # 🔴 关键：检查是否有持仓
+                        has_position_now = bool(data and len(data) > 0)
+                        
+                        # 🔴 自适应频率调整
+                        if has_position_now:
+                            # 有持仓 → 高频模式（1秒）
+                            if not self.has_position:
+                                # 状态变化：从无持仓变为有持仓
+                                logger.info(f"🚀 [HTTP获取器] 检测到持仓，切换高频模式（1秒）")
+                            self.position_check_interval = self.position_high_freq
+                            self.has_position = True
                         else:
-                            positions_count = len(data)
-                            logger.info(f"✅ [HTTP获取器] 第{request_count}次持仓获取成功，共{positions_count}个持仓")
+                            # 无持仓 → 低频模式（60秒）
+                            if self.has_position:
+                                # 状态变化：从有持仓变为无持仓
+                                logger.info(f"💤 [HTTP获取器] 检测到清仓，切换低频模式（60秒）")
+                            self.position_check_interval = self.position_low_freq
+                            self.has_position = False
+                        
+                        # 🔴 优化：日志控制（每分钟只打印1次）
+                        current_time = time.time()
+                        if current_time - self.last_log_time >= self.log_interval:
+                            if has_position_now:
+                                positions_count = len(data)
+                                logger.info(f"📊 [HTTP获取器] 当前持仓{positions_count}个 | 高频模式 | 请求次数:{request_count}")
+                            else:
+                                logger.info(f"📊 [HTTP获取器] 当前无持仓 | 低频模式 | 请求次数:{request_count}")
+                            self.last_log_time = current_time
                         
                         await self._push_data('http_position', data)
                         
@@ -350,8 +379,8 @@ class PrivateHTTPFetcher:
                             self.quality_stats['position_fetch']['total_attempts'] * 100
                         )
                         
-                        # 🔴 优化：成功后等待1秒（降低频率，减少被封风险）
-                        await asyncio.sleep(1)
+                        # 按当前频率等待
+                        await asyncio.sleep(self.position_check_interval)
                         
                     else:
                         error_text = await resp.text()
@@ -374,7 +403,7 @@ class PrivateHTTPFetcher:
                             logger.warning(f"⚠️ [HTTP获取器] 持仓请求触发频率限制(429)，等待{retry_after}秒")
                             await asyncio.sleep(retry_after)
                         else:
-                            await asyncio.sleep(10)  # 10秒后重试
+                            await asyncio.sleep(self.position_check_interval)
                                 
             except asyncio.CancelledError:
                 break
@@ -382,7 +411,7 @@ class PrivateHTTPFetcher:
                 error_msg = str(e)
                 self.quality_stats['position_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 持仓循环异常: {e}")
-                await asyncio.sleep(10)  # 10秒后重试
+                await asyncio.sleep(self.position_check_interval)
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -468,7 +497,13 @@ class PrivateHTTPFetcher:
             'running': self.running,
             'account_fetched': self.account_fetched,
             'account_fetch_success': self.account_fetch_success,
-            'environment': self.environment,  # 🔴 显示当前环境（testnet/live）
+            'environment': self.environment,
+            'adaptive_frequency': {
+                'current_interval': self.position_check_interval,
+                'has_position': self.has_position,
+                'high_freq': self.position_high_freq,
+                'low_freq': self.position_low_freq
+            },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
                 'account_retries': f"{self.max_account_retries}次重试",
@@ -476,17 +511,17 @@ class PrivateHTTPFetcher:
                 'total_attempts': self.max_account_retries + 1
             },
             'api_config': {
-                'recvWindow': self.RECV_WINDOW,  # 🔴 显示recvWindow配置
-                'session_reuse': True  # 🔴 显示session复用状态
+                'recvWindow': self.RECV_WINDOW,
+                'session_reuse': True
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试',
-                'position': '账户成功后30秒开始，每1秒一次'  # 🔴 改为1秒
+                'position': '自适应频率：有持仓1秒/无持仓60秒'
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
                 'position': self.POSITION_ENDPOINT,
-                'base_url': self.BASE_URL  # 🔴 显示实际使用的端点
+                'base_url': self.BASE_URL
             },
             'data_destination': 'private_data_processing.manager'
         }
