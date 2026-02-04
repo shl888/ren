@@ -143,16 +143,24 @@ class PrivateHTTPFetcher:
         """
         获取账户资产 - 5次指数退避重试
         第1次尝试 + 4次重试（10秒, 20秒, 40秒, 60秒后）
+        
+        🔴 关键修复：418错误立即停止，不再重试
         """
         retry_count = 0
         total_attempts = 0
         
         # 第1次尝试（立即执行）
         logger.info(f"💰 [HTTP获取器] 账户获取第1次尝试...")
-        success = await self._fetch_account_single()
+        result = await self._fetch_account_single()
         total_attempts += 1
         
-        if success:
+        # 🔴 修复：检查是否遇到418（IP封禁）或401（权限错误）
+        if result == 'PERMANENT_STOP':
+            logger.error("🚨 [HTTP获取器] 遇到不可逆错误（418/401），停止所有重试")
+            self.quality_stats['account_fetch']['retry_count'] = 0
+            return False
+        
+        if result == True:
             self.quality_stats['account_fetch']['retry_count'] = 0
             return True
         
@@ -163,11 +171,17 @@ class PrivateHTTPFetcher:
             await asyncio.sleep(delay)
             
             logger.info(f"💰 [HTTP获取器] 账户获取第{retry_count + 2}次尝试...")
-            success = await self._fetch_account_single()
+            result = await self._fetch_account_single()
             total_attempts += 1
             retry_count += 1
             
-            if success:
+            # 🔴 修复：检查是否遇到418或401
+            if result == 'PERMANENT_STOP':
+                logger.error(f"🚨 [HTTP获取器] 第{retry_count}次尝试遇到不可逆错误，停止重试")
+                self.quality_stats['account_fetch']['retry_count'] = retry_count
+                return False
+            
+            if result == True:
                 self.quality_stats['account_fetch']['retry_count'] = retry_count
                 return True
         
@@ -177,7 +191,14 @@ class PrivateHTTPFetcher:
         return False
     
     async def _fetch_account_single(self):
-        """单次尝试获取账户资产（优化版：添加recvWindow和权重监控）"""
+        """
+        单次尝试获取账户资产（优化版：添加recvWindow和权重监控）
+        
+        Returns:
+            True: 成功
+            False: 失败，可重试
+            'PERMANENT_STOP': 遇到不可逆错误（418/401），停止所有重试
+        """
         try:
             self.quality_stats['account_fetch']['total_attempts'] += 1
             
@@ -219,22 +240,28 @@ class PrivateHTTPFetcher:
                     logger.info("✅ [HTTP获取器] 账户资产获取成功！")
                     self.account_fetched = True
                     return True
+                
                 else:
                     error_text = await resp.text()
                     error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                     self.quality_stats['account_fetch']['last_error'] = error_msg
                     
-                    # 🔴 优化：正确处理429和418（读取Retry-After头）
-                    if resp.status in [429, 418]:
+                    # 🔴 关键修复：正确处理418（IP封禁）- 立即停止所有重试
+                    if resp.status == 418:
+                        retry_after = int(resp.headers.get('Retry-After', 120))
+                        logger.error(f"🚨 [HTTP获取器] IP被封禁(418)，需等待{retry_after}秒，永久停止账户任务")
+                        # 🔴 修复：返回特殊标记，让上层知道要停止所有重试
+                        return 'PERMANENT_STOP'
+                    
+                    # 🔴 关键修复：401错误（API密钥无效或权限不足）- 立即停止
+                    if resp.status == 401:
+                        logger.error(f"🚨 [HTTP获取器] API密钥无效或权限不足(401)，永久停止账户任务")
+                        return 'PERMANENT_STOP'
+                    
+                    # 🔴 优化：429错误（频率限制）- 等待后重试
+                    if resp.status == 429:
                         retry_after = int(resp.headers.get('Retry-After', 60))
-                        logger.error(f"🚨 [HTTP获取器] 触发限流({resp.status})，等待{retry_after}秒")
-                        
-                        # 418直接放弃所有重试，429继续重试
-                        if resp.status == 418:
-                            logger.error("🚨 [HTTP获取器] IP被封禁(418)，账户任务永久停止")
-                            return False
-                        
-                        # 429等待后继续重试（外层循环控制）
+                        logger.warning(f"⚠️ [HTTP获取器] 触发频率限制(429)，等待{retry_after}秒后重试")
                         await asyncio.sleep(retry_after)
                         return False
                     
@@ -320,10 +347,19 @@ class PrivateHTTPFetcher:
                         self.quality_stats['position_fetch']['last_error'] = error_msg
                         logger.error(f"❌ [HTTP获取器] 持仓请求失败 {error_msg}")
                         
-                        # 🔴 优化：正确处理429和418
-                        if resp.status in [429, 418]:
-                            retry_after = int(resp.headers.get('Retry-After', 120))  # 默认2分钟
-                            logger.error(f"🚨 [HTTP获取器] 持仓请求触发限流({resp.status})，等待{retry_after}秒")
+                        # 🔴 优化：正确处理418和401（永久停止）
+                        if resp.status in [418, 401]:
+                            retry_after = int(resp.headers.get('Retry-After', 3600))
+                            logger.error(f"🚨 [HTTP获取器] 持仓请求触发严重错误({resp.status})，等待{retry_after}秒后永久停止")
+                            await asyncio.sleep(retry_after)
+                            # 持仓任务遇到418/401也停止
+                            logger.error(f"🚨 [HTTP获取器] 持仓任务永久停止")
+                            break
+                        
+                        # 🔴 优化：正确处理429
+                        if resp.status == 429:
+                            retry_after = int(resp.headers.get('Retry-After', 120))
+                            logger.warning(f"⚠️ [HTTP获取器] 持仓请求触发频率限制(429)，等待{retry_after}秒")
                             await asyncio.sleep(retry_after)
                         else:
                             await asyncio.sleep(120)  # 2分钟后重试
