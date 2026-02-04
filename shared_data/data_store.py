@@ -22,7 +22,7 @@ class DataStore:
             "okx": defaultdict(dict)
         }
         
-        # 账户数据
+        # 账户数据（仅存储，不处理）
         self.account_data = {}
         self.order_data = {}
         self.connection_status = {}
@@ -39,21 +39,10 @@ class DataStore:
         self.flow_task = None
         self.water_callback = None
         
-        # ✅ 新增：私人数据管道
-        self.private_water_callback = None  # 私人数据→管理员
-        self.private_flowing = True         # 私人管道默认常开
-        
         # 规则执行记录
         self.execution_records = {
             "total_flows": 0,                   # 总共放水次数
             "last_flow_time": 0,
-            # ✅ 新增：私人数据执行记录
-            "private_flows": {
-                "account_updates": 0,
-                "order_updates": 0,
-                "last_account_update": 0,
-                "last_order_update": 0
-            }
         }
         
         # 数据锁
@@ -72,17 +61,6 @@ class DataStore:
     def set_water_callback(self, callback: Callable):
         """设置市场数据回调"""
         self.water_callback = callback
-    
-    def set_private_water_callback(self, callback: Callable):
-        """✅ 新增：设置私人数据回调"""
-        self.private_water_callback = callback
-        logger.info("✅【数据池】私人数据管道已连接")
-    
-    def set_private_flowing(self, flowing: bool):
-        """✅ 新增：设置私人数据管道开关"""
-        self.private_flowing = flowing
-        status = "开启" if flowing else "关闭"
-        logger.info(f"✅【数据池】私人数据管道{status}")
     
     # ==================== HTTP服务相关方法 ====================
     
@@ -238,36 +216,15 @@ class DataStore:
             self.market_data[exchange][symbol]['latest'] = data_type
     
     async def update_account_data(self, exchange: str, data: Dict[str, Any]):
-        """✅ 增强：接收账户数据（立即自动流出）"""
+        """接收账户数据（仅存储，不处理）"""
         async with self.locks['account_data']:
             self.account_data[exchange] = {
                 **data,
                 'timestamp': datetime.now().isoformat()
             }
-        
-        # ✅ 新增：立即从私人管道流出！
-        if self.private_water_callback and self.private_flowing:
-            try:
-                private_data = {
-                    'data_type': 'account_update',
-                    'exchange': exchange,
-                    'data': data,
-                    'timestamp': datetime.now().isoformat(),
-                    'flow_type': 'private_immediate'
-                }
-                
-                await self.private_water_callback(private_data)
-                
-                # 记录
-                async with self.locks['execution_records']:
-                    self.execution_records["private_flows"]["account_updates"] += 1
-                    self.execution_records["private_flows"]["last_account_update"] = time.time()
-                    
-            except Exception as e:
-                logger.error(f"❌【数据池】私人数据(账户)流出失败: {e}")
     
     async def update_order_data(self, exchange: str, order_id: str, data: Dict[str, Any]):
-        """✅ 增强：接收交易数据（立即自动流出）"""
+        """接收交易数据（仅存储，不处理）"""
         async with self.locks['order_data']:
             if exchange not in self.order_data:
                 self.order_data[exchange] = {}
@@ -275,28 +232,6 @@ class DataStore:
                 **data,
                 'update_time': datetime.now().isoformat()
             }
-        
-        # ✅ 新增：立即从私人管道流出！
-        if self.private_water_callback and self.private_flowing:
-            try:
-                private_data = {
-                    'data_type': 'order_update',
-                    'exchange': exchange,
-                    'order_id': order_id,
-                    'data': data,
-                    'timestamp': datetime.now().isoformat(),
-                    'flow_type': 'private_immediate'
-                }
-                
-                await self.private_water_callback(private_data)
-                
-                # 记录
-                async with self.locks['execution_records']:
-                    self.execution_records["private_flows"]["order_updates"] += 1
-                    self.execution_records["private_flows"]["last_order_update"] = time.time()
-                    
-            except Exception as e:
-                logger.error(f"❌【数据池】私人数据(交易)流出失败: {e}")
     
     async def update_connection_status(self, exchange: str, connection_type: str, status: Dict[str, Any]):
         """更新连接状态"""
@@ -374,7 +309,7 @@ class DataStore:
     # ==================== 状态查询 ====================
     
     async def get_execution_status(self) -> Dict[str, Any]:
-        """✅ 增强：获取规则执行状态"""
+        """获取规则执行状态"""
         async with self.locks['execution_records']:
             records = self.execution_records.copy()
         
@@ -382,11 +317,6 @@ class DataStore:
             "flowing": self.flowing,
             "has_rules": self.rules is not None,
             "execution_records": records,
-            "private_pipeline": {
-                "connected": self.private_water_callback is not None,
-                "flowing": self.private_flowing,
-                "stats": records["private_flows"]
-            },
             "timestamp": datetime.now().isoformat()
         }
     
@@ -435,11 +365,7 @@ class DataStore:
                 "exchanges": list(self.order_data.keys())
             },
             "http_server_ready": self._http_server_ready,
-            "flowing": self.flowing,
-            "private_pipeline": {
-                "connected": self.private_water_callback is not None,
-                "flowing": self.private_flowing
-            }
+            "flowing": self.flowing
         }
 
 # 全局实例

@@ -19,7 +19,7 @@ from shared_data.step5_cross_calc import Step5CrossCalc
 logger = logging.getLogger(__name__)
 
 class PipelineManager:
-    """管理员：制定规则，启动系统，管理双数据管道（已集成Step0）"""
+    """管理员：制定规则，启动系统（已集成Step0）"""
     
     _instance: Optional['PipelineManager'] = None
     
@@ -30,15 +30,13 @@ class PipelineManager:
         return cls._instance
     
     def __init__(self, 
-                 brain_callback: Optional[Callable] = None,
-                 private_data_callback: Optional[Callable] = None):
+                 brain_callback: Optional[Callable] = None):
         """✅ 已集成Step0限流器"""
         if hasattr(self, '_initialized'):
             return
         
-        # 大脑双通道回调
+        # 大脑回调（仅市场数据）
         self.brain_callback = brain_callback
-        self.private_data_callback = private_data_callback
         
         # 每小时重置计时器
         self._last_hourly_reset = time.time()
@@ -62,13 +60,6 @@ class PipelineManager:
             "step0_limit": {
                 "binance_funding_settlement_limit": 150,  # 币安历史费率数据限制次数
                 "enabled": True
-            },
-            
-            # 私人数据规则
-            "private_data": {
-                "enabled": True,
-                "immediate_flow": True,
-                "log_updates": True
             }
         }
         
@@ -93,14 +84,6 @@ class PipelineManager:
                 "total_out": 0,
                 "binance_funding_blocked": 0,
                 "binance_funding_passed": 0
-            },
-            # 私人数据统计
-            "private_data": {
-                "account_updates": 0,
-                "order_updates": 0,
-                "last_account_update": 0,
-                "last_order_update": 0,
-                "errors": 0
             }
         }
         
@@ -129,17 +112,13 @@ class PipelineManager:
             await data_store.start_flowing(self._receive_water_callback)
             logger.info("🚰【数据处理管理员】DataStore市场数据放水系统已启动")
             
-            # 3. 连接私人数据管道
-            data_store.set_private_water_callback(self._receive_private_water)
-            logger.info("🔄【数据处理管理员】私人数据管道已连接")
-            
-            # ✅ 4. 流水线工人已就绪（步骤0-5）
+            # 3. 流水线工人已就绪（步骤0-5）
             logger.info("🔧【数据处理管理员】流水线工人已就位（步骤0-5）")
             
-            # 5. 系统运行中
+            # 4. 系统运行中
             logger.info("🎉【数据处理管理员】系统启动完成，开始自动运行")
             
-            # 6. 启动状态监控（包含每小时重置检查）
+            # 5. 启动状态监控（包含每小时重置检查）
             self._monitor_task = asyncio.create_task(self._monitor_system())
             
         except Exception as e:
@@ -155,9 +134,6 @@ class PipelineManager:
         # 停止DataStore放水
         from shared_data.data_store import data_store
         await data_store.stop_flowing()
-        
-        # 关闭私人数据管道
-        data_store.set_private_flowing(False)
         
         # 停止监控
         if hasattr(self, '_monitor_task'):
@@ -252,41 +228,6 @@ class PipelineManager:
             logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
             self.stats["errors"] += 1
     
-    # ==================== 私人数据处理回调 ====================
-    
-    async def _receive_private_water(self, private_data: Dict):
-        """接收DataStore放过来的私人数据水（保持不变）"""
-        if not private_data:
-            return
-        
-        try:
-            # 检查是否需要每小时重置统计
-            self._check_hourly_reset()
-            
-            data_type = private_data.get('data_type', 'unknown')
-            
-            # 统计
-            if data_type == 'account_update':
-                self.stats["private_data"]["account_updates"] += 1
-                self.stats["private_data"]["last_account_update"] = time.time()
-            elif data_type == 'order_update':
-                self.stats["private_data"]["order_updates"] += 1
-                self.stats["private_data"]["last_order_update"] = time.time()
-            
-            # 可选：记录私人数据更新
-            if self.rules["private_data"]["log_updates"]:
-                logger.debug(f"📨【数据处理管理员】【私人数据】收到 {data_type}: {private_data.get('exchange')}")
-            
-            # 立即推送给大脑
-            if self.private_data_callback:
-                await self.private_data_callback(private_data)
-            else:
-                logger.warning(f"⚠️【数据处理管理员】【私人数据】收到{data_type}但无回调，数据丢失")
-            
-        except Exception as e:
-            logger.error(f"❌【数据处理管理员】私人数据处理失败: {e}")
-            self.stats["private_data"]["errors"] += 1
-    
     # ==================== 每小时重置方法 ====================
     
     def _check_hourly_reset(self):
@@ -316,11 +257,6 @@ class PipelineManager:
         if hasattr(self, 'step0') and hasattr(self.step0, 'reset_counters'):
             self.step0.reset_counters()
         
-        # 重置私人数据统计
-        self.stats["private_data"]["account_updates"] = 0
-        self.stats["private_data"]["order_updates"] = 0
-        self.stats["private_data"]["errors"] = 0
-        
         logger.info("✅【数据处理管理员】每小时统计重置完成")
     
     # ==================== 系统监控 ====================
@@ -343,14 +279,11 @@ class PipelineManager:
                 step0_in = self.stats["step0_stats"]["total_in"]
                 step0_out = self.stats["step0_stats"]["total_out"]
                 step0_blocked = step0_in - step0_out
-                private_account = self.stats["private_data"]["account_updates"]
-                private_order = self.stats["private_data"]["order_updates"]
                 
                 logger.info(f"📈【数据处理管理员】系统运行报告 - "
                           f"运行时间: {uptime_str}, "
                           f"Step0: 输入{step0_in}/输出{step0_out}/拦截{step0_blocked}, "
-                          f"市场处理: {market_total}条, "
-                          f"私人数据(账户: {private_account}, 交易: {private_order})")
+                          f"市场处理: {market_total}条")
                 
             except asyncio.CancelledError:
                 break
@@ -425,15 +358,6 @@ class PipelineManager:
         self.brain_callback = callback
         logger.info("✅【数据处理管理员】市场数据大脑回调已设置")
     
-    def set_private_data_callback(self, callback: Callable):
-        """设置私人数据大脑回调"""
-        self.private_data_callback = callback
-        logger.info("✅【数据处理管理员】私人数据大脑回调已设置")
-    
-    def has_private_data_callback(self) -> bool:
-        """检查是否有私人数据回调"""
-        return self.private_data_callback is not None
-    
     # ==================== Step0相关方法 ====================
     
     def reset_step0_limit(self):
@@ -456,25 +380,16 @@ class PipelineManager:
 
 # 使用示例
 async def main():
-    # 大脑双回调函数
+    # 大脑回调函数（仅市场数据）
     async def brain_callback(data):
         """处理市场数据"""
         print(f"📈【数据处理管理员】 收到市场数据: {len(data)}条")
     
-    async def private_data_callback(data):
-        """处理私人数据"""
-        data_type = data.get('data_type', 'unknown')
-        if data_type == 'account_update':
-            print(f"💰 【数据处理管理员】收到账户更新: {data.get('exchange')}")
-        elif data_type == 'order_update':
-            print(f"📝 【数据处理管理员】收到交易更新: {data.get('order_id')}")
-    
     # 获取管理员实例
     manager = PipelineManager.instance()
     
-    # 设置双回调
+    # 设置回调
     manager.set_brain_callback(brain_callback)
-    manager.set_private_data_callback(private_data_callback)
     
     # 启动系统（一次）
     await manager.start()
