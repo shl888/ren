@@ -189,6 +189,32 @@ async def main():
         asyncio.create_task(delayed_ws_init(ws_admin))
         brain.ws_admin = ws_admin  # 传递给大脑
         
+        # ==================== 11. 🆕 启动私人连接池（B模块） ====================
+        logger.info("【🅱️】启动私人WebSocket连接池...")
+        try:
+            from private_ws_pool import PrivateWebSocketPool
+            private_pool = PrivateWebSocketPool()
+            await private_pool.start(brain.data_manager)
+            brain.private_pool = private_pool
+            logger.info("✅ 私人WebSocket连接池启动成功")
+        except ImportError as e:
+            logger.error(f"❌ 无法导入私人连接池模块: {e}")
+        except Exception as e:
+            logger.error(f"❌ 启动私人连接池失败: {e}")
+        
+        # ==================== 12. 🆕 启动私人HTTP获取器（C模块） ====================
+        logger.info("【©️】启动私人HTTP获取器...")
+        try:
+            from private_http_fetcher import PrivateHTTPFetcher
+            http_fetcher = PrivateHTTPFetcher()
+            await http_fetcher.start(brain.data_manager)
+            brain.private_fetcher = http_fetcher
+            logger.info("✅ 私人HTTP获取器启动成功")
+        except ImportError as e:
+            logger.error(f"❌ 无法导入HTTP获取器模块: {e}")
+        except Exception as e:
+            logger.error(f"❌ 启动HTTP获取器失败: {e}")
+        
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
@@ -205,7 +231,7 @@ async def main():
                 else:
                     logger.info(f"  • {exchange}: ⏳ 连接中...")
         
-        # ==================== 11. 运行大脑 ====================
+        # ==================== 13. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
@@ -226,4 +252,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
