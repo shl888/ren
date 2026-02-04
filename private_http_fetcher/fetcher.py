@@ -34,6 +34,9 @@ class PrivateHTTPFetcher:
         self.scheduler_task = None
         self.fetch_tasks = []
         
+        # Session复用（优化：避免每次新建连接）
+        self.session = None
+        
         # 状态标志
         self.account_fetched = False     # 账户是否已获取
         self.account_fetch_success = False  # 账户获取是否成功
@@ -66,7 +69,10 @@ class PrivateHTTPFetcher:
         self.ACCOUNT_ENDPOINT = "/fapi/v3/account"        # 账户资产
         self.POSITION_ENDPOINT = "/fapi/v3/positionRisk"  # 持仓盈亏
         
-        logger.info("🔗 [HTTP获取器] 初始化完成（带指数退避重试）")
+        # 🔴 优化：添加recvWindow配置
+        self.RECV_WINDOW = 5000  # 5秒接收窗口
+        
+        logger.info("🔗 [HTTP获取器] 初始化完成（带指数退避重试 + recvWindow）")
     
     async def start(self, brain_store):
         """
@@ -75,10 +81,14 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例（与私人连接池相同）
         """
-        logger.info("🚀 [HTTP获取器] 正在启动（指数退避重试）...")
+        logger.info("🚀 [HTTP获取器] 正在启动（指数退避重试 + recvWindow）...")
         
         self.brain_store = brain_store
         self.running = True
+        
+        # 🔴 优化：创建复用的ClientSession
+        timeout = aiohttp.ClientTimeout(total=30)
+        self.session = aiohttp.ClientSession(timeout=timeout)
         
         # 创建统一的调度任务，严格控制时序
         self.scheduler_task = asyncio.create_task(self._controlled_scheduler())
@@ -120,7 +130,7 @@ class PrivateHTTPFetcher:
                 # 启动持仓任务
                 position_task = asyncio.create_task(self._fetch_position_low_freq())
                 self.fetch_tasks.append(position_task)
-                logger.info("✅ [HTTP获取器] 持仓任务已启动（低频模式）")
+                logger.info("✅ [HTTP获取器] 持仓任务已启动（低频模式：每2分钟）")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动持仓任务")
                 
@@ -167,7 +177,7 @@ class PrivateHTTPFetcher:
         return False
     
     async def _fetch_account_single(self):
-        """单次尝试获取账户资产"""
+        """单次尝试获取账户资产（优化版：添加recvWindow和权重监控）"""
         try:
             self.quality_stats['account_fetch']['total_attempts'] += 1
             
@@ -177,43 +187,59 @@ class PrivateHTTPFetcher:
                 self.quality_stats['account_fetch']['last_error'] = "凭证读取失败"
                 return False
             
-            # 准备请求
-            params = {'timestamp': int(time.time() * 1000)}
+            # 🔴 优化：添加recvWindow参数（币安API要求）
+            params = {
+                'timestamp': int(time.time() * 1000),
+                'recvWindow': self.RECV_WINDOW  # 5000ms
+            }
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.ACCOUNT_ENDPOINT}"
             
-            async with aiohttp.ClientSession() as session:
-                headers = {'X-MBX-APIKEY': api_key}
-                timeout = aiohttp.ClientTimeout(total=30)
+            headers = {'X-MBX-APIKEY': api_key}
+            
+            # 🔴 优化：使用复用的session
+            async with self.session.get(url, params=signed_params, headers=headers) as resp:
+                # 🔴 优化：监控权重使用
+                used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
+                if used_weight:
+                    logger.debug(f"📊 [HTTP获取器] 账户请求权重使用: {used_weight}/1200")
                 
-                async with session.get(url, params=signed_params, headers=headers, timeout=timeout) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        await self._push_data('http_account', data)
+                if resp.status == 200:
+                    data = await resp.json()
+                    await self._push_data('http_account', data)
+                    
+                    self.quality_stats['account_fetch']['success_attempts'] += 1
+                    self.quality_stats['account_fetch']['last_success'] = datetime.now().isoformat()
+                    self.quality_stats['account_fetch']['last_error'] = None
+                    self.quality_stats['account_fetch']['success_rate'] = (
+                        self.quality_stats['account_fetch']['success_attempts'] / 
+                        self.quality_stats['account_fetch']['total_attempts'] * 100
+                    )
+                    
+                    logger.info("✅ [HTTP获取器] 账户资产获取成功！")
+                    self.account_fetched = True
+                    return True
+                else:
+                    error_text = await resp.text()
+                    error_msg = f"HTTP {resp.status}: {error_text[:100]}"
+                    self.quality_stats['account_fetch']['last_error'] = error_msg
+                    
+                    # 🔴 优化：正确处理429和418（读取Retry-After头）
+                    if resp.status in [429, 418]:
+                        retry_after = int(resp.headers.get('Retry-After', 60))
+                        logger.error(f"🚨 [HTTP获取器] 触发限流({resp.status})，等待{retry_after}秒")
                         
-                        self.quality_stats['account_fetch']['success_attempts'] += 1
-                        self.quality_stats['account_fetch']['last_success'] = datetime.now().isoformat()
-                        self.quality_stats['account_fetch']['last_error'] = None
-                        self.quality_stats['account_fetch']['success_rate'] = (
-                            self.quality_stats['account_fetch']['success_attempts'] / 
-                            self.quality_stats['account_fetch']['total_attempts'] * 100
-                        )
-                        
-                        logger.info("✅ [HTTP获取器] 账户资产获取成功！")
-                        self.account_fetched = True
-                        return True
-                    else:
-                        error_text = await resp.text()
-                        error_msg = f"HTTP {resp.status}: {error_text[:100]}"
-                        self.quality_stats['account_fetch']['last_error'] = error_msg
-                        logger.error(f"❌ [HTTP获取器] 账户请求失败 {error_msg}")
-                        
-                        # 🔴 遇到418封禁，立即放弃所有重试
+                        # 418直接放弃所有重试，429继续重试
                         if resp.status == 418:
                             logger.error("🚨 [HTTP获取器] IP被封禁(418)，账户任务永久停止")
-                            return False  # 返回False，但外层循环会根据这个停止重试
+                            return False
                         
-                        return False  # 其他错误继续重试
+                        # 429等待后继续重试（外层循环控制）
+                        await asyncio.sleep(retry_after)
+                        return False
+                    
+                    logger.error(f"❌ [HTTP获取器] 账户请求失败 {error_msg}")
+                    return False
                         
         except asyncio.TimeoutError:
             error_msg = "请求超时"
@@ -227,7 +253,9 @@ class PrivateHTTPFetcher:
             return False
     
     async def _fetch_position_low_freq(self):
-        """低频获取持仓盈亏（每1分钟一次）"""
+        """
+        低频获取持仓盈亏（优化版：2分钟间隔 + recvWindow + 权重监控）
+        """
         request_count = 0
         
         # 初始等待
@@ -243,48 +271,62 @@ class PrivateHTTPFetcher:
                 api_key, api_secret = await self._get_fresh_credentials()
                 if not api_key or not api_secret:
                     logger.warning("⚠️ [HTTP获取器] 持仓请求-凭证读取失败")
-                    await asyncio.sleep(60)  # 1分钟后重试
+                    await asyncio.sleep(120)  # 2分钟后重试
                     continue
                 
-                # 准备请求
-                params = {'timestamp': int(time.time() * 1000)}
+                # 🔴 优化：添加recvWindow参数
+                params = {
+                    'timestamp': int(time.time() * 1000),
+                    'recvWindow': self.RECV_WINDOW  # 5000ms
+                }
                 signed_params = self._sign_params(params, api_secret)
                 url = f"{self.BASE_URL}{self.POSITION_ENDPOINT}"
                 
-                async with aiohttp.ClientSession() as session:
-                    headers = {'X-MBX-APIKEY': api_key}
-                    timeout = aiohttp.ClientTimeout(total=30)
+                headers = {'X-MBX-APIKEY': api_key}
+                
+                # 🔴 优化：使用复用的session
+                async with self.session.get(url, params=signed_params, headers=headers) as resp:
+                    # 🔴 优化：监控权重使用
+                    used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
+                    if used_weight:
+                        logger.debug(f"📊 [HTTP获取器] 持仓请求权重使用: {used_weight}/1200")
                     
-                    async with session.get(url, params=signed_params, headers=headers, timeout=timeout) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            await self._push_data('http_position', data)
-                            
-                            self.quality_stats['position_fetch']['success_attempts'] += 1
-                            self.quality_stats['position_fetch']['last_success'] = datetime.now().isoformat()
-                            self.quality_stats['position_fetch']['last_error'] = None
-                            self.quality_stats['position_fetch']['success_rate'] = (
-                                self.quality_stats['position_fetch']['success_attempts'] / 
-                                self.quality_stats['position_fetch']['total_attempts'] * 100
-                            )
-                            
-                            logger.info(f"✅ [HTTP获取器] 第{request_count}次持仓获取成功")
-                            
-                            # 成功后等待1分钟
-                            await asyncio.sleep(60)
-                            
+                    if resp.status == 200:
+                        data = await resp.json()
+                        
+                        # 🔴 优化：处理V3端点空持仓情况
+                        if not data:
+                            logger.info("📊 [HTTP获取器] 当前无持仓")
                         else:
-                            error_text = await resp.text()
-                            error_msg = f"HTTP {resp.status}: {error_text[:100]}"
-                            self.quality_stats['position_fetch']['last_error'] = error_msg
-                            logger.error(f"❌ [HTTP获取器] 持仓请求失败 {error_msg}")
-                            
-                            # 遇到封禁长时间等待
-                            if resp.status == 418:
-                                logger.error("🚨 [HTTP获取器] 持仓请求触发封禁，等待1分钟")
-                                await asyncio.sleep(60)  # 1分钟
-                            else:
-                                await asyncio.sleep(60)  # 1分钟后重试
+                            positions_count = len(data)
+                            logger.info(f"✅ [HTTP获取器] 第{request_count}次持仓获取成功，共{positions_count}个持仓")
+                        
+                        await self._push_data('http_position', data)
+                        
+                        self.quality_stats['position_fetch']['success_attempts'] += 1
+                        self.quality_stats['position_fetch']['last_success'] = datetime.now().isoformat()
+                        self.quality_stats['position_fetch']['last_error'] = None
+                        self.quality_stats['position_fetch']['success_rate'] = (
+                            self.quality_stats['position_fetch']['success_attempts'] / 
+                            self.quality_stats['position_fetch']['total_attempts'] * 100
+                        )
+                        
+                        # 🔴 优化：成功后等待2分钟（降低频率，减少被封风险）
+                        await asyncio.sleep(120)
+                        
+                    else:
+                        error_text = await resp.text()
+                        error_msg = f"HTTP {resp.status}: {error_text[:100]}"
+                        self.quality_stats['position_fetch']['last_error'] = error_msg
+                        logger.error(f"❌ [HTTP获取器] 持仓请求失败 {error_msg}")
+                        
+                        # 🔴 优化：正确处理429和418
+                        if resp.status in [429, 418]:
+                            retry_after = int(resp.headers.get('Retry-After', 120))  # 默认2分钟
+                            logger.error(f"🚨 [HTTP获取器] 持仓请求触发限流({resp.status})，等待{retry_after}秒")
+                            await asyncio.sleep(retry_after)
+                        else:
+                            await asyncio.sleep(120)  # 2分钟后重试
                                 
             except asyncio.CancelledError:
                 break
@@ -292,7 +334,7 @@ class PrivateHTTPFetcher:
                 error_msg = str(e)
                 self.quality_stats['position_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 持仓循环异常: {e}")
-                await asyncio.sleep(60)  # 1分钟后重试
+                await asyncio.sleep(120)  # 2分钟后重试
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -354,6 +396,15 @@ class PrivateHTTPFetcher:
         # 取消所有获取任务
         for task in self.fetch_tasks:
             task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        
+        # 🔴 优化：关闭复用的session
+        if self.session:
+            await self.session.close()
+            logger.info("✅ [HTTP获取器] HTTP会话已关闭")
         
         logger.info("✅ [HTTP获取器] 已关闭")
     
@@ -375,9 +426,13 @@ class PrivateHTTPFetcher:
                 'retry_delays': self.account_retry_delays,
                 'total_attempts': self.max_account_retries + 1
             },
+            'api_config': {
+                'recvWindow': self.RECV_WINDOW,  # 🔴 优化：显示recvWindow配置
+                'session_reuse': True  # 🔴 优化：显示session复用状态
+            },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试',
-                'position': '账户成功后30秒开始，每1分钟一次'
+                'position': '账户成功后30秒开始，每2分钟一次'  # 🔴 优化：改为2分钟
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
