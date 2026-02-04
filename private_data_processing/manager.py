@@ -32,17 +32,52 @@ class PrivateDataProcessor:
         """
         try:
             exchange = private_data.get('exchange', 'unknown')
-            data_type = private_data.get('data_type', 'unknown')
+            raw_data = private_data.get('data', {})
             
-            logger.debug(f"📨 [私人数据处理] 收到{exchange}.{data_type}数据")
+            # 🔴 【新增】第一步：获取事件类型
+            event_type = raw_data.get('e', 'unknown')
             
-            # 🔴 完全仿制大脑的存储逻辑
-            storage_key = f"{exchange}_{data_type}"
+            # 🔴 【新增】针对币安的特殊处理：过滤和映射
+            if exchange == 'binance':
+                # 🚫 1. 过滤掉 TRADE_LITE 事件
+                if event_type == 'TRADE_LITE':
+                    logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件: {raw_data.get('i')}")
+                    return  # 直接返回，不存储
+                
+                # 🗺️ 2. 币安事件类型映射
+                binance_mapping = {
+                    'ACCOUNT_UPDATE': 'account_update',
+                    'ORDER_TRADE_UPDATE': 'order_update',  # 关键映射：ORDER_TRADE_UPDATE -> order_update
+                    'ACCOUNT_CONFIG_UPDATE': 'account_config_update',  # 不再未知
+                    'MARGIN_CALL': 'risk_event',
+                    'listenKeyExpired': 'system_event',
+                    'balanceUpdate': 'balance_update',
+                    'outboundAccountPosition': 'account_update',
+                    'executionReport': 'order_update'
+                }
+                
+                # 使用映射后的data_type
+                if event_type in binance_mapping:
+                    final_data_type = binance_mapping[event_type]
+                    logger.debug(f"📨 [私人数据处理] 币安事件映射: {event_type} -> {final_data_type}")
+                else:
+                    # 对于未映射的事件，使用原生事件名的小写
+                    final_data_type = event_type.lower()
+                    
+            else:
+                # 其他交易所（如OKX）保持原有的data_type
+                final_data_type = private_data.get('data_type', 'unknown')
+            
+            # 🔴 【新增】记录完整信息便于调试
+            logger.debug(f"📨 [私人数据处理] 收到{exchange}.{final_data_type}数据")
+            
+            # 🔴 【修改】使用最终确定的data_type
+            storage_key = f"{exchange}_{final_data_type}"
             
             self.memory_store['private_data'][storage_key] = {
                 'exchange': exchange,
-                'data_type': data_type,
-                'data': private_data.get('data', {}),  # 直接存储原始数据
+                'data_type': final_data_type,  # 使用最终确定的类型
+                'data': raw_data,  # 直接存储原始数据
                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                 'received_at': datetime.now().isoformat()
             }
