@@ -1,4 +1,3 @@
-
 """
 私人WebSocket连接池管理器 - 简化版，直接传递原始数据
 """
@@ -8,18 +7,19 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Callable
 
 from .connection import BinancePrivateConnection, OKXPrivateConnection
-from .raw_data_cache import RawDataCache
 
 logger = logging.getLogger(__name__)
 
 class PrivateWebSocketPool:
     """私人连接池 - 简化版，直接传递原始数据"""
     
-    def __init__(self, data_callback: Callable):
-        self.data_callback = data_callback
+    def __init__(self):
+        """🔴 【修改点】删除data_callback参数"""
+        self.data_callback = None  # 设为None保持兼容
         
-        # 组件初始化（删除数据格式化器）
-        self.raw_data_cache = RawDataCache()
+        # 组件初始化
+        # 🔴 【修改点】删除raw_data_cache初始化
+        # self.raw_data_cache = RawDataCache()  # 删除这行
         
         # 连接存储
         self.connections = {
@@ -55,7 +55,7 @@ class PrivateWebSocketPool:
             }
         }
         
-        logger.info("🔗 [私人连接池] 初始化完成 (简化版，直接传递原始数据)")
+        logger.info("🔗 [私人连接池] 初始化完成 (直接推送模式)")
     
     async def start(self, brain_store):
         """启动连接池"""
@@ -71,7 +71,7 @@ class PrivateWebSocketPool:
         # 分批尝试连接
         asyncio.create_task(self._staggered_connect_all())
         
-        logger.info("✅ [私人连接池] 已启动，直接传递模式运行中")
+        logger.info("✅ [私人连接池] 已启动，自主推送模式运行中")
         return True
     
     async def _staggered_connect_all(self):
@@ -218,8 +218,8 @@ class PrivateWebSocketPool:
             connection = BinancePrivateConnection(
                 listen_key=listen_key,
                 status_callback=self._handle_connection_status,
-                data_callback=self._process_and_forward_data,
-                raw_data_cache=self.raw_data_cache
+                data_callback=self._process_and_forward_data,  # 仍然使用内部方法
+                raw_data_cache=None  # 🔴 【修改点】设为None
             )
             
             # 建立连接
@@ -258,8 +258,8 @@ class PrivateWebSocketPool:
                 api_secret=api_creds['api_secret'],
                 passphrase=api_creds.get('passphrase', ''),
                 status_callback=self._handle_connection_status,
-                data_callback=self._process_and_forward_data,
-                raw_data_cache=self.raw_data_cache
+                data_callback=self._process_and_forward_data,  # 仍然使用内部方法
+                raw_data_cache=None  # 🔴 【修改点】设为None
             )
             
             # 建立连接
@@ -319,12 +319,17 @@ class PrivateWebSocketPool:
             logger.error(f"❌ [私人连接池] 处理状态事件失败: {e}")
     
     async def _process_and_forward_data(self, raw_data: Dict[str, Any]):
-        """处理并转发数据 - 简化版：直接传递，不加包装"""
+        """🔴 【修改点】处理并转发数据 - 硬编码推送到新模块"""
         try:
-            # 直接传递给大脑，不做任何处理
-            await self.data_callback(raw_data)
-            
-            logger.debug(f"📨 [私人连接池] 已转发简化数据: {raw_data['exchange']}.{raw_data['data_type']}")
+            # 硬编码推送到私人数据处理模块
+            try:
+                from private_data_processing.manager import receive_private_data
+                await receive_private_data(raw_data)
+                logger.debug(f"📨 [私人连接池] 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
+            except ImportError as e:
+                logger.error(f"❌ [私人连接池] 无法导入私人数据处理模块: {e}")
+            except Exception as e:
+                logger.error(f"❌ [私人连接池] 推送数据失败: {e}")
             
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理转发数据失败: {e}")
@@ -369,7 +374,7 @@ class PrivateWebSocketPool:
                 'binance': '主动探测模式（30秒探测）',
                 'okx': '协议层心跳模式（25秒协议层心跳 + 45秒被动检测）'
             },
-            'data_format': '原始数据，无包装'
+            'data_destination': '私人数据处理模块（硬编码推送）'  # 🔴 【修改点】
         }
         
         for exchange in ['binance', 'okx']:
