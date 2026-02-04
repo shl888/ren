@@ -137,7 +137,7 @@ class PrivateHTTPFetcher:
                 # 启动持仓任务
                 position_task = asyncio.create_task(self._fetch_position_low_freq())
                 self.fetch_tasks.append(position_task)
-                logger.info("✅ [HTTP获取器] 持仓任务已启动（低频模式：每1分钟）")
+                logger.info("✅ [HTTP获取器] 持仓任务已启动（高频模式：每1秒）")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动持仓任务")
                 
@@ -255,7 +255,7 @@ class PrivateHTTPFetcher:
                     
                     # 🔴 关键修复：418（IP封禁）- 立即停止所有重试
                     if resp.status == 418:
-                        retry_after = int(resp.headers.get('Retry-After', 60))
+                        retry_after = int(resp.headers.get('Retry-After', 10))
                         logger.error(f"🚨 [HTTP获取器] IP被封禁(418)，需等待{retry_after}秒")
                         # 🔴 修复：返回特殊标记，让上层知道要停止所有重试
                         return 'PERMANENT_STOP'
@@ -293,7 +293,7 @@ class PrivateHTTPFetcher:
     
     async def _fetch_position_low_freq(self):
         """
-        低频获取持仓盈亏（优化版：1分钟间隔 + recvWindow + 权重监控）
+        高频获取持仓盈亏（优化版：1秒间隔 + recvWindow + 权重监控）
         """
         request_count = 0
         
@@ -310,7 +310,7 @@ class PrivateHTTPFetcher:
                 api_key, api_secret = await self._get_fresh_credentials()
                 if not api_key or not api_secret:
                     logger.warning("⚠️ [HTTP获取器] 持仓请求-凭证读取失败")
-                    await asyncio.sleep(60)  # 1分钟后重试
+                    await asyncio.sleep(10)  # 10秒后重试
                     continue
                 
                 # 🔴 优化：添加recvWindow参数
@@ -350,8 +350,8 @@ class PrivateHTTPFetcher:
                             self.quality_stats['position_fetch']['total_attempts'] * 100
                         )
                         
-                        # 🔴 优化：成功后等待1分钟（降低频率，减少被封风险）
-                        await asyncio.sleep(60)
+                        # 🔴 优化：成功后等待1秒（降低频率，减少被封风险）
+                        await asyncio.sleep(1)
                         
                     else:
                         error_text = await resp.text()
@@ -374,7 +374,7 @@ class PrivateHTTPFetcher:
                             logger.warning(f"⚠️ [HTTP获取器] 持仓请求触发频率限制(429)，等待{retry_after}秒")
                             await asyncio.sleep(retry_after)
                         else:
-                            await asyncio.sleep(60)  # 1分钟后重试
+                            await asyncio.sleep(10)  # 10秒后重试
                                 
             except asyncio.CancelledError:
                 break
@@ -382,7 +382,7 @@ class PrivateHTTPFetcher:
                 error_msg = str(e)
                 self.quality_stats['position_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 持仓循环异常: {e}")
-                await asyncio.sleep(60)  # 1分钟后重试
+                await asyncio.sleep(10)  # 10秒后重试
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -481,7 +481,7 @@ class PrivateHTTPFetcher:
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试',
-                'position': '账户成功后30秒开始，每1分钟一次'  # 🔴 改为1分钟
+                'position': '账户成功后30秒开始，每1秒一次'  # 🔴 改为1秒
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
