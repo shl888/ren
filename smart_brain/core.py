@@ -116,9 +116,8 @@ class SmartBrain:
             try:
                 from private_ws_pool import PrivateWebSocketPool
                 
-                self.private_pool = PrivateWebSocketPool(
-                    data_callback=self.data_manager.receive_private_data
-                )
+                # 🔴 【修改点】删除回调参数，只创建实例
+                self.private_pool = PrivateWebSocketPool()  # 不传回调参数
                 
                 # 传入大脑存储接口，让连接池自主管理
                 await self.private_pool.start(self.data_manager)
