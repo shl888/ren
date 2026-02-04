@@ -1,4 +1,3 @@
-
 """
 私人WebSocket连接实现 - 双模式稳定版
 币安：主动探测模式 | 欧意：心跳+间隔模式
@@ -354,7 +353,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             # 直接转发原始数据，只添加最基本元数据
             formatted_data = {
                 'exchange': 'binance',
-                'data_type': self._map_binance_event_type(event_type),
+                'data_type': self._map_binance_event_type(event_type),  # 使用映射函数
                 'timestamp': datetime.now().isoformat(),
                 'data': data  # 直接使用原始数据，不加包装
             }
@@ -365,18 +364,26 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             logger.error(f"[币安私人] 传递给大脑失败: {e}")
     
     def _map_binance_event_type(self, event_type: str) -> str:
-        """映射币安事件类型"""
-        mapping = {
-            'ACCOUNT_UPDATE': 'account_update',
-            'ORDER_TRADE_UPDATE': 'order_update',
-            'TRADE_LITE': 'trade_update',
-            'listenKeyExpired': 'system_event',
-            'MARGIN_CALL': 'risk_event',
-            'balanceUpdate': 'balance_update',
-            'outboundAccountPosition': 'account_update',
-            'executionReport': 'order_update'
-        }
-        return mapping.get(event_type, 'unknown')
+        """
+        映射币安事件类型 - 关键修改：直接返回原生事件名
+        让数据处理模块做过滤和映射，连接池只负责转发原始数据
+        """
+        # 🔴 【修改前】包含映射，会导致数据处理模块收到错误的类型
+        # mapping = {
+        #     'ACCOUNT_UPDATE': 'account_update',
+        #     'ORDER_TRADE_UPDATE': 'order_update',
+        #     'TRADE_LITE': 'trade_update',  # ❌ 错误映射
+        #     'listenKeyExpired': 'system_event',
+        #     'MARGIN_CALL': 'risk_event',
+        #     'balanceUpdate': 'balance_update',
+        #     'outboundAccountPosition': 'account_update',
+        #     'executionReport': 'order_update'
+        # }
+        # return mapping.get(event_type, 'unknown')
+        
+        # 🟢 【修改后】直接返回原生事件名的小写
+        # 数据处理模块会基于 event_type 做过滤和映射
+        return event_type.lower()
     
     async def disconnect(self):
         """断开连接 - 清理探测任务"""
