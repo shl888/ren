@@ -8,8 +8,8 @@ import time
 import hmac
 import hashlib
 import urllib.parse
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone  # 🔴 新增：导入timezone
+from typing import Dict, Any, Optional, Set, List  # 🔴 新增：导入Set, List
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -81,8 +81,17 @@ class PrivateHTTPFetcher:
 
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
+        
+        # 🔴 新增：资金费查询相关配置
+        self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
+        self.FUNDING_RETRY_INTERVAL = 5  # 秒
+        self.FUNDING_MAX_RETRIES = 4  # 最多重试4次（总尝试5次）
+        self.FUNDING_QUERY_WINDOW_MS = 120 * 1000  # 查询时间窗口：120秒（2分钟）
+        self.FUNDING_INITIAL_DELAY = 10  # 整点后延迟秒数
+        self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
+        
         logger.info(
-            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 指数退避重试 + recvWindow）")
+            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 整点资金费查询 | 指数退避重试 + recvWindow）")
 
     async def start(self, brain_store):
         """
@@ -142,7 +151,7 @@ class PrivateHTTPFetcher:
                     self._fetch_account_adaptive_freq())
                 self.fetch_tasks.append(account_task)
                 logger.info(
-                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒）")
+                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒 + 整点资金费查询）")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动后续任务")
 
@@ -206,7 +215,7 @@ class PrivateHTTPFetcher:
 
     async def _fetch_account_single(self):
         """
-        单次尝试获取账户资产（优化版：添加recvWindow和权重监控）
+        单次尝试获取账户资产（优化版：添加recvWindow）
 
         Returns:
             True: 成功
@@ -340,11 +349,17 @@ class PrivateHTTPFetcher:
                         positions = data.get('positions', [])
                         # 过滤掉仓位为0的持仓
                         has_position_now = False
+                        active_symbols = set()  # 🔴 新增：记录活跃合约符号
                         for pos in positions:
                             position_amt = float(pos.get('positionAmt', '0'))
                             if position_amt != 0:  # 仓位不为0表示有真实持仓
                                 has_position_now = True
-                                break
+                                active_symbols.add(pos['symbol'])  # 🔴 新增：记录符号
+                        
+                        # 🔴 新增：整点资金费查询触发
+                        await self._trigger_funding_fetch_if_needed(
+                            api_key, api_secret, has_position_now, active_symbols
+                        )
 
                         # 🔴 自适应频率调整
                         if has_position_now:
@@ -368,8 +383,7 @@ class PrivateHTTPFetcher:
                         current_time = time.time()
                         if current_time - self.last_log_time >= self.log_interval:
                             if has_position_now:
-                                positions_count = len(
-                                    [p for p in positions if float(p.get('positionAmt', '0')) != 0])
+                                positions_count = len(active_symbols)  # 🔴 修改：使用已计算的活跃数量
                                 logger.info(
                                     f"📊 [HTTP获取器] 当前持仓{positions_count}个 | 高频模式 | 请求次数:{request_count}")
                             else:
@@ -426,6 +440,138 @@ class PrivateHTTPFetcher:
                 self.quality_stats['account_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
+
+    async def _trigger_funding_fetch_if_needed(self, api_key: str, api_secret: str, 
+                                              has_position: bool, active_symbols: Set[str]):
+        """
+        在整点触发资金费查询。
+        规则：每个UTC整点，如果有持仓，则在整点后延迟10秒启动查询任务。
+        """
+        if not has_position:
+            # 无持仓，无需触发，并重置触发标记
+            self.last_funding_trigger_hour = -1
+            return
+
+        # 获取当前UTC时间
+        utc_now = datetime.now(timezone.utc)
+        current_hour = utc_now.hour
+
+        # 检查是否已经在本小时触发过
+        if current_hour == self.last_funding_trigger_hour:
+            return
+
+        # 计算从当前时间到整点已过去的秒数
+        minutes_into_hour = utc_now.minute
+        seconds_into_hour = minutes_into_hour * 60 + utc_now.second
+
+        # 只在整点后的最初1分钟内进行判断和启动，避免在小时中段误触发
+        if seconds_into_hour > 60:
+            return
+
+        # 记录触发时间，避免本小时内重复触发
+        self.last_funding_trigger_hour = current_hour
+        logger.info(f"🕐 [资金费] 在UTC {current_hour:02d}:00:00 检测到持仓，准备触发查询...")
+
+        # 延迟10秒后启动独立的资金费查询任务
+        asyncio.create_task(
+            self._execute_funding_fetch_task(api_key, api_secret, active_symbols, utc_now)
+        )
+
+    async def _execute_funding_fetch_task(self, api_key: str, api_secret: str, 
+                                         active_symbols: Set[str], trigger_time: datetime):
+        """
+        执行资金费查询任务，包含重试逻辑。
+        """
+        await asyncio.sleep(self.FUNDING_INITIAL_DELAY)
+
+        logger.info(f"🚀 [资金费] 开始执行资金费查询任务，活跃合约: {active_symbols}")
+
+        retry_count = 0
+        max_attempts = self.FUNDING_MAX_RETRIES + 1  # 总尝试次数
+
+        while retry_count < max_attempts and self.running:
+            attempt_num = retry_count + 1
+            logger.info(f"🔄 [资金费] 尝试 {attempt_num}/{max_attempts}")
+
+            success, income_data = await self._fetch_funding_income_single(
+                api_key, api_secret, trigger_time
+            )
+
+            if not success:
+                # 请求失败（网络错误等）
+                logger.warning(f"⚠️ [资金费] 第{attempt_num}次请求失败，{self.FUNDING_RETRY_INTERVAL}秒后重试")
+            else:
+                # 请求成功，检查数据完整性
+                settled_symbols = self._extract_settled_symbols(income_data)
+                missing_symbols = active_symbols - settled_symbols
+
+                if not missing_symbols:
+                    # 所有活跃合约都已结算
+                    logger.info(f"✅ [资金费] 成功获取所有持仓合约的资金费数据！")
+                    await self._push_data('http_funding_income', {
+                        'trigger_time': trigger_time.isoformat(),
+                        'active_symbols': list(active_symbols),
+                        'income_data': income_data
+                    })
+                    return  # 任务成功完成
+                else:
+                    # 部分合约数据缺失
+                    logger.info(f"⏳ [资金费] 数据不全，缺失合约: {missing_symbols}")
+
+            # 未成功完成，准备重试
+            retry_count += 1
+            if retry_count < max_attempts:
+                await asyncio.sleep(self.FUNDING_RETRY_INTERVAL)
+
+        # 重试耗尽仍未成功
+        if self.running:
+            logger.warning(f"⚠️ [资金费] 任务结束：{max_attempts}次尝试后仍未获取完整数据")
+
+    async def _fetch_funding_income_single(self, api_key: str, api_secret: str, 
+                                          trigger_time: datetime):
+        """
+        单次获取资金费历史记录
+        权重：30
+        """
+        try:
+            current_time_ms = int(time.time() * 1000)
+            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS
+
+            params = {
+                'timestamp': current_time_ms,
+                'recvWindow': self.RECV_WINDOW,
+                'incomeType': 'FUNDING_FEE',
+                'startTime': window_start_ms,
+                'limit': 100  # 足够覆盖持仓数量
+            }
+
+            signed_params = self._sign_params(params, api_secret)
+            url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
+            headers = {'X-MBX-APIKEY': api_key}
+
+            async with self.session.get(url, params=signed_params, headers=headers) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return True, data
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"❌ [资金费] 请求失败: HTTP {resp.status} - {error_text[:200]}")
+                    return False, None
+
+        except asyncio.TimeoutError:
+            logger.error(f"⏱️ [资金费] 请求超时")
+            return False, None
+        except Exception as e:
+            logger.error(f"❌ [资金费] 请求异常: {e}")
+            return False, None
+
+    def _extract_settled_symbols(self, income_data: List[Dict]) -> Set[str]:
+        """
+        从资金费数据中提取所有已结算的合约符号。
+        """
+        if not income_data:
+            return set()
+        return {item['symbol'] for item in income_data if 'symbol' in item}
 
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -518,6 +664,14 @@ class PrivateHTTPFetcher:
                 'high_freq': self.account_high_freq,
                 'low_freq': self.account_low_freq
             },
+            'funding_fetch': {
+                'enabled': True,
+                'trigger_hour': self.last_funding_trigger_hour,
+                'initial_delay': self.FUNDING_INITIAL_DELAY,
+                'query_window_ms': self.FUNDING_QUERY_WINDOW_MS,
+                'max_retries': self.FUNDING_MAX_RETRIES,
+                'retry_interval': self.FUNDING_RETRY_INTERVAL
+            },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
                 'account_retries': f"{self.max_account_retries}次重试",
@@ -530,10 +684,12 @@ class PrivateHTTPFetcher:
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试，然后自适应频率',
-                'data_type': '仅获取账户数据（包含持仓信息）'
+                'funding': '整点触发（仅当有持仓时），延迟10秒，最多5次尝试',
+                'data_type': '账户数据 + 资金费数据'
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
+                'funding_income': self.INCOME_ENDPOINT,
                 'base_url': self.BASE_URL
             },
             'data_destination': 'private_data_processing.manager'
