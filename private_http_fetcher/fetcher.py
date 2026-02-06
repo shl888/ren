@@ -53,6 +53,13 @@ class PrivateHTTPFetcher:
         self.last_log_time = 0                # 上次日志时间
         self.log_interval = 60                # 日志间隔（秒）
         
+        # 🔴 新增：权重调试相关变量
+        self.weight_debug_enabled = True     # 是否启用权重调试
+        self.last_weight_value = None        # 上一次的权重值
+        self.weight_history = []             # 权重历史记录
+        self.debug_start_time = None         # 调试开始时间
+        self.debug_request_count = 0         # 调试请求计数
+        
         # 连接质量统计（模仿pool_manager）
         self.quality_stats = {
             'account_fetch': {
@@ -63,6 +70,7 @@ class PrivateHTTPFetcher:
                 'success_rate': 100.0,
                 'retry_count': 0
             }
+            # 移除了 position_fetch 相关统计
         }
         
         # 🔴 币安API端点配置（模拟交易 vs 真实交易）
@@ -76,10 +84,6 @@ class PrivateHTTPFetcher:
         
         # 🔴 优化：添加recvWindow配置
         self.RECV_WINDOW = 5000  # 5秒接收窗口
-        
-        # 🔴 权重监控
-        self.last_weight_warning_time = 0
-        self.weight_warning_interval = 60  # 权重警告间隔（秒）
         
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
@@ -231,8 +235,8 @@ class PrivateHTTPFetcher:
             
             # 🔴 优化：使用复用的session
             async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                # 🔴 【新增】权重监控 - 测试实际权重消耗
-                self._monitor_api_weights(resp)
+                # 🔴 新增：详细的权重监控
+                self._monitor_weight_debug(resp, "initial")
                 
                 if resp.status == 200:
                     data = await resp.json()
@@ -295,13 +299,20 @@ class PrivateHTTPFetcher:
     
     async def _fetch_account_adaptive_freq(self):
         """
-        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 权重监控）
+        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 日志控制）
         从账户数据本身的positions字段判断是否有持仓
         """
         request_count = 0
+        self.debug_start_time = time.time()  # 记录调试开始时间
         
         # 初始等待
         await asyncio.sleep(30)
+        
+        # 🔴 新增：启动时的权重调试说明
+        if self.weight_debug_enabled:
+            logger.info("🔬 [HTTP获取器] 权重调试模式已启用")
+            logger.info("🔬 [HTTP获取器] 将记录每次请求的权重变化")
+            logger.info("🔬 [HTTP获取器] 重点关注：权重增量、变化规律、重置时间")
         
         while self.running:
             try:
@@ -325,8 +336,9 @@ class PrivateHTTPFetcher:
                 
                 # 🔴 优化：使用复用的session
                 async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                    # 🔴 【新增】权重监控 - 测试实际权重消耗
-                    self._monitor_api_weights(resp)
+                    # 🔴 新增：详细的权重监控
+                    elapsed_time = time.time() - self.debug_start_time if self.debug_start_time else 0
+                    self._monitor_weight_debug(resp, f"adaptive_req_{request_count}", elapsed_time)
                     
                     if resp.status == 200:
                         data = await resp.json()
@@ -412,44 +424,118 @@ class PrivateHTTPFetcher:
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
     
-    def _monitor_api_weights(self, resp):
+    def _monitor_weight_debug(self, resp, context="", elapsed_time=0):
         """
-        监控API权重使用情况
+        详细的权重监控和调试
         
-        币安API权重相关头部：
-        - X-MBX-USED-WEIGHT-1M: 每分钟请求权重
-        - X-MBX-ORDER-COUNT-1M: 每分钟订单数量权重
-        - X-MBX-USED-WEIGHT: 每秒请求权重
+        Args:
+            resp: HTTP响应对象
+            context: 上下文标识
+            elapsed_time: 从调试开始经过的时间
         """
-        current_time = time.time()
+        if not self.weight_debug_enabled:
+            return
         
-        # 1. 每分钟请求权重（最重要）
-        used_weight_1m = resp.headers.get('X-MBX-USED-WEIGHT-1M')
-        if used_weight_1m:
-            weight_value = int(used_weight_1m)
-            # 首次打印或每分钟打印一次
-            if current_time - self.last_weight_warning_time >= 60:
-                logger.info(f"📊 [HTTP获取器] 每分钟请求权重: {weight_value}/1200")
+        # 获取权重相关头部
+        weight_1m = resp.headers.get('X-MBX-USED-WEIGHT-1M')
+        order_count = resp.headers.get('X-MBX-ORDER-COUNT-1M')
+        weight_sec = resp.headers.get('X-MBX-USED-WEIGHT')
+        
+        # 🔴 调试：记录所有权重相关头部
+        weight_headers = {}
+        for key in resp.headers:
+            if 'WEIGHT' in key.upper() or 'COUNT' in key.upper() or 'LIMIT' in key.upper():
+                weight_headers[key] = resp.headers[key]
+        
+        if weight_1m:
+            try:
+                current_weight = int(weight_1m)
+                delta = None
                 
-                # 警告逻辑
-                if weight_value > 1000:
-                    logger.warning(f"🚨 [HTTP获取器] 请求权重接近限制: {weight_value}/1200")
-                    self.last_weight_warning_time = current_time
-                elif weight_value > 800:
-                    logger.info(f"⚠️ [HTTP获取器] 请求权重较高: {weight_value}/1200")
-                    self.last_weight_warning_time = current_time
+                # 计算增量
+                if self.last_weight_value is not None:
+                    delta = current_weight - self.last_weight_value
+                
+                # 记录历史
+                record = {
+                    'context': context,
+                    'time': elapsed_time,
+                    'weight_1m': current_weight,
+                    'delta': delta,
+                    'order_count': order_count,
+                    'timestamp': datetime.now().isoformat()
+                }
+                self.weight_history.append(record)
+                
+                # 输出调试信息
+                logger.info(f"🔬 [HTTP获取器] {context} | 时间:{elapsed_time:.1f}s")
+                logger.info(f"🔬 [HTTP获取器]   X-MBX-USED-WEIGHT-1M: {weight_1m}")
+                
+                if delta is not None:
+                    logger.info(f"🔬 [HTTP获取器]   权重增量: {delta}")
+                    if delta < 0:
+                        logger.info(f"🔬 [HTTP获取器]   ⚠️ 注意：权重减少，可能已重置")
+                    elif delta == 0:
+                        logger.info(f"🔬 [HTTP获取器]   ⚠️ 注意：权重未变化")
+                
+                if order_count:
+                    logger.info(f"🔬 [HTTP获取器]   X-MBX-ORDER-COUNT-1M: {order_count}")
+                
+                # 每10次请求输出一次摘要
+                if len(self.weight_history) % 10 == 0:
+                    self._print_weight_summary()
+                
+                self.last_weight_value = current_weight
+                
+            except ValueError:
+                logger.warning(f"🔬 [HTTP获取器] 权重值解析失败: {weight_1m}")
         
-        # 2. 每分钟订单权重
-        used_order_count_1m = resp.headers.get('X-MBX-ORDER-COUNT-1M')
-        if used_order_count_1m:
-            order_count = int(used_order_count_1m)
-            if current_time - self.last_weight_warning_time >= 60:
-                logger.info(f"📊 [HTTP获取器] 每分钟订单权重: {order_count}/1200")
+        elif weight_headers:
+            # 如果没有X-MBX-USED-WEIGHT-1M，但有其他权重头部
+            logger.info(f"🔬 [HTTP获取器] {context} | 其他权重头部:")
+            for key, value in weight_headers.items():
+                logger.info(f"🔬 [HTTP获取器]   {key}: {value}")
+    
+    def _print_weight_summary(self):
+        """输出权重摘要"""
+        if not self.weight_history:
+            return
         
-        # 3. 每秒请求权重（次要）
-        used_weight_sec = resp.headers.get('X-MBX-USED-WEIGHT')
-        if used_weight_sec:
-            logger.debug(f"📊 [HTTP获取器] 每秒请求权重: {used_weight_sec}")
+        logger.info("📋 [HTTP获取器] 权重摘要报告:")
+        logger.info("📋 [HTTP获取器] =================================")
+        
+        # 只显示最近10条记录
+        recent_records = self.weight_history[-10:]
+        
+        for record in recent_records:
+            delta_str = f"Δ:{record['delta']:+d}" if record['delta'] is not None else "Δ:N/A"
+            logger.info(f"📋 [HTTP获取器] {record['context']:15s} | 时间:{record['time']:6.1f}s | 权重:{record['weight_1m']:6d} | {delta_str}")
+        
+        logger.info("📋 [HTTP获取器] =================================")
+        
+        # 分析权重模式
+        if len(self.weight_history) >= 5:
+            self._analyze_weight_pattern()
+    
+    def _analyze_weight_pattern(self):
+        """分析权重模式"""
+        # 计算平均增量
+        deltas = [r['delta'] for r in self.weight_history if r['delta'] is not None]
+        if deltas:
+            avg_delta = sum(deltas) / len(deltas)
+            logger.info(f"📋 [HTTP获取器] 平均权重增量: {avg_delta:.2f}")
+            
+            # 检测重置
+            negative_deltas = [d for d in deltas if d < 0]
+            if negative_deltas:
+                logger.info(f"📋 [HTTP获取器] 检测到权重重置 {len(negative_deltas)} 次")
+            
+            # 建议频率
+            if avg_delta > 0:
+                safe_requests = 1200 / avg_delta if avg_delta > 0 else 0
+                safe_interval = 60 / safe_requests if safe_requests > 0 else 60
+                logger.info(f"📋 [HTTP获取器] 建议：平均每次消耗 {avg_delta:.1f} 权重")
+                logger.info(f"📋 [HTTP获取器] 建议安全频率：{safe_interval:.1f} 秒/次")
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -498,6 +584,10 @@ class PrivateHTTPFetcher:
         logger.info("🛑 [HTTP获取器] 正在关闭...")
         self.running = False
         
+        # 🔴 新增：输出完整的权重分析报告
+        if self.weight_debug_enabled and self.weight_history:
+            self._print_full_weight_report()
+        
         # 取消调度任务
         if self.scheduler_task:
             self.scheduler_task.cancel()
@@ -520,6 +610,47 @@ class PrivateHTTPFetcher:
             logger.info("✅ [HTTP获取器] HTTP会话已关闭")
         
         logger.info("✅ [HTTP获取器] 已关闭")
+    
+    def _print_full_weight_report(self):
+        """输出完整的权重分析报告"""
+        if not self.weight_history:
+            return
+        
+        logger.info("📋 [HTTP获取器] 完整的权重分析报告:")
+        logger.info("📋 [HTTP获取器] ===========================================")
+        logger.info(f"📋 [HTTP获取器] 总请求次数: {len(self.weight_history)}")
+        logger.info(f"📋 [HTTP获取器] 记录时间范围: {self.weight_history[0]['timestamp']} 到 {self.weight_history[-1]['timestamp']}")
+        
+        # 计算统计信息
+        weights = [r['weight_1m'] for r in self.weight_history]
+        deltas = [r['delta'] for r in self.weight_history if r['delta'] is not None]
+        
+        if weights:
+            logger.info(f"📋 [HTTP获取器] 权重范围: {min(weights)} - {max(weights)}")
+        
+        if deltas:
+            avg_delta = sum(deltas) / len(deltas)
+            positive_deltas = [d for d in deltas if d > 0]
+            negative_deltas = [d for d in deltas if d < 0]
+            zero_deltas = [d for d in deltas if d == 0]
+            
+            logger.info(f"📋 [HTTP获取器] 增量分析:")
+            logger.info(f"📋 [HTTP获取器]   平均增量: {avg_delta:.2f}")
+            logger.info(f"📋 [HTTP获取器]   正增量: {len(positive_deltas)} 次")
+            logger.info(f"📋 [HTTP获取器]   负增量(重置): {len(negative_deltas)} 次")
+            logger.info(f"📋 [HTTP获取器]   零增量: {len(zero_deltas)} 次")
+            
+            if positive_deltas:
+                avg_positive = sum(positive_deltas) / len(positive_deltas)
+                logger.info(f"📋 [HTTP获取器]   正增量平均值: {avg_positive:.2f}")
+        
+        # 详细记录
+        logger.info("📋 [HTTP获取器] 详细记录:")
+        for i, record in enumerate(self.weight_history[-20:], 1):  # 只显示最近20条
+            delta_str = f"Δ:{record['delta']:+d}" if record['delta'] is not None else "Δ:N/A"
+            logger.info(f"📋 [HTTP获取器] #{i:3d} {record['context']:20s} | 时间:{record['time']:6.1f}s | 权重:{record['weight_1m']:6d} | {delta_str}")
+        
+        logger.info("📋 [HTTP获取器] ===========================================")
     
     def get_status(self) -> Dict[str, Any]:
         """
@@ -561,4 +692,20 @@ class PrivateHTTPFetcher:
             'data_destination': 'private_data_processing.manager'
         }
         
+        # 🔴 新增：权重调试信息
+        if self.weight_debug_enabled:
+            status['weight_debug'] = {
+                'enabled': True,
+                'history_count': len(self.weight_history),
+                'last_weight': self.last_weight_value,
+                'avg_delta': self._calculate_avg_delta() if self.weight_history else None
+            }
+        
         return status
+    
+    def _calculate_avg_delta(self):
+        """计算平均增量"""
+        deltas = [r['delta'] for r in self.weight_history if r['delta'] is not None]
+        if deltas:
+            return sum(deltas) / len(deltas)
+        return None
