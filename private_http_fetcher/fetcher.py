@@ -53,9 +53,6 @@ class PrivateHTTPFetcher:
         self.last_log_time = 0                # 上次日志时间
         self.log_interval = 60                # 日志间隔（秒）
         
-        # 🔴 新增：权重消耗追踪
-        self.last_weight_used = 0             # 上次累计权重值，用于计算单次消耗
-        
         # 连接质量统计（模仿pool_manager）
         self.quality_stats = {
             'account_fetch': {
@@ -231,14 +228,10 @@ class PrivateHTTPFetcher:
             
             # 🔴 优化：使用复用的session
             async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                # 🔴 修改：权重监控 - 改为info级别并计算单次消耗
+                # 🔴 优化：监控权重使用
                 used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
                 if used_weight:
-                    current_weight = int(used_weight)
-                    weight_consumed = current_weight - self.last_weight_used
-                    self.last_weight_used = current_weight
-                    logger.info(f"📊 [HTTP获取器] 权重累计:{current_weight}/1200 | "
-                               f"本次消耗:{weight_consumed} | 端点:{self.ACCOUNT_ENDPOINT}")
+                    logger.debug(f"📊 [HTTP获取器] 账户请求权重使用: {used_weight}/1200")
                 
                 if resp.status == 200:
                     data = await resp.json()
@@ -331,14 +324,10 @@ class PrivateHTTPFetcher:
                 
                 # 🔴 优化：使用复用的session
                 async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                    # 🔴 修改：权重监控 - 改为info级别并计算单次消耗
+                    # 🔴 优化：监控权重使用
                     used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
                     if used_weight:
-                        current_weight = int(used_weight)
-                        weight_consumed = current_weight - self.last_weight_used
-                        self.last_weight_used = current_weight
-                        logger.info(f"📊 [HTTP获取器] 权重累计:{current_weight}/1200 | "
-                                   f"本次消耗:{weight_consumed} | 端点:{self.ACCOUNT_ENDPOINT}")
+                        logger.info(f"📊 [HTTP获取器] 账户请求权重使用: {used_weight}/1200")
                     
                     if resp.status == 200:
                         data = await resp.json()
