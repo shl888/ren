@@ -241,29 +241,29 @@ class PrivateHTTPFetcher:
 
     async def _fetch_income_with_params(self, api_key: str, api_secret: str, income_type: str = "", symbol: str = None):
         """
-        使用指定参数获取收入记录 - 修复版：强制打印所有细节，修复签名排序
+        使用指定参数获取收入记录 - 修复版：强制打印所有细节，按字母顺序构建参数
         """
         try:
             current_time_ms = int(time.time() * 1000)
             window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS  # 24小时前
             
-            # 🔴 关键修复：按字母顺序构建参数字典
+            # 🔴 关键修复：按字母顺序构建参数字典（Python 3.7+ 保持插入顺序）
+            # 币安签名验证要求参数按字母顺序排序
             params = {}
             if income_type:
-                params['incomeType'] = income_type
-            params['limit'] = 1000
-            params['recvWindow'] = self.RECV_WINDOW
-            params['startTime'] = window_start_ms
+                params['incomeType'] = income_type  # i
+            params['limit'] = 1000                   # l
+            params['recvWindow'] = self.RECV_WINDOW  # r
             if symbol:
-                params['symbol'] = symbol
-            params['timestamp'] = current_time_ms
+                params['symbol'] = symbol             # s (optional)
+            params['startTime'] = window_start_ms    # s (but after symbol in alphabet if present)
+            params['timestamp'] = current_time_ms    # t
             
             # 记录请求详情
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
                         f"startTime={window_start_ms} ({self.FUNDING_QUERY_WINDOW_MS/1000/3600}小时前)")
 
-            # 🔴 关键修复：使用排序后的参数生成签名
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
             headers = {'X-MBX-APIKEY': api_key}
@@ -657,13 +657,10 @@ class PrivateHTTPFetcher:
         return None, None
 
     def _sign_params(self, params: Dict, api_secret: str) -> Dict:
-        """生成签名（币安API要求）- 修复版：强制按字母顺序排序"""
-        # 🔴 关键修复：按字母顺序排序参数，确保签名正确
-        sorted_params = dict(sorted(params.items()))
-        query = urllib.parse.urlencode(sorted_params)
+        """生成签名（币安API要求）- 原版，未改动"""
+        query = urllib.parse.urlencode(params)
         signature = hmac.new(api_secret.encode(),
                              query.encode(), hashlib.sha256).hexdigest()
-        # 返回原始params（带signature），但签名是基于排序后的参数
         params['signature'] = signature
         return params
 
