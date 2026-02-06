@@ -63,7 +63,6 @@ class PrivateHTTPFetcher:
                 'success_rate': 100.0,
                 'retry_count': 0
             }
-            # 移除了 position_fetch 相关统计
         }
         
         # 🔴 币安API端点配置（模拟交易 vs 真实交易）
@@ -77,6 +76,10 @@ class PrivateHTTPFetcher:
         
         # 🔴 优化：添加recvWindow配置
         self.RECV_WINDOW = 5000  # 5秒接收窗口
+        
+        # 🔴 权重监控
+        self.last_weight_warning_time = 0
+        self.weight_warning_interval = 60  # 权重警告间隔（秒）
         
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
@@ -228,10 +231,8 @@ class PrivateHTTPFetcher:
             
             # 🔴 优化：使用复用的session
             async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                # 🔴 优化：监控权重使用
-                used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
-                if used_weight:
-                    logger.debug(f"📊 [HTTP获取器] 账户请求权重使用: {used_weight}/1200")
+                # 🔴 【新增】权重监控 - 测试实际权重消耗
+                self._monitor_api_weights(resp)
                 
                 if resp.status == 200:
                     data = await resp.json()
@@ -294,7 +295,7 @@ class PrivateHTTPFetcher:
     
     async def _fetch_account_adaptive_freq(self):
         """
-        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 日志控制）
+        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 权重监控）
         从账户数据本身的positions字段判断是否有持仓
         """
         request_count = 0
@@ -324,10 +325,8 @@ class PrivateHTTPFetcher:
                 
                 # 🔴 优化：使用复用的session
                 async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                    # 🔴 优化：监控权重使用
-                    used_weight = resp.headers.get('X-MBX-USED-WEIGHT-1M')
-                    if used_weight:
-                        logger.debug(f"📊 [HTTP获取器] 账户请求权重使用: {used_weight}/1200")
+                    # 🔴 【新增】权重监控 - 测试实际权重消耗
+                    self._monitor_api_weights(resp)
                     
                     if resp.status == 200:
                         data = await resp.json()
@@ -412,6 +411,45 @@ class PrivateHTTPFetcher:
                 self.quality_stats['account_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
+    
+    def _monitor_api_weights(self, resp):
+        """
+        监控API权重使用情况
+        
+        币安API权重相关头部：
+        - X-MBX-USED-WEIGHT-1M: 每分钟请求权重
+        - X-MBX-ORDER-COUNT-1M: 每分钟订单数量权重
+        - X-MBX-USED-WEIGHT: 每秒请求权重
+        """
+        current_time = time.time()
+        
+        # 1. 每分钟请求权重（最重要）
+        used_weight_1m = resp.headers.get('X-MBX-USED-WEIGHT-1M')
+        if used_weight_1m:
+            weight_value = int(used_weight_1m)
+            # 首次打印或每分钟打印一次
+            if current_time - self.last_weight_warning_time >= 60:
+                logger.info(f"📊 [HTTP获取器] 每分钟请求权重: {weight_value}/1200")
+                
+                # 警告逻辑
+                if weight_value > 1000:
+                    logger.warning(f"🚨 [HTTP获取器] 请求权重接近限制: {weight_value}/1200")
+                    self.last_weight_warning_time = current_time
+                elif weight_value > 800:
+                    logger.info(f"⚠️ [HTTP获取器] 请求权重较高: {weight_value}/1200")
+                    self.last_weight_warning_time = current_time
+        
+        # 2. 每分钟订单权重
+        used_order_count_1m = resp.headers.get('X-MBX-ORDER-COUNT-1M')
+        if used_order_count_1m:
+            order_count = int(used_order_count_1m)
+            if current_time - self.last_weight_warning_time >= 60:
+                logger.info(f"📊 [HTTP获取器] 每分钟订单权重: {order_count}/1200")
+        
+        # 3. 每秒请求权重（次要）
+        used_weight_sec = resp.headers.get('X-MBX-USED-WEIGHT')
+        if used_weight_sec:
+            logger.debug(f"📊 [HTTP获取器] 每秒请求权重: {used_weight_sec}")
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
