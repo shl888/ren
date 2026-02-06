@@ -42,6 +42,7 @@ class PrivateHTTPFetcher:
         # 状态标志
         self.account_fetched = False  # 账户是否已获取
         self.account_fetch_success = False  # 账户获取是否成功
+        self.funding_test_completed = False  # 🔴 新增：资金费测试是否完成
 
         # 🔴 重试策略：指数退避
         self.account_retry_delays = [10, 20, 40, 60]  # 共5次尝试（第1次+4次重试）
@@ -82,16 +83,15 @@ class PrivateHTTPFetcher:
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
         
-        # 🔴 新增：资金费查询相关配置（简化版）
+        # 🔴 修改：资金费查询相关配置（测试版）
         self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
-        self.FUNDING_RETRY_INTERVAL = 10  # 🔴 修改：每10秒重试一次
-        self.FUNDING_MAX_RETRIES = 5  # 🔴 修改：强制重试5次
-        self.FUNDING_QUERY_WINDOW_MS = 300 * 1000  # 5分钟查询窗口
-        self.FUNDING_INITIAL_DELAY = 30  # 整点后延迟30秒
+        self.FUNDING_RETRY_INTERVAL = 10  # 每10秒重试一次
+        self.FUNDING_TEST_ATTEMPTS = 3  # 🔴 修改：测试3次
+        self.FUNDING_QUERY_WINDOW_MS = 10 * 60 * 60 * 1000  # 🔴 修改：10小时查询窗口
         self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
         
         logger.info(
-            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 整点资金费查询 | 强制重试5次）")
+            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 账户获取后立即测试资金费接口）")
 
     async def start(self, brain_store):
         """
@@ -100,7 +100,7 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例（与私人连接池相同）
         """
-        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment} | 自适应频率）...")
+        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment}）...")
 
         self.brain_store = brain_store
         self.running = True
@@ -120,7 +120,8 @@ class PrivateHTTPFetcher:
         受控调度器 - 严格按照时间顺序执行
         1. 等待4分钟（让其他模块先运行）
         2. 尝试获取账户资产（5次指数退避重试）
-        3. 账户成功后启动自适应频率的账户数据获取任务
+        3. 账户成功后立即启动资金费接口测试
+        4. 然后启动自适应频率的账户数据获取任务
         """
         try:
             # ========== 第一阶段：等待4分钟 ==========
@@ -139,19 +140,26 @@ class PrivateHTTPFetcher:
             self.account_fetch_success = await self._fetch_account_with_retry()
 
             if self.account_fetch_success:
-                logger.info("✅ [HTTP获取器] 账户获取成功，启动自适应频率的账户数据获取任务")
-
-                # ========== 第三阶段：启动自适应频率的账户数据获取 ==========
-                # 再等待30秒，确保完全冷却
-                logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
+                logger.info("✅ [HTTP获取器] 账户获取成功")
+                
+                # ========== 第三阶段：立即启动资金费接口测试 ==========
+                logger.info("🔍 [HTTP获取器] 立即启动资金费接口测试...")
+                await self._start_funding_api_test()
+                
+                # 等待测试完成
+                await asyncio.sleep(10)
+                
+                # ========== 第四阶段：启动自适应频率的账户数据获取 ==========
+                # 等待30秒，确保完全冷却
+                logger.info("⏳ [HTTP获取器] 测试完成后冷却30秒...")
                 await asyncio.sleep(30)
 
-                # 🔴 修改：启动自适应频率的账户数据获取任务
+                # 启动自适应频率的账户数据获取任务
                 account_task = asyncio.create_task(
                     self._fetch_account_adaptive_freq())
                 self.fetch_tasks.append(account_task)
                 logger.info(
-                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒 + 整点资金费查询）")
+                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动后续任务")
 
@@ -159,6 +167,179 @@ class PrivateHTTPFetcher:
             logger.info("🛑 [HTTP获取器] 调度器被取消")
         except Exception as e:
             logger.error(f"❌ [HTTP获取器] 调度器异常: {e}")
+
+    async def _start_funding_api_test(self):
+        """启动资金费API测试"""
+        logger.info("🧪 [资金费测试] 开始资金费接口测试...")
+        
+        api_key, api_secret = await self._get_fresh_credentials()
+        if not api_key or not api_secret:
+            logger.error("❌ [资金费测试] 无法获取API凭证")
+            return
+        
+        # 启动测试任务
+        test_task = asyncio.create_task(
+            self._execute_funding_api_test(api_key, api_secret)
+        )
+        self.fetch_tasks.append(test_task)
+        
+    async def _execute_funding_api_test(self, api_key: str, api_secret: str):
+        """
+        执行资金费API测试
+        测试不同参数，查看返回什么数据
+        """
+        logger.info("🧪 [资金费测试] 开始执行资金费API测试...")
+        
+        test_cases = [
+            # 测试不同的incomeType参数
+            {"incomeType": "FUNDING_FEE", "description": "资金费类型"},
+            {"incomeType": "COMMISSION", "description": "手续费类型"},
+            {"incomeType": "REALIZED_PNL", "description": "已实现盈亏类型"},
+            {"incomeType": "INSURANCE_CLEAR", "description": "保险基金清算"},
+            {"incomeType": "REFERRAL_KICKBACK", "description": "推荐返佣"},
+            {"incomeType": "", "description": "所有类型（不指定）"}
+        ]
+        
+        all_results = []
+        
+        # 对每个测试用例执行3次尝试
+        for test_case in test_cases:
+            logger.info(f"🧪 [资金费测试] 测试: {test_case['description']}")
+            
+            income_type = test_case["incomeType"]
+            test_results = []
+            
+            for attempt in range(self.FUNDING_TEST_ATTEMPTS):
+                logger.info(f"🧪 [资金费测试]  尝试 {attempt+1}/{self.FUNDING_TEST_ATTEMPTS}")
+                
+                success, data = await self._fetch_income_with_params(
+                    api_key, api_secret, income_type
+                )
+                
+                if success:
+                    count = len(data) if data else 0
+                    test_results.append({
+                        "attempt": attempt + 1,
+                        "status": "success",
+                        "count": count,
+                        "sample": data[:2] if count > 0 else []  # 样本数据
+                    })
+                    
+                    if count > 0:
+                        logger.info(f"🧪 [资金费测试]    找到{count}条记录")
+                        # 显示样本数据
+                        for i, record in enumerate(data[:2]):
+                            logger.info(f"🧪 [资金费测试]      样本{i+1}: {record}")
+                    else:
+                        logger.info(f"🧪 [资金费测试]    返回空数组")
+                else:
+                    test_results.append({
+                        "attempt": attempt + 1,
+                        "status": "failed"
+                    })
+                    logger.info(f"🧪 [资金费测试]    请求失败")
+                
+                # 如果不是最后一次尝试，等待间隔
+                if attempt < self.FUNDING_TEST_ATTEMPTS - 1:
+                    await asyncio.sleep(self.FUNDING_RETRY_INTERVAL)
+            
+            # 汇总这个测试用例的结果
+            success_count = sum(1 for r in test_results if r["status"] == "success")
+            total_count = sum(r["count"] for r in test_results if r["status"] == "success" and "count" in r)
+            
+            all_results.append({
+                "description": test_case["description"],
+                "incomeType": income_type or "ALL",
+                "success_rate": f"{success_count}/{self.FUNDING_TEST_ATTEMPTS}",
+                "total_records": total_count,
+                "details": test_results
+            })
+        
+        # 打印测试总结
+        logger.info("🧪 [资金费测试] ========== 测试总结 ==========")
+        for result in all_results:
+            if result["incomeType"]:
+                type_str = f"({result['incomeType']})"
+            else:
+                type_str = "(ALL)"
+            
+            logger.info(f"🧪 [资金费测试] {result['description']} {type_str}:")
+            logger.info(f"🧪 [资金费测试]   成功率: {result['success_rate']}")
+            logger.info(f"🧪 [资金费测试]   总记录数: {result['total_records']}")
+            
+            # 如果有记录，显示样本
+            if result["total_records"] > 0:
+                for detail in result["details"]:
+                    if detail["status"] == "success" and detail["count"] > 0 and "sample" in detail:
+                        for i, sample in enumerate(detail["sample"]):
+                            logger.info(f"🧪 [资金费测试]     尝试{detail['attempt']}样本{i+1}: {sample}")
+        
+        logger.info("🧪 [资金费测试] ==============================")
+        
+        # 标记测试完成
+        self.funding_test_completed = True
+        
+        # 推送测试结果
+        await self._push_data('http_funding_test', {
+            'test_time': datetime.now().isoformat(),
+            'environment': self.environment,
+            'results': all_results,
+            'summary': {
+                'total_test_cases': len(test_cases),
+                'test_attempts_per_case': self.FUNDING_TEST_ATTEMPTS,
+                'query_window_hours': self.FUNDING_QUERY_WINDOW_MS / (60 * 60 * 1000)
+            }
+        })
+        
+        logger.info("🧪 [资金费测试] 测试完成，结果已推送")
+
+    async def _fetch_income_with_params(self, api_key: str, api_secret: str, income_type: str = ""):
+        """
+        使用指定参数获取收入记录
+        """
+        try:
+            current_time_ms = int(time.time() * 1000)
+            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS  # 10小时前
+            
+            params = {
+                'timestamp': current_time_ms,
+                'recvWindow': self.RECV_WINDOW,
+                'startTime': window_start_ms,
+                'limit': 100
+            }
+            
+            if income_type:
+                params['incomeType'] = income_type
+            
+            # 记录请求详情
+            logger.debug(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
+                        f"startTime={window_start_ms} ({self.FUNDING_QUERY_WINDOW_MS/1000}秒前)")
+            
+            signed_params = self._sign_params(params, api_secret)
+            url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
+            headers = {'X-MBX-APIKEY': api_key}
+
+            async with self.session.get(url, params=signed_params, headers=headers) as resp:
+                response_text = await resp.text()
+                
+                if resp.status == 200:
+                    try:
+                        data = json.loads(response_text)
+                        return True, data
+                    except json.JSONDecodeError as e:
+                        logger.error(f"❌ [资金费测试] JSON解析失败: {e}")
+                        return False, None
+                else:
+                    logger.error(f"❌ [资金费测试] 请求失败: HTTP {resp.status}")
+                    logger.debug(f"❌ [资金费测试] 响应内容: {response_text[:200]}")
+                    return False, None
+
+        except asyncio.TimeoutError:
+            logger.error(f"⏱️ [资金费测试] 请求超时")
+            return False, None
+        except Exception as e:
+            logger.error(f"❌ [资金费测试] 请求异常: {e}")
+            return False, None
 
     async def _fetch_account_with_retry(self):
         """
@@ -355,11 +536,6 @@ class PrivateHTTPFetcher:
                             if position_amt != 0:  # 仓位不为0表示有真实持仓
                                 has_position_now = True
                                 active_symbols.add(pos['symbol'])  # 🔴 新增：记录符号
-                        
-                        # 🔴 新增：整点资金费查询触发
-                        await self._trigger_funding_fetch_if_needed(
-                            api_key, api_secret, has_position_now, active_symbols
-                        )
 
                         # 🔴 自适应频率调整
                         if has_position_now:
@@ -445,11 +621,9 @@ class PrivateHTTPFetcher:
                                               has_position: bool, active_symbols: Set[str]):
         """
         在整点触发资金费查询。
-        规则：每个UTC整点，如果有持仓，则在整点后延迟30秒启动查询任务。
+        只有资金费测试完成后才执行此逻辑
         """
-        if not has_position:
-            # 无持仓，无需触发，并重置触发标记
-            self.last_funding_trigger_hour = -1
+        if not has_position or not self.funding_test_completed:
             return
 
         # 获取当前UTC时间
@@ -470,7 +644,7 @@ class PrivateHTTPFetcher:
 
         # 记录触发时间，避免本小时内重复触发
         self.last_funding_trigger_hour = current_hour
-        logger.info(f"🕐 [资金费] 在UTC {current_hour:02d}:00:00 检测到持仓，准备触发查询...")
+        logger.info(f"🕐 [资金费] 在UTC {current_hour:02d}:00:00 检测到持仓，触发查询...")
 
         # 延迟30秒后启动独立的资金费查询任务
         asyncio.create_task(
@@ -480,126 +654,30 @@ class PrivateHTTPFetcher:
     async def _execute_funding_fetch_task(self, api_key: str, api_secret: str, 
                                          active_symbols: Set[str], trigger_time: datetime):
         """
-        执行资金费查询任务 - 简化版：强制重试5次，直接推送数据
+        执行资金费查询任务（只有在测试完成后才执行）
         """
-        await asyncio.sleep(self.FUNDING_INITIAL_DELAY)
+        await asyncio.sleep(30)
 
-        logger.info(f"🚀 [资金费] 开始执行资金费查询任务，活跃合约: {active_symbols}")
-        logger.info(f"🔍 [资金费] 策略：强制重试5次，每10秒一次，不验证数据完整性")
+        logger.info(f"🚀 [资金费] 开始执行资金费查询，活跃合约: {active_symbols}")
 
-        retry_count = 0
-        max_attempts = self.FUNDING_MAX_RETRIES  # 5次重试
+        success, income_data = await self._fetch_income_with_params(
+            api_key, api_secret, 'FUNDING_FEE'
+        )
 
-        while retry_count < max_attempts and self.running:
-            attempt_num = retry_count + 1
-            logger.info(f"🔄 [资金费] 第{attempt_num}次尝试（共{max_attempts}次）")
-
-            success, income_data = await self._fetch_funding_income_single(
-                api_key, api_secret, trigger_time
-            )
-
-            if success:
-                # 🔴 关键修改：无论数据是否完整，都直接推送
-                logger.info(f"✅ [资金费] 第{attempt_num}次尝试获取到数据，立即推送")
-                
-                # 打印原始数据以便调试
-                if income_data:
-                    logger.info(f"📊 [资金费] 获取到{len(income_data)}条记录")
-                    # 打印前几条记录
-                    for i, record in enumerate(income_data[:3]):
-                        logger.info(f"📊 [资金费] 记录{i+1}: {record}")
-                
-                # 直接推送原始数据
-                await self._push_data('http_funding_income', {
-                    'trigger_time': trigger_time.isoformat(),
-                    'attempt_number': attempt_num,
-                    'total_attempts': max_attempts,
-                    'active_symbols': list(active_symbols),
-                    'income_data': income_data if income_data else [],
-                    'status': 'success' if income_data else 'empty'
-                })
-                
-                logger.info(f"✅ [资金费] 第{attempt_num}次数据已推送")
-                
-                # 🔴 立即继续下一次尝试，不等待
-                retry_count += 1
-                if retry_count < max_attempts:
-                    logger.info(f"⏳ [资金费] 等待{self.FUNDING_RETRY_INTERVAL}秒后继续下一次尝试...")
-                    await asyncio.sleep(self.FUNDING_RETRY_INTERVAL)
-                else:
-                    logger.info(f"✅ [资金费] 已完成全部{max_attempts}次尝试")
+        if success:
+            await self._push_data('http_funding_income', {
+                'trigger_time': trigger_time.isoformat(),
+                'active_symbols': list(active_symbols),
+                'income_data': income_data if income_data else [],
+                'status': 'success' if income_data else 'empty'
+            })
+            
+            if income_data:
+                logger.info(f"✅ [资金费] 获取到{len(income_data)}条资金费记录")
             else:
-                # 请求失败
-                logger.warning(f"⚠️ [资金费] 第{attempt_num}次尝试失败")
-                
-                # 即使失败也推送空数据用于记录
-                await self._push_data('http_funding_income', {
-                    'trigger_time': trigger_time.isoformat(),
-                    'attempt_number': attempt_num,
-                    'total_attempts': max_attempts,
-                    'active_symbols': list(active_symbols),
-                    'income_data': [],
-                    'status': 'failed'
-                })
-                
-                retry_count += 1
-                if retry_count < max_attempts:
-                    logger.info(f"⏳ [资金费] 等待{self.FUNDING_RETRY_INTERVAL}秒后继续下一次尝试...")
-                    await asyncio.sleep(self.FUNDING_RETRY_INTERVAL)
-
-        logger.info(f"✅ [资金费] 任务完成：执行了{retry_count}次尝试")
-
-    async def _fetch_funding_income_single(self, api_key: str, api_secret: str, 
-                                          trigger_time: datetime):
-        """
-        单次获取资金费历史记录
-        🔴 简化版：不验证数据，直接返回
-        """
-        try:
-            current_time_ms = int(time.time() * 1000)
-            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS
-
-            # 🔴 测试：去掉incomeType限制，查看所有类型的记录
-            params = {
-                'timestamp': current_time_ms,
-                'recvWindow': self.RECV_WINDOW,
-                # 'incomeType': 'FUNDING_FEE',  # 先注释掉，查看所有类型
-                'startTime': window_start_ms,
-                'limit': 100
-            }
-
-            signed_params = self._sign_params(params, api_secret)
-            url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
-            headers = {'X-MBX-APIKEY': api_key}
-
-            # 🔴 添加详细请求日志
-            logger.info(f"🔍 [资金费] 发送请求到: {url}")
-            logger.info(f"🔍 [资金费] 查询参数: timestamp={params['timestamp']}, "
-                       f"startTime={params['startTime']}")
-
-            async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                response_text = await resp.text()
-                
-                if resp.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        logger.info(f"🔍 [资金费] 请求成功，状态码: {resp.status}")
-                        return True, data
-                    except json.JSONDecodeError as e:
-                        logger.error(f"❌ [资金费] JSON解析失败: {e}")
-                        logger.error(f"❌ [资金费] 响应内容: {response_text[:200]}")
-                        return False, None
-                else:
-                    logger.error(f"❌ [资金费] 请求失败: HTTP {resp.status}")
-                    logger.error(f"❌ [资金费] 响应内容: {response_text[:200]}")
-                    return False, None
-
-        except asyncio.TimeoutError:
-            logger.error(f"⏱️ [资金费] 请求超时")
-            return False, None
-        except Exception as e:
-            logger.error(f"❌ [资金费] 请求异常: {e}")
-            return False, None
+                logger.info(f"📭 [资金费] 未找到资金费记录")
+        else:
+            logger.error(f"❌ [资金费] 资金费查询失败")
 
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -685,6 +763,7 @@ class PrivateHTTPFetcher:
             'running': self.running,
             'account_fetched': self.account_fetched,
             'account_fetch_success': self.account_fetch_success,
+            'funding_test_completed': self.funding_test_completed,
             'environment': self.environment,
             'adaptive_frequency': {
                 'current_interval': self.account_check_interval,
@@ -692,14 +771,12 @@ class PrivateHTTPFetcher:
                 'high_freq': self.account_high_freq,
                 'low_freq': self.account_low_freq
             },
-            'funding_fetch': {
+            'funding_test': {
                 'enabled': True,
-                'trigger_hour': self.last_funding_trigger_hour,
-                'initial_delay': self.FUNDING_INITIAL_DELAY,
-                'query_window_ms': self.FUNDING_QUERY_WINDOW_MS,
-                'max_retries': self.FUNDING_MAX_RETRIES,
+                'query_window_hours': self.FUNDING_QUERY_WINDOW_MS / (60 * 60 * 1000),
+                'test_attempts': self.FUNDING_TEST_ATTEMPTS,
                 'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'strategy': '强制重试5次，每10秒一次，直接推送数据不验证'
+                'description': '账户获取成功后立即测试所有incomeType参数'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
@@ -712,9 +789,9 @@ class PrivateHTTPFetcher:
                 'session_reuse': True
             },
             'schedule': {
-                'account': '启动后4分钟开始，5次指数退避重试，然后自适应频率',
-                'funding': '整点触发（仅当有持仓时），延迟30秒，强制重试5次',
-                'data_type': '账户数据 + 资金费数据'
+                'account': '启动后4分钟开始，5次指数退避重试',
+                'funding_test': '账户获取成功后立即测试资金费接口',
+                'normal_operation': '测试完成后启动自适应频率账户获取'
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
