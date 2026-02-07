@@ -186,32 +186,63 @@ class PrivateHTTPFetcher:
         
     async def _execute_funding_api_test(self, api_key: str, api_secret: str):
         """
-        执行资金费API测试 - 修复版：最大化范围获取，不限时间不限合约
+        执行资金费API测试 - 修复版：最大化范围获取，不限时间不限合约，支持分页
         """
         logger.error("🧪 [资金费测试] 开始执行资金费API测试...")
         
-        # 测试1：查全部资金费，不限时间不限合约
-        logger.error("🧪 [资金费测试] ========== 测试1: 查全部资金费（不限时间不限合约） ==========")
-        success, data = await self._fetch_income_with_params(api_key, api_secret, "FUNDING_FEE")
-        if success and data:
-            logger.error(f"✅ [资金费测试] 全部查询找到{len(data)}条记录")
-            if len(data) > 0:
-                for i, record in enumerate(data[:5]):
-                    logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
+        all_data = []  # 🔴 收集所有分页数据
+        last_tran_id = None  # 🔴 用于分页
+        
+        # 🔴 测试1：分页获取所有资金费数据
+        logger.error("🧪 [资金费测试] ========== 测试1: 分页获取所有资金费数据 ==========")
+        
+        for page in range(10):  # 最多10页，防止无限循环
+            logger.error(f"🧪 [资金费测试] 获取第{page+1}页数据...")
             
-            # 🔴 推送实际资金费数据到处理模块
+            success, data = await self._fetch_income_with_params(
+                api_key, api_secret, 
+                income_type="FUNDING_FEE",
+                from_id=last_tran_id
+            )
+            
+            if not success or not data:
+                logger.error(f"❌ [资金费测试] 第{page+1}页获取失败或为空")
+                break
+            
+            logger.error(f"✅ [资金费测试] 第{page+1}页获取到{len(data)}条记录")
+            
+            # 显示本页前3条
+            for i, record in enumerate(data[:3]):
+                logger.error(f"✅ [资金费测试]   记录{i+1}: {record}")
+            
+            all_data.extend(data)
+            
+            # 检查是否还有下一页
+            if len(data) < 1000:  # 如果不足1000条，说明是最后一页
+                logger.error(f"✅ [资金费测试] 数据不足1000条，已到最后一页")
+                break
+            
+            # 获取最后一条记录的tranId用于下一页
+            last_tran_id = data[-1].get('tranId')
+            logger.error(f"🧪 [资金费测试] 下一页fromId: {last_tran_id}")
+            
+            # 间隔1秒，避免触发频率限制
+            await asyncio.sleep(1)
+        
+        logger.error(f"✅ [资金费测试] 总共获取到{len(all_data)}条记录")
+        
+        # 推送所有数据
+        if all_data:
             await self._push_data('http_funding_income', {
                 'test_time': datetime.now().isoformat(),
                 'environment': self.environment,
                 'income_type': 'FUNDING_FEE',
                 'symbol': 'ALL',
-                'count': len(data),
-                'data': data
+                'count': len(all_data),
+                'data': all_data
             })
-        else:
-            logger.error("❌ [资金费测试] 全部查询为空或失败")
         
-        # 测试2：查所有类型的收入，不限时间
+        # 🔴 测试2：查所有类型的收入，不限时间
         logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入（不限时间） ==========")
         success, data = await self._fetch_income_with_params(api_key, api_secret, "")
         if success and data:
@@ -233,14 +264,17 @@ class PrivateHTTPFetcher:
             'test_time': datetime.now().isoformat(),
             'environment': self.environment,
             'status': 'completed',
+            'total_records': len(all_data),
             'note': '详见日志中的error级别输出'
         })
         
         logger.error("🧪 [资金费测试] ========== 测试完成 ==========")
 
-    async def _fetch_income_with_params(self, api_key: str, api_secret: str, income_type: str = "", symbol: str = None):
+    async def _fetch_income_with_params(self, api_key: str, api_secret: str, 
+                                       income_type: str = "", symbol: str = None,
+                                       from_id: int = None):
         """
-        使用指定参数获取收入记录 - 修复版：最大化范围，不限时间
+        使用指定参数获取收入记录 - 修复版：最大化范围，不限时间，支持分页
         """
         try:
             current_time_ms = int(time.time() * 1000)
@@ -250,6 +284,9 @@ class PrivateHTTPFetcher:
             params = {}
             if income_type:
                 params['incomeType'] = income_type
+            # 🔴 关键：如果指定了fromId，从该ID开始查（用于分页）
+            if from_id:
+                params['fromId'] = from_id
             params['limit'] = 1000  # 最大限制
             params['recvWindow'] = self.RECV_WINDOW
             # 🔴 不指定startTime和endTime，让API返回所有历史数据
@@ -260,6 +297,7 @@ class PrivateHTTPFetcher:
             # 记录请求详情
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
+                        f"fromId={from_id or '无'}, "
                         f"时间范围: 不限（全部历史）")
 
             signed_params = self._sign_params(params, api_secret)
@@ -735,7 +773,7 @@ class PrivateHTTPFetcher:
                 'query_window_hours': '不限（全部历史）',
                 'test_attempts': self.FUNDING_TEST_ATTEMPTS,
                 'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'description': '账户获取后立即测试，不限时间不限合约'
+                'description': '账户获取后立即测试，不限时间不限合约，支持分页'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
