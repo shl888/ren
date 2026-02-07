@@ -87,7 +87,7 @@ class PrivateHTTPFetcher:
         self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
         self.FUNDING_RETRY_INTERVAL = 10  # 每10秒重试一次
         self.FUNDING_TEST_ATTEMPTS = 3  # 🔴 修改：测试3次
-        self.FUNDING_QUERY_WINDOW_MS = 24 * 60 * 60 * 1000  # 🔴 修改：24小时查询窗口
+        self.FUNDING_QUERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000  # 🔴 修改：查最近7天
         self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
         
         logger.info(
@@ -241,28 +241,29 @@ class PrivateHTTPFetcher:
 
     async def _fetch_income_with_params(self, api_key: str, api_secret: str, income_type: str = "", symbol: str = None):
         """
-        使用指定参数获取收入记录 - 修复版：强制打印所有细节，按字母顺序构建参数
+        使用指定参数获取收入记录 - 修复版：查最近7天，不是7天之前
         """
         try:
             current_time_ms = int(time.time() * 1000)
-            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS  # 24小时前
+            # 🔴 关键修复：查最近7天（从7天前到现在），不是7天之前
+            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS  # 7天前
             
-            # 🔴 关键修复：按字母顺序构建参数字典（Python 3.7+ 保持插入顺序）
-            # 币安签名验证要求参数按字母顺序排序
+            # 按字母顺序构建参数字典
             params = {}
+            params['endTime'] = current_time_ms  # 🔴 新增：结束时间为现在
             if income_type:
                 params['incomeType'] = income_type  # i
             params['limit'] = 1000                   # l
             params['recvWindow'] = self.RECV_WINDOW  # r
+            params['startTime'] = window_start_ms    # s (7天前)
             if symbol:
                 params['symbol'] = symbol             # s (optional)
-            params['startTime'] = window_start_ms    # s (but after symbol in alphabet if present)
             params['timestamp'] = current_time_ms    # t
             
             # 记录请求详情
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
-                        f"startTime={window_start_ms} ({self.FUNDING_QUERY_WINDOW_MS/1000/3600}小时前)")
+                        f"时间范围: {window_start_ms} 到 {current_time_ms} (最近7天)")
 
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
