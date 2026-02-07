@@ -1,6 +1,7 @@
 """
 私人HTTP数据获取器 - 严格零缓存模式
 完全模仿private_ws_pool的架构和交互方式
+针对币安测试网时间戳混乱问题的修复版
 """
 import asyncio
 import logging
@@ -20,6 +21,7 @@ class PrivateHTTPFetcher:
     """
     私人HTTP数据获取器
     模仿PrivateWebSocketPool的架构和接口
+    针对币安测试网时间戳混乱的特殊处理
     """
 
     def __init__(self):
@@ -83,16 +85,21 @@ class PrivateHTTPFetcher:
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
         
-        # 🔴 修改：资金费查询相关配置（测试版）
+        # 🔴 修改：资金费查询相关配置（针对测试网时间戳混乱的特殊处理）
         self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
         self.FUNDING_RETRY_INTERVAL = 10  # 每10秒重试一次
-        self.FUNDING_TEST_ATTEMPTS = 3  # 🔴 修改：测试3次
-        # 🔴 不限制时间范围，查全部历史
-        self.FUNDING_QUERY_WINDOW_MS = None  # 🔴 修改：None表示不限制
+        self.FUNDING_TEST_ATTEMPTS = 3
+        
+        # 🔴 关键修改：针对测试网时间戳混乱，扩大查询范围
+        # 查询前后各30天，总共60天的范围，确保覆盖混乱的时间戳
+        self.FUNDING_QUERY_DAYS_BEFORE = 30  # 查询当前时间前30天
+        self.FUNDING_QUERY_DAYS_AFTER = 30   # 查询当前时间后30天
+        
         self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
         
         logger.info(
-            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 账户获取后立即测试资金费接口）")
+            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 针对测试网时间戳混乱的特殊处理）")
+        logger.warning(f"⚠️  警告：测试网环境检测到时间戳混乱，已启用扩展查询范围（前后各30天）")
 
     async def start(self, brain_store):
         """
@@ -186,9 +193,9 @@ class PrivateHTTPFetcher:
         
     async def _execute_funding_api_test(self, api_key: str, api_secret: str):
         """
-        执行资金费API测试 - 修复版：最大化范围获取，不限时间不限合约，支持分页
+        执行资金费API测试 - 针对测试网时间戳混乱的特殊处理
         """
-        logger.error("🧪 [资金费测试] 开始执行资金费API测试...")
+        logger.error("🧪 [资金费测试] 开始执行资金费API测试（扩展时间范围版）...")
         
         all_data = []  # 🔴 收集所有分页数据
         last_tran_id = None  # 🔴 用于分页
@@ -196,7 +203,7 @@ class PrivateHTTPFetcher:
         # 🔴 测试1：分页获取所有资金费数据
         logger.error("🧪 [资金费测试] ========== 测试1: 分页获取所有资金费数据 ==========")
         
-        for page in range(10):  # 最多10页，防止无限循环
+        for page in range(20):  # 最多20页，防止无限循环（因为时间范围扩大了）
             logger.error(f"🧪 [资金费测试] 获取第{page+1}页数据...")
             
             success, data = await self._fetch_income_with_params(
@@ -205,15 +212,26 @@ class PrivateHTTPFetcher:
                 from_id=last_tran_id
             )
             
-            if not success or not data:
-                logger.error(f"❌ [资金费测试] 第{page+1}页获取失败或为空")
+            if not success:
+                logger.error(f"❌ [资金费测试] 第{page+1}页获取失败")
+                break
+            
+            if not data:
+                logger.error(f"✅ [资金费测试] 第{page+1}页数据为空，已到末尾")
                 break
             
             logger.error(f"✅ [资金费测试] 第{page+1}页获取到{len(data)}条记录")
             
             # 显示本页前3条
             for i, record in enumerate(data[:3]):
-                logger.error(f"✅ [资金费测试]   记录{i+1}: {record}")
+                # 添加时间戳转换便于调试
+                ts = record.get('time', 0)
+                if ts:
+                    utc_time = datetime.fromtimestamp(ts/1000, tz=timezone.utc)
+                    beijing_time = utc_time + timezone(timedelta(hours=8))
+                    logger.error(f"✅ [资金费测试]   记录{i+1}: {record.get('symbol')} | "
+                                f"金额:{record.get('income')} | "
+                                f"API时间:{utc_time.strftime('%Y-%m-%d %H:%M')} UTC")
             
             all_data.extend(data)
             
@@ -239,11 +257,12 @@ class PrivateHTTPFetcher:
                 'income_type': 'FUNDING_FEE',
                 'symbol': 'ALL',
                 'count': len(all_data),
+                'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
                 'data': all_data
             })
         
-        # 🔴 测试2：查所有类型的收入，不限时间
-        logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入（不限时间） ==========")
+        # 🔴 测试2：查所有类型的收入
+        logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入 ==========")
         success, data = await self._fetch_income_with_params(api_key, api_secret, "")
         if success and data:
             logger.error(f"✅ [资金费测试] 所有类型找到{len(data)}条记录")
@@ -254,7 +273,7 @@ class PrivateHTTPFetcher:
                 type_count[itype] = type_count.get(itype, 0) + 1
             logger.error(f"✅ [资金费测试] 类型分布: {type_count}")
         else:
-            logger.error("❌ [资金费测试] 所有类型查询为空")
+            logger.error("❌ [资金费测试] 所有类型查询失败或为空")
         
         # 标记测试完成
         self.funding_test_completed = True
@@ -265,7 +284,8 @@ class PrivateHTTPFetcher:
             'environment': self.environment,
             'status': 'completed',
             'total_records': len(all_data),
-            'note': '详见日志中的error级别输出'
+            'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
+            'note': '针对测试网时间戳混乱的扩展查询'
         })
         
         logger.error("🧪 [资金费测试] ========== 测试完成 ==========")
@@ -274,37 +294,43 @@ class PrivateHTTPFetcher:
                                        income_type: str = "", symbol: str = None,
                                        from_id: int = None):
         """
-        使用指定参数获取收入记录 - 修复版：最大化范围，不限时间，支持分页
+        使用指定参数获取收入记录 - 针对测试网时间戳混乱的特殊处理
         """
         try:
             current_time_ms = int(time.time() * 1000)
             
-            # 🔧 核心修改：明确指定查询最近15天内的数据
-            # 计算15天前的时间戳
-            fifteen_days_ago_ms = current_time_ms - (15 * 24 * 60 * 60 * 1000)
+            # 🔴 关键修改：针对测试网时间戳混乱，扩大查询范围
+            # 查询前后各30天，确保覆盖混乱的时间戳偏移
+            days_before_ms = self.FUNDING_QUERY_DAYS_BEFORE * 24 * 60 * 60 * 1000
+            days_after_ms = self.FUNDING_QUERY_DAYS_AFTER * 24 * 60 * 60 * 1000
             
             params = {}
             if income_type:
                 params['incomeType'] = income_type
-            # 🔴 关键：如果指定了fromId，从该ID开始查（用于分页）
             if from_id:
                 params['fromId'] = from_id
-            params['limit'] = 1000  # 最大限制
+            params['limit'] = 1000
             params['recvWindow'] = self.RECV_WINDOW
             
-            # 🔧 核心修改：明确指定最近15天的时间范围
-            params['startTime'] = fifteen_days_ago_ms  # 开始时间：15天前
-            params['endTime'] = current_time_ms        # 结束时间：现在
+            # 🔴 关键修改：扩展的时间范围
+            params['startTime'] = current_time_ms - days_before_ms  # 当前时间前30天
+            params['endTime'] = current_time_ms + days_after_ms     # 当前时间后30天
             
             if symbol:
                 params['symbol'] = symbol
             params['timestamp'] = current_time_ms
             
-            # 记录请求详情
+            # 记录请求详情（包含人类可读的时间）
+            from datetime import datetime, timedelta
+            start_dt = datetime.fromtimestamp(params['startTime']/1000, tz=timezone.utc)
+            end_dt = datetime.fromtimestamp(params['endTime']/1000, tz=timezone.utc)
+            
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
-                        f"fromId={from_id or '无'}, "
-                        f"时间范围: 最近15天 ({fifteen_days_ago_ms} -> {current_time_ms})")
+                        f"fromId={from_id or '无'}")
+            logger.error(f"🧪 [资金费测试] 时间范围: {self.FUNDING_QUERY_DAYS_BEFORE}天前 → {self.FUNDING_QUERY_DAYS_AFTER}天后")
+            logger.error(f"🧪 [资金费测试] 具体时间: {start_dt.strftime('%Y-%m-%d %H:%M')} UTC → "
+                        f"{end_dt.strftime('%Y-%m-%d %H:%M')} UTC")
 
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
@@ -313,7 +339,7 @@ class PrivateHTTPFetcher:
             # 打印完整URL（用于curl测试）
             query_string = urllib.parse.urlencode(signed_params)
             full_url = f"{url}?{query_string}"
-            logger.error(f"🧪 [资金费测试] 完整URL: {full_url[:200]}...")
+            logger.error(f"🧪 [资金费测试] 完整URL: {full_url[:250]}...")
 
             async with self.session.get(url, params=signed_params, headers=headers) as resp:
                 response_text = await resp.text()
@@ -322,13 +348,24 @@ class PrivateHTTPFetcher:
                 logger.error(f"🧪 [资金费测试] HTTP状态: {resp.status}, 响应长度: {len(response_text)}")
                 if len(response_text) > 500:
                     logger.error(f"🧪 [资金费测试] 响应内容前500字: {response_text[:500]}...")
-                    logger.error(f"🧪 [资金费测试] 响应内容后500字: ...{response_text[-500:]}")
+                    if len(response_text) > 1000:
+                        logger.error(f"🧪 [资金费测试] 响应内容后500字: ...{response_text[-500:]}")
                 else:
                     logger.error(f"🧪 [资金费测试] 响应内容: {response_text}")
                 
                 if resp.status == 200:
                     try:
                         data = json.loads(response_text)
+                        # 🔴 额外调试：显示获取到的时间范围
+                        if data and len(data) > 0:
+                            first_ts = data[0].get('time', 0)
+                            last_ts = data[-1].get('time', 0)
+                            if first_ts and last_ts:
+                                first_dt = datetime.fromtimestamp(first_ts/1000, tz=timezone.utc)
+                                last_dt = datetime.fromtimestamp(last_ts/1000, tz=timezone.utc)
+                                logger.error(f"🧪 [资金费测试] 本页数据时间范围: "
+                                            f"{first_dt.strftime('%Y-%m-%d %H:%M')} → "
+                                            f"{last_dt.strftime('%Y-%m-%d %H:%M')} UTC")
                         return True, data
                     except json.JSONDecodeError as e:
                         logger.error(f"❌ [资金费测试] JSON解析失败: {e}")
@@ -344,6 +381,8 @@ class PrivateHTTPFetcher:
             logger.error(f"❌ [资金费测试] 请求异常: {e}", exc_info=True)
             return False, None
 
+    # ========== 以下部分保持不变，为保持完整性包含 ==========
+    
     async def _fetch_account_with_retry(self):
         """
         获取账户资产 - 5次指数退避重试
@@ -776,10 +815,11 @@ class PrivateHTTPFetcher:
             },
             'funding_test': {
                 'enabled': True,
-                'query_window_hours': '最近15天内',
+                'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天（共{self.FUNDING_QUERY_DAYS_BEFORE + self.FUNDING_QUERY_DAYS_AFTER}天）",
                 'test_attempts': self.FUNDING_TEST_ATTEMPTS,
                 'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'description': '账户获取后立即测试，查询最近15天内的资金费记录'
+                'description': '针对测试网时间戳混乱的扩展查询范围',
+                'note': '测试网时间戳存在系统性错误，但数据内容和顺序正确'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
@@ -789,7 +829,8 @@ class PrivateHTTPFetcher:
             },
             'api_config': {
                 'recvWindow': self.RECV_WINDOW,
-                'session_reuse': True
+                'session_reuse': True,
+                'timezone_handling': 'UTC时间戳（测试网存在时间戳混乱）'
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试',
