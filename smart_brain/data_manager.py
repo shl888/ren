@@ -6,7 +6,7 @@
 import asyncio
 import logging
 import os
-import time  # 🔴 新增导入
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -21,16 +21,16 @@ class DataManager:
         self.last_account_time = None
         self.last_trade_time = None
         
-        # 🔴【新增】批量存储日志控制
+        # 批量存储日志控制
         self.last_batch_log_time = 0
         self.batch_log_interval = 60  # 60秒打印一次
         
         # 内存存储（简化结构）
         self.memory_store = {
-            'market_data': {},
-            'private_data': {},
+            'market_data': {},      # 简化格式的市场数据
+            'private_data': {},     # 私人数据
             'env_apis': self._load_apis_from_env(),
-            'exchange_tokens': {}  # 专门存储listenKey
+            'exchange_tokens': {}   # 专门存储listenKey
         }
     
     # ==================== 接收步骤 ====================
@@ -49,7 +49,6 @@ class DataManager:
             now = datetime.now()
             storage_key = f"{exchange}_{data_type}"
             
-            # ==================== 【简化存储逻辑】 ====================
             if data_type == 'listen_key':
                 # 🎯 单独处理listenKey，存到 exchange_tokens
                 listen_key = private_data.get('data', {}).get('listenKey')
@@ -119,7 +118,7 @@ class DataManager:
     
     async def receive_market_data(self, processed_data):
         """
-        接收市场数据处理后的数据（保持原有逻辑）
+        接收市场数据处理后的数据
         """
         try:
             if isinstance(processed_data, list):
@@ -135,8 +134,8 @@ class DataManager:
             
             self.last_market_time = datetime.now()
             
-            # ✅ 存储市场数据到memory_store
-            stored_data = await self._store_market_data_and_get_result(processed_data)
+            # ✅ 存储市场数据到memory_store（使用简化格式）
+            stored_data = await self._store_market_data_simplified(processed_data)
             
             # ✅ 推送到前端 - 推送存储后的数据
             if self.brain.frontend_relay:
@@ -157,8 +156,8 @@ class DataManager:
         except Exception as e:
             logger.error(f"⚠️【智能大脑】接收数据错误: {e}")
     
-    async def _store_market_data_and_get_result(self, data):
-        """存储市场数据并返回存储格式的结果"""
+    async def _store_market_data_simplified(self, data):
+        """存储市场数据为简化格式并返回结果"""
         try:
             if not data:
                 return {}
@@ -166,7 +165,7 @@ class DataManager:
             storage_results = {}
             
             if isinstance(data, list) and len(data) > 0:
-                # ✅ 遍历列表，每个symbol独立存储
+                # ✅ 遍历列表，每个symbol独立存储为简化格式
                 for item in data:
                     symbol = item.get('symbol', 'unknown')
                     if not symbol or symbol == 'unknown':
@@ -175,20 +174,14 @@ class DataManager:
                     
                     storage_key = f"market_{symbol}"
                     
-                    stored_data = {
-                        'raw_data': item,  # 单条数据
-                        'received_at': datetime.now().isoformat(),
-                        'count': 1,
-                        'symbol': symbol,
-                        'data_type': 'single'
-                    }
+                    # 🎯 创建简化格式数据（按指定顺序）
+                    simplified_data = self._create_simplified_market_data(item)
                     
-                    # ✅ 新数据覆盖旧数据
-                    self.memory_store['market_data'][storage_key] = stored_data
-                    # 记录结果用于推送
-                    storage_results[storage_key] = stored_data
+                    # ✅ 直接存储简化数据
+                    self.memory_store['market_data'][storage_key] = simplified_data
+                    storage_results[symbol] = simplified_data
                 
-                # ✅ 记录统计信息 - 🔴【修改】每分钟打印一次
+                # ✅ 记录统计信息
                 unique_symbols = len(set([i.get('symbol') for i in data if 'symbol' in i]))
                 
                 current_time = time.time()
@@ -199,21 +192,15 @@ class DataManager:
                 return storage_results
                 
             elif isinstance(data, dict):
-                # 单个数据对象
-                symbol = data.get('symbol', 'single_data')
+                # 单个数据对象也存储为简化格式
+                symbol = data.get('symbol', 'unknown')
                 storage_key = f"market_{symbol}"
                 
-                stored_data = {
-                    'raw_data': data,
-                    'received_at': datetime.now().isoformat(),
-                    'count': 1,
-                    'symbol': symbol,
-                    'data_type': 'single'
-                }
+                simplified_data = self._create_simplified_market_data(data)
                 
-                self.memory_store['market_data'][storage_key] = stored_data
-                storage_results[storage_key] = stored_data
-                logger.debug(f"✅【智能大脑】存储市场数据: {storage_key}")
+                self.memory_store['market_data'][storage_key] = simplified_data
+                storage_results[symbol] = simplified_data
+                logger.debug(f"✅【智能大脑】存储市场数据: {symbol}")
                 return storage_results
                 
             else:
@@ -223,6 +210,38 @@ class DataManager:
         except Exception as e:
             logger.error(f"❌【智能大脑】存储市场数据失败: {e}")
             return {}
+    
+    def _create_simplified_market_data(self, raw_data):
+        """创建简化格式的市场数据（按指定顺序）"""
+        # 从原始数据中提取必要的字段
+        metadata = raw_data.get('metadata', {})
+        
+        # 创建按指定顺序的简化数据
+        simplified_data = {
+            'symbol': raw_data.get('symbol'),
+            'price_diff': raw_data.get('price_diff'),
+            'price_diff_percent': raw_data.get('price_diff_percent'),
+            'rate_diff': raw_data.get('rate_diff'),
+            'okx_price': raw_data.get('okx_price'),
+            'okx_funding_rate': raw_data.get('okx_funding_rate'),
+            'okx_period_seconds': raw_data.get('okx_period_seconds'),
+            'okx_countdown_seconds': raw_data.get('okx_countdown_seconds'),
+            'okx_last_settlement': raw_data.get('okx_last_settlement'),
+            'okx_current_settlement': raw_data.get('okx_current_settlement'),
+            'okx_next_settlement': raw_data.get('okx_next_settlement'),
+            'binance_price': raw_data.get('binance_price'),
+            'binance_funding_rate': raw_data.get('binance_funding_rate'),
+            'binance_period_seconds': raw_data.get('binance_period_seconds'),
+            'binance_countdown_seconds': raw_data.get('binance_countdown_seconds'),
+            'binance_last_settlement': raw_data.get('binance_last_settlement'),
+            'binance_current_settlement': raw_data.get('binance_current_settlement'),
+            'binance_next_settlement': raw_data.get('binance_next_settlement'),
+            'calculated_at': metadata.get('calculated_at', datetime.now().isoformat()),
+            'source': metadata.get('source', 'step5_cross_calc')
+        }
+        
+        # 移除值为None的字段，保持数据干净
+        return {k: v for k, v in simplified_data.items() if v is not None}
     
     # ==================== 数据查询接口 ====================
     
@@ -263,26 +282,31 @@ class DataManager:
         return apis
     
     async def get_market_data_summary(self):
-        """获取市场数据概览"""
-        formatted_market_data = {}
-        for key, data in self.memory_store['market_data'].items():
-            formatted_market_data[key] = {
-                "symbol": data.get('symbol'),
-                "data_type": data.get('data_type'),
-                "count": data.get('count', 0),
-                "received_at": data.get('received_at'),
-                "raw_data_sample": data.get('raw_data')[:1] if isinstance(data.get('raw_data'), list) and len(data.get('raw_data')) > 0 else data.get('raw_data')
+        """获取市场数据概览 - 返回简化格式"""
+        try:
+            # 🎯 直接返回存储的简化数据，不添加额外包装
+            market_data = {}
+            
+            for storage_key, data in self.memory_store['market_data'].items():
+                if isinstance(data, dict) and 'symbol' in data:
+                    symbol = data['symbol']
+                    # 保持数据按原有顺序（Python 3.7+保持插入顺序）
+                    market_data[symbol] = data
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "total_count": len(market_data),
+                "markets": market_data  # ✅ 直接返回简化数据
             }
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "total_count": len(self.memory_store['market_data']),
-            "market_data": formatted_market_data,
-            "stats": {
-                "last_update": self._format_time_diff(self.last_market_time) if self.last_market_time else "从未更新",
-                "last_count": self.last_market_count
+            
+        except Exception as e:
+            logger.error(f"❌ 获取市场数据概览失败: {e}")
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "total_count": 0,
+                "markets": {},
+                "error": str(e)
             }
-        }
     
     async def get_private_data_summary(self):
         """获取私人数据概览（简化版）"""
@@ -434,15 +458,12 @@ class DataManager:
     async def get_market_data_by_exchange(self, exchange: str):
         """按交易所获取市场数据"""
         exchange_data = {}
-        for key, data in self.memory_store['market_data'].items():
-            if exchange.lower() in key.lower():
-                exchange_data[key] = {
-                    "symbol": data.get('symbol'),
-                    "data_type": data.get('data_type'),
-                    "count": data.get('count', 0),
-                    "received_at": data.get('received_at'),
-                    "raw_data": data.get('raw_data')
-                }
+        for storage_key, data in self.memory_store['market_data'].items():
+            if isinstance(data, dict):
+                # 检查是否是目标交易所的数据
+                # 这里可以根据你的实际情况调整逻辑
+                if exchange.lower() in storage_key.lower():
+                    exchange_data[storage_key] = data
         
         return {
             "exchange": exchange,
@@ -453,12 +474,12 @@ class DataManager:
     
     async def get_market_data_detail(self, exchange: str, symbol: str):
         """获取特定市场数据详情"""
-        key = f"market_{symbol.upper()}"
+        storage_key = f"market_{symbol.upper()}"
         
-        if key in self.memory_store['market_data']:
-            data = self.memory_store['market_data'][key]
+        if storage_key in self.memory_store['market_data']:
+            data = self.memory_store['market_data'][storage_key]
             return {
-                "key": key,
+                "key": storage_key,
                 "exchange": exchange,
                 "symbol": symbol.upper(),
                 "data": data,
@@ -466,7 +487,7 @@ class DataManager:
             }
         else:
             return {
-                "error": f"未找到数据: {key}",
+                "error": f"未找到数据: {storage_key}",
                 "available_keys": list(self.memory_store['market_data'].keys())
             }
     
