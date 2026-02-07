@@ -10,7 +10,7 @@ import hmac
 import hashlib
 import urllib.parse
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, Set, List
 import aiohttp
 
@@ -228,7 +228,7 @@ class PrivateHTTPFetcher:
                 ts = record.get('time', 0)
                 if ts:
                     utc_time = datetime.fromtimestamp(ts/1000, tz=timezone.utc)
-                    beijing_time = utc_time + timezone(timedelta(hours=8))
+                    beijing_time = utc_time + timedelta(hours=8)
                     logger.error(f"✅ [资金费测试]   记录{i+1}: {record.get('symbol')} | "
                                 f"金额:{record.get('income')} | "
                                 f"API时间:{utc_time.strftime('%Y-%m-%d %H:%M')} UTC")
@@ -249,7 +249,7 @@ class PrivateHTTPFetcher:
         
         logger.error(f"✅ [资金费测试] 总共获取到{len(all_data)}条记录")
         
-        # 推送所有数据
+        # 🔴 关键修复：添加推送数据的代码
         if all_data:
             await self._push_data('http_funding_income', {
                 'test_time': datetime.now().isoformat(),
@@ -260,6 +260,7 @@ class PrivateHTTPFetcher:
                 'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
                 'data': all_data
             })
+            logger.error(f"✅ [资金费测试] 已推送{len(all_data)}条资金费记录到数据处理模块")
         
         # 🔴 测试2：查所有类型的收入
         logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入 ==========")
@@ -278,7 +279,7 @@ class PrivateHTTPFetcher:
         # 标记测试完成
         self.funding_test_completed = True
         
-        # 推送测试完成状态
+        # 🔴 关键修复：添加推送测试完成状态的代码
         await self._push_data('http_funding_test', {
             'test_time': datetime.now().isoformat(),
             'environment': self.environment,
@@ -287,6 +288,7 @@ class PrivateHTTPFetcher:
             'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
             'note': '针对测试网时间戳混乱的扩展查询'
         })
+        logger.error(f"✅ [资金费测试] 已推送测试完成状态")
         
         logger.error("🧪 [资金费测试] ========== 测试完成 ==========")
 
@@ -321,7 +323,6 @@ class PrivateHTTPFetcher:
             params['timestamp'] = current_time_ms
             
             # 记录请求详情（包含人类可读的时间）
-            from datetime import datetime, timedelta
             start_dt = datetime.fromtimestamp(params['startTime']/1000, tz=timezone.utc)
             end_dt = datetime.fromtimestamp(params['endTime']/1000, tz=timezone.utc)
             
@@ -381,8 +382,6 @@ class PrivateHTTPFetcher:
             logger.error(f"❌ [资金费测试] 请求异常: {e}", exc_info=True)
             return False, None
 
-    # ========== 以下部分保持不变，为保持完整性包含 ==========
-    
     async def _fetch_account_with_retry(self):
         """
         获取账户资产 - 5次指数退避重试
@@ -469,7 +468,9 @@ class PrivateHTTPFetcher:
 
                 if resp.status == 200:
                     data = await resp.json()
+                    # 🔴 关键：确保推送账户数据
                     await self._push_data('http_account', data)
+                    logger.info(f"✅ [HTTP获取器] 账户数据已推送")
 
                     self.quality_stats['account_fetch']['success_attempts'] += 1
                     self.quality_stats['account_fetch']['last_success'] = datetime.now(
@@ -609,6 +610,7 @@ class PrivateHTTPFetcher:
                                     f"📊 [HTTP获取器] 当前无持仓 | 低频模式 | 请求次数:{request_count}")
                             self.last_log_time = current_time
 
+                        # 🔴 关键：确保推送账户数据
                         await self._push_data('http_account', data)
 
                         self.quality_stats['account_fetch']['success_attempts'] += 1
@@ -707,6 +709,7 @@ class PrivateHTTPFetcher:
         )
 
         if success:
+            # 🔴 关键：确保推送资金费数据
             await self._push_data('http_funding_income', {
                 'trigger_time': trigger_time.isoformat(),
                 'active_symbols': list(active_symbols),
@@ -715,7 +718,7 @@ class PrivateHTTPFetcher:
             })
             
             if income_data:
-                logger.info(f"✅ [资金费] 获取到{len(income_data)}条资金费记录")
+                logger.info(f"✅ [资金费] 获取到{len(income_data)}条资金费记录，已推送")
             else:
                 logger.info(f"📭 [资金费] 未找到资金费记录")
         else:
@@ -760,6 +763,7 @@ class PrivateHTTPFetcher:
                 'timestamp': datetime.now().isoformat(),
                 'source': 'http_fetcher'
             })
+            logger.debug(f"📤 [HTTP获取器] 已推送{data_type}数据")
         except ImportError as e:
             logger.error(f"❌ [HTTP获取器] 无法导入私人数据处理模块: {e}")
         except Exception as e:
@@ -842,7 +846,8 @@ class PrivateHTTPFetcher:
                 'funding_income': self.INCOME_ENDPOINT,
                 'base_url': self.BASE_URL
             },
-            'data_destination': 'private_data_processing.manager'
+            'data_destination': 'private_data_processing.manager',
+            'data_push_ensured': True  # 🔴 新增：确保数据推送的标志
         }
 
         return status
