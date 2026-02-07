@@ -186,75 +186,97 @@ class PrivateHTTPFetcher:
         
     async def _execute_funding_api_test(self, api_key: str, api_secret: str):
         """
-        执行资金费API测试 - 修复版：最大化范围获取，不限时间不限合约，支持分页
+        执行资金费API测试 - 修复版：精确时间范围查询2月3日-2月7日
         """
         logger.error("🧪 [资金费测试] 开始执行资金费API测试...")
         
-        all_data = []  # 🔴 收集所有分页数据
-        last_tran_id = None  # 🔴 用于分页
+        # 🔴 测试1：精确查询2月3日到2月7日
+        logger.error("🧪 [资金费测试] ========== 测试1: 精确查询2月3日-2月7日 ==========")
         
-        # 🔴 测试1：分页获取所有资金费数据
-        logger.error("🧪 [资金费测试] ========== 测试1: 分页获取所有资金费数据 ==========")
+        # 2月3日 00:00:00 UTC = 1770048000000
+        # 2月7日 23:59:59 UTC = 1770479999000
+        feb_3_start = 1770048000000
+        feb_7_end = int(time.time() * 1000)  # 现在
         
-        for page in range(10):  # 最多10页，防止无限循环
-            logger.error(f"🧪 [资金费测试] 获取第{page+1}页数据...")
-            
-            success, data = await self._fetch_income_with_params(
-                api_key, api_secret, 
-                income_type="FUNDING_FEE",
-                from_id=last_tran_id
-            )
-            
-            if not success or not data:
-                logger.error(f"❌ [资金费测试] 第{page+1}页获取失败或为空")
-                break
-            
-            logger.error(f"✅ [资金费测试] 第{page+1}页获取到{len(data)}条记录")
-            
-            # 显示本页前3条
-            for i, record in enumerate(data[:3]):
-                logger.error(f"✅ [资金费测试]   记录{i+1}: {record}")
-            
-            all_data.extend(data)
-            
-            # 检查是否还有下一页
-            if len(data) < 1000:  # 如果不足1000条，说明是最后一页
-                logger.error(f"✅ [资金费测试] 数据不足1000条，已到最后一页")
-                break
-            
-            # 获取最后一条记录的tranId用于下一页
-            last_tran_id = data[-1].get('tranId')
-            logger.error(f"🧪 [资金费测试] 下一页fromId: {last_tran_id}")
-            
-            # 间隔1秒，避免触发频率限制
-            await asyncio.sleep(1)
+        success, data = await self._fetch_income_with_params(
+            api_key, api_secret, 
+            income_type="FUNDING_FEE",
+            start_time=feb_3_start,
+            end_time=feb_7_end
+        )
         
-        logger.error(f"✅ [资金费测试] 总共获取到{len(all_data)}条记录")
-        
-        # 推送所有数据
-        if all_data:
-            await self._push_data('http_funding_income', {
-                'test_time': datetime.now().isoformat(),
-                'environment': self.environment,
-                'income_type': 'FUNDING_FEE',
-                'symbol': 'ALL',
-                'count': len(all_data),
-                'data': all_data
-            })
-        
-        # 🔴 测试2：查所有类型的收入，不限时间
-        logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入（不限时间） ==========")
-        success, data = await self._fetch_income_with_params(api_key, api_secret, "")
         if success and data:
-            logger.error(f"✅ [资金费测试] 所有类型找到{len(data)}条记录")
-            # 按类型统计
-            type_count = {}
-            for record in data:
-                itype = record.get('incomeType', 'UNKNOWN')
-                type_count[itype] = type_count.get(itype, 0) + 1
-            logger.error(f"✅ [资金费测试] 类型分布: {type_count}")
+            logger.error(f"✅ [资金费测试] 2月3日-2月7日查询到{len(data)}条记录")
+            for i, record in enumerate(data[:5]):
+                logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
         else:
-            logger.error("❌ [资金费测试] 所有类型查询为空")
+            logger.error("❌ [资金费测试] 2月3日-2月7日查询为空")
+        
+        # 🔴 测试2：精确查询1月31日-2月3日（之前获取到20条的时间段）
+        logger.error("🧪 [资金费测试] ========== 测试2: 精确查询1月31日-2月3日 ==========")
+        
+        # 1月31日 00:00:00 UTC = 1769788800000
+        # 2月3日 00:00:00 UTC = 1770048000000
+        jan_31_start = 1769788800000
+        feb_3_start = 1770048000000
+        
+        success, data = await self._fetch_income_with_params(
+            api_key, api_secret, 
+            income_type="FUNDING_FEE",
+            start_time=jan_31_start,
+            end_time=feb_3_start
+        )
+        
+        if success and data:
+            logger.error(f"✅ [资金费测试] 1月31日-2月3日查询到{len(data)}条记录")
+            for i, record in enumerate(data[:5]):
+                logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
+        else:
+            logger.error("❌ [资金费测试] 1月31日-2月3日查询为空")
+        
+        # 🔴 测试3：精确查询2月1日-2月2日（中间时间段）
+        logger.error("🧪 [资金费测试] ========== 测试3: 精确查询2月1日-2月2日 ==========")
+        
+        # 2月1日 00:00:00 UTC = 1769875200000
+        # 2月2日 23:59:59 UTC = 1770047999000
+        feb_1_start = 1769875200000
+        feb_2_end = 1770047999000
+        
+        success, data = await self._fetch_income_with_params(
+            api_key, api_secret, 
+            income_type="FUNDING_FEE",
+            start_time=feb_1_start,
+            end_time=feb_2_end
+        )
+        
+        if success and data:
+            logger.error(f"✅ [资金费测试] 2月1日-2月2日查询到{len(data)}条记录")
+            for i, record in enumerate(data[:5]):
+                logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
+        else:
+            logger.error("❌ [资金费测试] 2月1日-2月2日查询为空")
+        
+        # 🔴 测试4：精确查询2月4日-2月5日（丢失数据的时间段）
+        logger.error("🧪 [资金费测试] ========== 测试4: 精确查询2月4日-2月5日 ==========")
+        
+        # 2月4日 00:00:00 UTC = 1770134400000
+        # 2月5日 23:59:59 UTC = 1770307199000
+        feb_4_start = 1770134400000
+        feb_5_end = 1770307199000
+        
+        success, data = await self._fetch_income_with_params(
+            api_key, api_secret, 
+            income_type="FUNDING_FEE",
+            start_time=feb_4_start,
+            end_time=feb_5_end
+        )
+        
+        if success and data:
+            logger.error(f"✅ [资金费测试] 2月4日-2月5日查询到{len(data)}条记录")
+            for i, record in enumerate(data[:5]):
+                logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
+        else:
+            logger.error("❌ [资金费测试] 2月4日-2月5日查询为空")
         
         # 标记测试完成
         self.funding_test_completed = True
@@ -264,7 +286,6 @@ class PrivateHTTPFetcher:
             'test_time': datetime.now().isoformat(),
             'environment': self.environment,
             'status': 'completed',
-            'total_records': len(all_data),
             'note': '详见日志中的error级别输出'
         })
         
@@ -272,33 +293,32 @@ class PrivateHTTPFetcher:
 
     async def _fetch_income_with_params(self, api_key: str, api_secret: str, 
                                        income_type: str = "", symbol: str = None,
-                                       from_id: int = None):
+                                       start_time: int = None, end_time: int = None):
         """
-        使用指定参数获取收入记录 - 修复版：最大化范围，不限时间，支持分页
+        使用指定参数获取收入记录 - 修复版：支持精确时间范围
         """
         try:
             current_time_ms = int(time.time() * 1000)
             
-            # 🔴 关键修复：不限制时间范围，查全部历史
-            # 只指定limit和timestamp，不指定startTime和endTime
+            # 按字母顺序构建参数字典
             params = {}
+            if end_time:
+                params['endTime'] = end_time
             if income_type:
                 params['incomeType'] = income_type
-            # 🔴 关键：如果指定了fromId，从该ID开始查（用于分页）
-            if from_id:
-                params['fromId'] = from_id
             params['limit'] = 1000  # 最大限制
             params['recvWindow'] = self.RECV_WINDOW
-            # 🔴 不指定startTime和endTime，让API返回所有历史数据
+            if start_time:
+                params['startTime'] = start_time
             if symbol:
                 params['symbol'] = symbol
             params['timestamp'] = current_time_ms
             
             # 记录请求详情
+            time_range_str = f"{start_time} 到 {end_time}" if start_time and end_time else "不限"
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
-                        f"fromId={from_id or '无'}, "
-                        f"时间范围: 不限（全部历史）")
+                        f"时间范围: {time_range_str}")
 
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
@@ -770,10 +790,10 @@ class PrivateHTTPFetcher:
             },
             'funding_test': {
                 'enabled': True,
-                'query_window_hours': '不限（全部历史）',
+                'query_window_hours': '精确时间范围测试',
                 'test_attempts': self.FUNDING_TEST_ATTEMPTS,
                 'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'description': '账户获取后立即测试，不限时间不限合约，支持分页'
+                'description': '账户获取后立即测试，精确查询2月3日-2月7日等时间段'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
