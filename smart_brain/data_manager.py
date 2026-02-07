@@ -212,36 +212,65 @@ class DataManager:
             return {}
     
     def _create_simplified_market_data(self, raw_data):
-        """创建简化格式的市场数据（按指定顺序）"""
-        # 从原始数据中提取必要的字段
-        metadata = raw_data.get('metadata', {})
-        
-        # 创建按指定顺序的简化数据
-        simplified_data = {
-            'symbol': raw_data.get('symbol'),
-            'price_diff': raw_data.get('price_diff'),
-            'price_diff_percent': raw_data.get('price_diff_percent'),
-            'rate_diff': raw_data.get('rate_diff'),
-            'okx_price': raw_data.get('okx_price'),
-            'okx_funding_rate': raw_data.get('okx_funding_rate'),
-            'okx_period_seconds': raw_data.get('okx_period_seconds'),
-            'okx_countdown_seconds': raw_data.get('okx_countdown_seconds'),
-            'okx_last_settlement': raw_data.get('okx_last_settlement'),
-            'okx_current_settlement': raw_data.get('okx_current_settlement'),
-            'okx_next_settlement': raw_data.get('okx_next_settlement'),
-            'binance_price': raw_data.get('binance_price'),
-            'binance_funding_rate': raw_data.get('binance_funding_rate'),
-            'binance_period_seconds': raw_data.get('binance_period_seconds'),
-            'binance_countdown_seconds': raw_data.get('binance_countdown_seconds'),
-            'binance_last_settlement': raw_data.get('binance_last_settlement'),
-            'binance_current_settlement': raw_data.get('binance_current_settlement'),
-            'binance_next_settlement': raw_data.get('binance_next_settlement'),
-            'calculated_at': metadata.get('calculated_at', datetime.now().isoformat()),
-            'source': metadata.get('source', 'step5_cross_calc')
-        }
-        
-        # 移除值为None的字段，保持数据干净
-        return {k: v for k, v in simplified_data.items() if v is not None}
+        """创建简化格式的市场数据（按指定顺序，包含所有字段）"""
+        try:
+            # 从原始数据中提取必要的字段
+            metadata = raw_data.get('metadata', {})
+            
+            # 🎯 创建按指定顺序的简化数据，始终包含所有字段
+            simplified_data = {
+                'symbol': raw_data.get('symbol'),
+                'price_diff': raw_data.get('price_diff'),
+                'price_diff_percent': raw_data.get('price_diff_percent'),
+                'rate_diff': raw_data.get('rate_diff'),
+                'okx_price': raw_data.get('okx_price'),
+                'okx_funding_rate': raw_data.get('okx_funding_rate'),
+                'okx_period_seconds': raw_data.get('okx_period_seconds'),
+                'okx_countdown_seconds': raw_data.get('okx_countdown_seconds'),
+                # 🎯 重要：始终包含okx_last_settlement，即使值为None
+                'okx_last_settlement': raw_data.get('okx_last_settlement'),
+                'okx_current_settlement': raw_data.get('okx_current_settlement'),
+                'okx_next_settlement': raw_data.get('okx_next_settlement'),
+                'binance_price': raw_data.get('binance_price'),
+                'binance_funding_rate': raw_data.get('binance_funding_rate'),
+                'binance_period_seconds': raw_data.get('binance_period_seconds'),
+                'binance_countdown_seconds': raw_data.get('binance_countdown_seconds'),
+                'binance_last_settlement': raw_data.get('binance_last_settlement'),
+                'binance_current_settlement': raw_data.get('binance_current_settlement'),
+                # 🎯 重要：始终包含binance_next_settlement，即使值为None
+                'binance_next_settlement': raw_data.get('binance_next_settlement'),
+                'calculated_at': metadata.get('calculated_at', datetime.now().isoformat()),
+                'source': metadata.get('source', 'step5_cross_calc')
+            }
+            
+            # ✅ 直接返回完整字典，不删除任何字段
+            return simplified_data
+            
+        except Exception as e:
+            logger.error(f"❌ 创建简化市场数据失败: {e}")
+            # 返回一个基本结构，确保字段完整
+            return {
+                'symbol': raw_data.get('symbol', 'unknown'),
+                'price_diff': None,
+                'price_diff_percent': None,
+                'rate_diff': None,
+                'okx_price': None,
+                'okx_funding_rate': None,
+                'okx_period_seconds': None,
+                'okx_countdown_seconds': None,
+                'okx_last_settlement': None,
+                'okx_current_settlement': None,
+                'okx_next_settlement': None,
+                'binance_price': None,
+                'binance_funding_rate': None,
+                'binance_period_seconds': None,
+                'binance_countdown_seconds': None,
+                'binance_last_settlement': None,
+                'binance_current_settlement': None,
+                'binance_next_settlement': None,
+                'calculated_at': datetime.now().isoformat(),
+                'source': 'error'
+            }
     
     # ==================== 数据查询接口 ====================
     
