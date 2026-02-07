@@ -1,7 +1,6 @@
 """
 私人HTTP数据获取器 - 严格零缓存模式
 完全模仿private_ws_pool的架构和交互方式
-针对币安测试网时间戳混乱问题的修复版
 """
 import asyncio
 import logging
@@ -9,9 +8,8 @@ import time
 import hmac
 import hashlib
 import urllib.parse
-import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional, Set, List
+from datetime import datetime
+from typing import Dict, Any, Optional
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -21,7 +19,6 @@ class PrivateHTTPFetcher:
     """
     私人HTTP数据获取器
     模仿PrivateWebSocketPool的架构和接口
-    针对币安测试网时间戳混乱的特殊处理
     """
 
     def __init__(self):
@@ -44,7 +41,6 @@ class PrivateHTTPFetcher:
         # 状态标志
         self.account_fetched = False  # 账户是否已获取
         self.account_fetch_success = False  # 账户获取是否成功
-        self.funding_test_completed = False  # 🔴 新增：资金费测试是否完成
 
         # 🔴 重试策略：指数退避
         self.account_retry_delays = [10, 20, 40, 60]  # 共5次尝试（第1次+4次重试）
@@ -68,6 +64,7 @@ class PrivateHTTPFetcher:
                 'success_rate': 100.0,
                 'retry_count': 0
             }
+            # 移除了 position_fetch 相关统计
         }
 
         # 🔴 币安API端点配置（模拟交易 vs 真实交易）
@@ -84,22 +81,8 @@ class PrivateHTTPFetcher:
 
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
-        
-        # 🔴 修改：资金费查询相关配置（针对测试网时间戳混乱的特殊处理）
-        self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
-        self.FUNDING_RETRY_INTERVAL = 10  # 每10秒重试一次
-        self.FUNDING_TEST_ATTEMPTS = 3
-        
-        # 🔴 关键修改：针对测试网时间戳混乱，扩大查询范围
-        # 查询前后各30天，总共60天的范围，确保覆盖混乱的时间戳
-        self.FUNDING_QUERY_DAYS_BEFORE = 30  # 查询当前时间前30天
-        self.FUNDING_QUERY_DAYS_AFTER = 30   # 查询当前时间后30天
-        
-        self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
-        
         logger.info(
-            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 针对测试网时间戳混乱的特殊处理）")
-        logger.warning(f"⚠️  警告：测试网环境检测到时间戳混乱，已启用扩展查询范围（前后各30天）")
+            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 指数退避重试 + recvWindow）")
 
     async def start(self, brain_store):
         """
@@ -108,7 +91,7 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例（与私人连接池相同）
         """
-        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment}）...")
+        logger.info(f"🚀 [HTTP获取器] 正在启动（环境: {self.environment} | 自适应频率）...")
 
         self.brain_store = brain_store
         self.running = True
@@ -128,8 +111,7 @@ class PrivateHTTPFetcher:
         受控调度器 - 严格按照时间顺序执行
         1. 等待4分钟（让其他模块先运行）
         2. 尝试获取账户资产（5次指数退避重试）
-        3. 账户成功后立即启动资金费接口测试
-        4. 然后启动自适应频率的账户数据获取任务
+        3. 账户成功后启动自适应频率的账户数据获取任务
         """
         try:
             # ========== 第一阶段：等待4分钟 ==========
@@ -148,26 +130,19 @@ class PrivateHTTPFetcher:
             self.account_fetch_success = await self._fetch_account_with_retry()
 
             if self.account_fetch_success:
-                logger.info("✅ [HTTP获取器] 账户获取成功")
-                
-                # ========== 第三阶段：立即启动资金费接口测试 ==========
-                logger.info("🔍 [HTTP获取器] 立即启动资金费接口测试...")
-                await self._start_funding_api_test()
-                
-                # 等待测试完成
-                await asyncio.sleep(10)
-                
-                # ========== 第四阶段：启动自适应频率的账户数据获取 ==========
-                # 等待30秒，确保完全冷却
-                logger.info("⏳ [HTTP获取器] 测试完成后冷却30秒...")
+                logger.info("✅ [HTTP获取器] 账户获取成功，启动自适应频率的账户数据获取任务")
+
+                # ========== 第三阶段：启动自适应频率的账户数据获取 ==========
+                # 再等待30秒，确保完全冷却
+                logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
                 await asyncio.sleep(30)
 
-                # 启动自适应频率的账户数据获取任务
+                # 🔴 修改：启动自适应频率的账户数据获取任务
                 account_task = asyncio.create_task(
                     self._fetch_account_adaptive_freq())
                 self.fetch_tasks.append(account_task)
                 logger.info(
-                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动")
+                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒）")
             else:
                 logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动后续任务")
 
@@ -175,212 +150,6 @@ class PrivateHTTPFetcher:
             logger.info("🛑 [HTTP获取器] 调度器被取消")
         except Exception as e:
             logger.error(f"❌ [HTTP获取器] 调度器异常: {e}")
-
-    async def _start_funding_api_test(self):
-        """启动资金费API测试"""
-        logger.info("🧪 [资金费测试] 开始资金费接口测试...")
-        
-        api_key, api_secret = await self._get_fresh_credentials()
-        if not api_key or not api_secret:
-            logger.error("❌ [资金费测试] 无法获取API凭证")
-            return
-        
-        # 启动测试任务
-        test_task = asyncio.create_task(
-            self._execute_funding_api_test(api_key, api_secret)
-        )
-        self.fetch_tasks.append(test_task)
-        
-    async def _execute_funding_api_test(self, api_key: str, api_secret: str):
-        """
-        执行资金费API测试 - 针对测试网时间戳混乱的特殊处理
-        """
-        logger.error("🧪 [资金费测试] 开始执行资金费API测试（扩展时间范围版）...")
-        
-        all_data = []  # 🔴 收集所有分页数据
-        last_tran_id = None  # 🔴 用于分页
-        
-        # 🔴 测试1：分页获取所有资金费数据
-        logger.error("🧪 [资金费测试] ========== 测试1: 分页获取所有资金费数据 ==========")
-        
-        for page in range(20):  # 最多20页，防止无限循环（因为时间范围扩大了）
-            logger.error(f"🧪 [资金费测试] 获取第{page+1}页数据...")
-            
-            success, data = await self._fetch_income_with_params(
-                api_key, api_secret, 
-                income_type="FUNDING_FEE",
-                from_id=last_tran_id
-            )
-            
-            if not success:
-                logger.error(f"❌ [资金费测试] 第{page+1}页获取失败")
-                break
-            
-            if not data:
-                logger.error(f"✅ [资金费测试] 第{page+1}页数据为空，已到末尾")
-                break
-            
-            logger.error(f"✅ [资金费测试] 第{page+1}页获取到{len(data)}条记录")
-            
-            # 显示本页前3条
-            for i, record in enumerate(data[:3]):
-                # 添加时间戳转换便于调试
-                ts = record.get('time', 0)
-                if ts:
-                    utc_time = datetime.fromtimestamp(ts/1000, tz=timezone.utc)
-                    beijing_time = utc_time + timedelta(hours=8)
-                    logger.error(f"✅ [资金费测试]   记录{i+1}: {record.get('symbol')} | "
-                                f"金额:{record.get('income')} | "
-                                f"API时间:{utc_time.strftime('%Y-%m-%d %H:%M')} UTC")
-            
-            all_data.extend(data)
-            
-            # 检查是否还有下一页
-            if len(data) < 1000:  # 如果不足1000条，说明是最后一页
-                logger.error(f"✅ [资金费测试] 数据不足1000条，已到最后一页")
-                break
-            
-            # 获取最后一条记录的tranId用于下一页
-            last_tran_id = data[-1].get('tranId')
-            logger.error(f"🧪 [资金费测试] 下一页fromId: {last_tran_id}")
-            
-            # 间隔1秒，避免触发频率限制
-            await asyncio.sleep(1)
-        
-        logger.error(f"✅ [资金费测试] 总共获取到{len(all_data)}条记录")
-        
-        # 🔴 关键修复：添加推送数据的代码
-        if all_data:
-            await self._push_data('http_funding_income', {
-                'test_time': datetime.now().isoformat(),
-                'environment': self.environment,
-                'income_type': 'FUNDING_FEE',
-                'symbol': 'ALL',
-                'count': len(all_data),
-                'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
-                'data': all_data
-            })
-            logger.error(f"✅ [资金费测试] 已推送{len(all_data)}条资金费记录到数据处理模块")
-        
-        # 🔴 测试2：查所有类型的收入
-        logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入 ==========")
-        success, data = await self._fetch_income_with_params(api_key, api_secret, "")
-        if success and data:
-            logger.error(f"✅ [资金费测试] 所有类型找到{len(data)}条记录")
-            # 按类型统计
-            type_count = {}
-            for record in data:
-                itype = record.get('incomeType', 'UNKNOWN')
-                type_count[itype] = type_count.get(itype, 0) + 1
-            logger.error(f"✅ [资金费测试] 类型分布: {type_count}")
-        else:
-            logger.error("❌ [资金费测试] 所有类型查询失败或为空")
-        
-        # 标记测试完成
-        self.funding_test_completed = True
-        
-        # 🔴 关键修复：添加推送测试完成状态的代码
-        await self._push_data('http_funding_test', {
-            'test_time': datetime.now().isoformat(),
-            'environment': self.environment,
-            'status': 'completed',
-            'total_records': len(all_data),
-            'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天",
-            'note': '针对测试网时间戳混乱的扩展查询'
-        })
-        logger.error(f"✅ [资金费测试] 已推送测试完成状态")
-        
-        logger.error("🧪 [资金费测试] ========== 测试完成 ==========")
-
-    async def _fetch_income_with_params(self, api_key: str, api_secret: str, 
-                                       income_type: str = "", symbol: str = None,
-                                       from_id: int = None):
-        """
-        使用指定参数获取收入记录 - 针对测试网时间戳混乱的特殊处理
-        """
-        try:
-            current_time_ms = int(time.time() * 1000)
-            
-            # 🔴 关键修改：针对测试网时间戳混乱，扩大查询范围
-            # 查询前后各30天，确保覆盖混乱的时间戳偏移
-            days_before_ms = self.FUNDING_QUERY_DAYS_BEFORE * 24 * 60 * 60 * 1000
-            days_after_ms = self.FUNDING_QUERY_DAYS_AFTER * 24 * 60 * 60 * 1000
-            
-            params = {}
-            if income_type:
-                params['incomeType'] = income_type
-            if from_id:
-                params['fromId'] = from_id
-            params['limit'] = 1000
-            params['recvWindow'] = self.RECV_WINDOW
-            
-            # 🔴 关键修改：扩展的时间范围
-            params['startTime'] = current_time_ms - days_before_ms  # 当前时间前30天
-            params['endTime'] = current_time_ms + days_after_ms     # 当前时间后30天
-            
-            if symbol:
-                params['symbol'] = symbol
-            params['timestamp'] = current_time_ms
-            
-            # 记录请求详情（包含人类可读的时间）
-            start_dt = datetime.fromtimestamp(params['startTime']/1000, tz=timezone.utc)
-            end_dt = datetime.fromtimestamp(params['endTime']/1000, tz=timezone.utc)
-            
-            logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
-                        f"symbol={symbol or 'ALL'}, "
-                        f"fromId={from_id or '无'}")
-            logger.error(f"🧪 [资金费测试] 时间范围: {self.FUNDING_QUERY_DAYS_BEFORE}天前 → {self.FUNDING_QUERY_DAYS_AFTER}天后")
-            logger.error(f"🧪 [资金费测试] 具体时间: {start_dt.strftime('%Y-%m-%d %H:%M')} UTC → "
-                        f"{end_dt.strftime('%Y-%m-%d %H:%M')} UTC")
-
-            signed_params = self._sign_params(params, api_secret)
-            url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
-            headers = {'X-MBX-APIKEY': api_key}
-
-            # 打印完整URL（用于curl测试）
-            query_string = urllib.parse.urlencode(signed_params)
-            full_url = f"{url}?{query_string}"
-            logger.error(f"🧪 [资金费测试] 完整URL: {full_url[:250]}...")
-
-            async with self.session.get(url, params=signed_params, headers=headers) as resp:
-                response_text = await resp.text()
-                
-                # 无论成功失败，都打印响应
-                logger.error(f"🧪 [资金费测试] HTTP状态: {resp.status}, 响应长度: {len(response_text)}")
-                if len(response_text) > 500:
-                    logger.error(f"🧪 [资金费测试] 响应内容前500字: {response_text[:500]}...")
-                    if len(response_text) > 1000:
-                        logger.error(f"🧪 [资金费测试] 响应内容后500字: ...{response_text[-500:]}")
-                else:
-                    logger.error(f"🧪 [资金费测试] 响应内容: {response_text}")
-                
-                if resp.status == 200:
-                    try:
-                        data = json.loads(response_text)
-                        # 🔴 额外调试：显示获取到的时间范围
-                        if data and len(data) > 0:
-                            first_ts = data[0].get('time', 0)
-                            last_ts = data[-1].get('time', 0)
-                            if first_ts and last_ts:
-                                first_dt = datetime.fromtimestamp(first_ts/1000, tz=timezone.utc)
-                                last_dt = datetime.fromtimestamp(last_ts/1000, tz=timezone.utc)
-                                logger.error(f"🧪 [资金费测试] 本页数据时间范围: "
-                                            f"{first_dt.strftime('%Y-%m-%d %H:%M')} → "
-                                            f"{last_dt.strftime('%Y-%m-%d %H:%M')} UTC")
-                        return True, data
-                    except json.JSONDecodeError as e:
-                        logger.error(f"❌ [资金费测试] JSON解析失败: {e}")
-                        return False, None
-                else:
-                    logger.error(f"❌ [资金费测试] 请求失败: HTTP {resp.status}")
-                    return False, None
-
-        except asyncio.TimeoutError:
-            logger.error(f"⏱️ [资金费测试] 请求超时")
-            return False, None
-        except Exception as e:
-            logger.error(f"❌ [资金费测试] 请求异常: {e}", exc_info=True)
-            return False, None
 
     async def _fetch_account_with_retry(self):
         """
@@ -437,7 +206,7 @@ class PrivateHTTPFetcher:
 
     async def _fetch_account_single(self):
         """
-        单次尝试获取账户资产（优化版：添加recvWindow）
+        单次尝试获取账户资产（优化版：添加recvWindow和权重监控）
 
         Returns:
             True: 成功
@@ -468,9 +237,7 @@ class PrivateHTTPFetcher:
 
                 if resp.status == 200:
                     data = await resp.json()
-                    # 🔴 关键：确保推送账户数据
                     await self._push_data('http_account', data)
-                    logger.info(f"✅ [HTTP获取器] 账户数据已推送")
 
                     self.quality_stats['account_fetch']['success_attempts'] += 1
                     self.quality_stats['account_fetch']['last_success'] = datetime.now(
@@ -573,12 +340,11 @@ class PrivateHTTPFetcher:
                         positions = data.get('positions', [])
                         # 过滤掉仓位为0的持仓
                         has_position_now = False
-                        active_symbols = set()  # 🔴 新增：记录活跃合约符号
                         for pos in positions:
                             position_amt = float(pos.get('positionAmt', '0'))
                             if position_amt != 0:  # 仓位不为0表示有真实持仓
                                 has_position_now = True
-                                active_symbols.add(pos['symbol'])  # 🔴 新增：记录符号
+                                break
 
                         # 🔴 自适应频率调整
                         if has_position_now:
@@ -602,7 +368,8 @@ class PrivateHTTPFetcher:
                         current_time = time.time()
                         if current_time - self.last_log_time >= self.log_interval:
                             if has_position_now:
-                                positions_count = len(active_symbols)  # 🔴 修改：使用已计算的活跃数量
+                                positions_count = len(
+                                    [p for p in positions if float(p.get('positionAmt', '0')) != 0])
                                 logger.info(
                                     f"📊 [HTTP获取器] 当前持仓{positions_count}个 | 高频模式 | 请求次数:{request_count}")
                             else:
@@ -610,7 +377,6 @@ class PrivateHTTPFetcher:
                                     f"📊 [HTTP获取器] 当前无持仓 | 低频模式 | 请求次数:{request_count}")
                             self.last_log_time = current_time
 
-                        # 🔴 关键：确保推送账户数据
                         await self._push_data('http_account', data)
 
                         self.quality_stats['account_fetch']['success_attempts'] += 1
@@ -661,69 +427,6 @@ class PrivateHTTPFetcher:
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
 
-    async def _trigger_funding_fetch_if_needed(self, api_key: str, api_secret: str, 
-                                              has_position: bool, active_symbols: Set[str]):
-        """
-        在整点触发资金费查询。
-        只有资金费测试完成后才执行此逻辑
-        """
-        if not has_position or not self.funding_test_completed:
-            return
-
-        # 获取当前UTC时间
-        utc_now = datetime.now(timezone.utc)
-        current_hour = utc_now.hour
-
-        # 检查是否已经在本小时触发过
-        if current_hour == self.last_funding_trigger_hour:
-            return
-
-        # 计算从当前时间到整点已过去的秒数
-        minutes_into_hour = utc_now.minute
-        seconds_into_hour = minutes_into_hour * 60 + utc_now.second
-
-        # 只在整点后的最初1分钟内进行判断和启动，避免在小时中段误触发
-        if seconds_into_hour > 60:
-            return
-
-        # 记录触发时间，避免本小时内重复触发
-        self.last_funding_trigger_hour = current_hour
-        logger.info(f"🕐 [资金费] 在UTC {current_hour:02d}:00:00 检测到持仓，触发查询...")
-
-        # 延迟30秒后启动独立的资金费查询任务
-        asyncio.create_task(
-            self._execute_funding_fetch_task(api_key, api_secret, active_symbols, utc_now)
-        )
-
-    async def _execute_funding_fetch_task(self, api_key: str, api_secret: str, 
-                                         active_symbols: Set[str], trigger_time: datetime):
-        """
-        执行资金费查询任务（只有在测试完成后才执行）
-        """
-        await asyncio.sleep(30)
-
-        logger.info(f"🚀 [资金费] 开始执行资金费查询，活跃合约: {active_symbols}")
-
-        success, income_data = await self._fetch_income_with_params(
-            api_key, api_secret, 'FUNDING_FEE'
-        )
-
-        if success:
-            # 🔴 关键：确保推送资金费数据
-            await self._push_data('http_funding_income', {
-                'trigger_time': trigger_time.isoformat(),
-                'active_symbols': list(active_symbols),
-                'income_data': income_data if income_data else [],
-                'status': 'success' if income_data else 'empty'
-            })
-            
-            if income_data:
-                logger.info(f"✅ [资金费] 获取到{len(income_data)}条资金费记录，已推送")
-            else:
-                logger.info(f"📭 [资金费] 未找到资金费记录")
-        else:
-            logger.error(f"❌ [资金费] 资金费查询失败")
-
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
         if exchange == 'binance':
@@ -745,7 +448,7 @@ class PrivateHTTPFetcher:
         return None, None
 
     def _sign_params(self, params: Dict, api_secret: str) -> Dict:
-        """生成签名（币安API要求）- 原版，未改动"""
+        """生成签名（币安API要求）"""
         query = urllib.parse.urlencode(params)
         signature = hmac.new(api_secret.encode(),
                              query.encode(), hashlib.sha256).hexdigest()
@@ -763,7 +466,6 @@ class PrivateHTTPFetcher:
                 'timestamp': datetime.now().isoformat(),
                 'source': 'http_fetcher'
             })
-            logger.debug(f"📤 [HTTP获取器] 已推送{data_type}数据")
         except ImportError as e:
             logger.error(f"❌ [HTTP获取器] 无法导入私人数据处理模块: {e}")
         except Exception as e:
@@ -809,21 +511,12 @@ class PrivateHTTPFetcher:
             'running': self.running,
             'account_fetched': self.account_fetched,
             'account_fetch_success': self.account_fetch_success,
-            'funding_test_completed': self.funding_test_completed,
             'environment': self.environment,
             'adaptive_frequency': {
                 'current_interval': self.account_check_interval,
                 'has_position': self.has_position,
                 'high_freq': self.account_high_freq,
                 'low_freq': self.account_low_freq
-            },
-            'funding_test': {
-                'enabled': True,
-                'query_range': f"前后各{self.FUNDING_QUERY_DAYS_BEFORE}天（共{self.FUNDING_QUERY_DAYS_BEFORE + self.FUNDING_QUERY_DAYS_AFTER}天）",
-                'test_attempts': self.FUNDING_TEST_ATTEMPTS,
-                'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'description': '针对测试网时间戳混乱的扩展查询范围',
-                'note': '测试网时间戳存在系统性错误，但数据内容和顺序正确'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
@@ -833,21 +526,17 @@ class PrivateHTTPFetcher:
             },
             'api_config': {
                 'recvWindow': self.RECV_WINDOW,
-                'session_reuse': True,
-                'timezone_handling': 'UTC时间戳（测试网存在时间戳混乱）'
+                'session_reuse': True
             },
             'schedule': {
-                'account': '启动后4分钟开始，5次指数退避重试',
-                'funding_test': '账户获取成功后立即测试资金费接口',
-                'normal_operation': '测试完成后启动自适应频率账户获取'
+                'account': '启动后4分钟开始，5次指数退避重试，然后自适应频率',
+                'data_type': '仅获取账户数据（包含持仓信息）'
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
-                'funding_income': self.INCOME_ENDPOINT,
                 'base_url': self.BASE_URL
             },
-            'data_destination': 'private_data_processing.manager',
-            'data_push_ensured': True  # 🔴 新增：确保数据推送的标志
+            'data_destination': 'private_data_processing.manager'
         }
 
         return status
