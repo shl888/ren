@@ -87,7 +87,8 @@ class PrivateHTTPFetcher:
         self.INCOME_ENDPOINT = "/fapi/v1/income"  # 资金流水接口
         self.FUNDING_RETRY_INTERVAL = 10  # 每10秒重试一次
         self.FUNDING_TEST_ATTEMPTS = 3  # 🔴 修改：测试3次
-        self.FUNDING_QUERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000  # 🔴 修改：查最近7天
+        # 🔴 不限制时间范围，查全部历史
+        self.FUNDING_QUERY_WINDOW_MS = None  # 🔴 修改：None表示不限制
         self.last_funding_trigger_hour = -1  # 上次触发资金费查询的UTC小时
         
         logger.info(
@@ -185,51 +186,49 @@ class PrivateHTTPFetcher:
         
     async def _execute_funding_api_test(self, api_key: str, api_secret: str):
         """
-        执行资金费API测试 - 修复版：强制打印所有细节，测试带symbol和不带symbol
+        执行资金费API测试 - 修复版：最大化范围获取，不限时间不限合约
         """
         logger.error("🧪 [资金费测试] 开始执行资金费API测试...")
         
-        # 测试1：不带symbol，查全部资金费
-        logger.error("🧪 [资金费测试] ========== 测试1: 查全部资金费（不指定symbol） ==========")
+        # 测试1：查全部资金费，不限时间不限合约
+        logger.error("🧪 [资金费测试] ========== 测试1: 查全部资金费（不限时间不限合约） ==========")
         success, data = await self._fetch_income_with_params(api_key, api_secret, "FUNDING_FEE")
         if success and data:
             logger.error(f"✅ [资金费测试] 全部查询找到{len(data)}条记录")
             if len(data) > 0:
-                for i, record in enumerate(data[:3]):
+                for i, record in enumerate(data[:5]):
                     logger.error(f"✅ [资金费测试] 记录{i+1}: {record}")
+            
+            # 🔴 推送实际资金费数据到处理模块
+            await self._push_data('http_funding_income', {
+                'test_time': datetime.now().isoformat(),
+                'environment': self.environment,
+                'income_type': 'FUNDING_FEE',
+                'symbol': 'ALL',
+                'count': len(data),
+                'data': data
+            })
         else:
             logger.error("❌ [资金费测试] 全部查询为空或失败")
         
-        # 测试2：逐个查你的3个持仓
-        symbols = ["BUSDT", "COAIUSDT", "ASTERUSDT"]
-        logger.error(f"🧪 [资金费测试] ========== 测试2: 逐个查持仓symbol ==========")
-        
-        for symbol in symbols:
-            logger.error(f"🧪 [资金费测试] 查询 {symbol}...")
-            success, data = await self._fetch_income_with_params(api_key, api_secret, "FUNDING_FEE", symbol)
-            if success and data:
-                logger.error(f"✅ [资金费测试] {symbol} 找到{len(data)}条记录")
-                if len(data) > 0:
-                    for i, record in enumerate(data[:2]):
-                        logger.error(f"✅ [资金费测试]   记录{i+1}: {record}")
-            else:
-                logger.error(f"❌ [资金费测试] {symbol} 为空或失败")
-            
-            # 间隔2秒，避免触发频率限制
-            await asyncio.sleep(2)
-        
-        # 测试3：查其他类型，确认接口是否工作
-        logger.error(f"🧪 [资金费测试] ========== 测试3: 查COMMISSION确认接口正常 ==========")
-        success, data = await self._fetch_income_with_params(api_key, api_secret, "COMMISSION")
+        # 测试2：查所有类型的收入，不限时间
+        logger.error(f"🧪 [资金费测试] ========== 测试2: 查所有类型收入（不限时间） ==========")
+        success, data = await self._fetch_income_with_params(api_key, api_secret, "")
         if success and data:
-            logger.error(f"✅ [资金费测试] COMMISSION找到{len(data)}条记录")
+            logger.error(f"✅ [资金费测试] 所有类型找到{len(data)}条记录")
+            # 按类型统计
+            type_count = {}
+            for record in data:
+                itype = record.get('incomeType', 'UNKNOWN')
+                type_count[itype] = type_count.get(itype, 0) + 1
+            logger.error(f"✅ [资金费测试] 类型分布: {type_count}")
         else:
-            logger.error("❌ [资金费测试] COMMISSION也为空")
+            logger.error("❌ [资金费测试] 所有类型查询为空")
         
         # 标记测试完成
         self.funding_test_completed = True
         
-        # 推送测试结果
+        # 推送测试完成状态
         await self._push_data('http_funding_test', {
             'test_time': datetime.now().isoformat(),
             'environment': self.environment,
@@ -241,29 +240,27 @@ class PrivateHTTPFetcher:
 
     async def _fetch_income_with_params(self, api_key: str, api_secret: str, income_type: str = "", symbol: str = None):
         """
-        使用指定参数获取收入记录 - 修复版：查最近7天，不是7天之前
+        使用指定参数获取收入记录 - 修复版：最大化范围，不限时间
         """
         try:
             current_time_ms = int(time.time() * 1000)
-            # 🔴 关键修复：查最近7天（从7天前到现在），不是7天之前
-            window_start_ms = current_time_ms - self.FUNDING_QUERY_WINDOW_MS  # 7天前
             
-            # 按字母顺序构建参数字典
+            # 🔴 关键修复：不限制时间范围，查全部历史
+            # 只指定limit和timestamp，不指定startTime和endTime
             params = {}
-            params['endTime'] = current_time_ms  # 🔴 新增：结束时间为现在
             if income_type:
-                params['incomeType'] = income_type  # i
-            params['limit'] = 1000                   # l
-            params['recvWindow'] = self.RECV_WINDOW  # r
-            params['startTime'] = window_start_ms    # s (7天前)
+                params['incomeType'] = income_type
+            params['limit'] = 1000  # 最大限制
+            params['recvWindow'] = self.RECV_WINDOW
+            # 🔴 不指定startTime和endTime，让API返回所有历史数据
             if symbol:
-                params['symbol'] = symbol             # s (optional)
-            params['timestamp'] = current_time_ms    # t
+                params['symbol'] = symbol
+            params['timestamp'] = current_time_ms
             
             # 记录请求详情
             logger.error(f"🧪 [资金费测试] 请求参数: incomeType={income_type or 'ALL'}, "
                         f"symbol={symbol or 'ALL'}, "
-                        f"时间范围: {window_start_ms} 到 {current_time_ms} (最近7天)")
+                        f"时间范围: 不限（全部历史）")
 
             signed_params = self._sign_params(params, api_secret)
             url = f"{self.BASE_URL}{self.INCOME_ENDPOINT}"
@@ -279,7 +276,11 @@ class PrivateHTTPFetcher:
                 
                 # 无论成功失败，都打印响应
                 logger.error(f"🧪 [资金费测试] HTTP状态: {resp.status}, 响应长度: {len(response_text)}")
-                logger.error(f"🧪 [资金费测试] 响应内容: {response_text[:500]}")
+                if len(response_text) > 500:
+                    logger.error(f"🧪 [资金费测试] 响应内容前500字: {response_text[:500]}...")
+                    logger.error(f"🧪 [资金费测试] 响应内容后500字: ...{response_text[-500:]}")
+                else:
+                    logger.error(f"🧪 [资金费测试] 响应内容: {response_text}")
                 
                 if resp.status == 200:
                     try:
@@ -731,10 +732,10 @@ class PrivateHTTPFetcher:
             },
             'funding_test': {
                 'enabled': True,
-                'query_window_hours': self.FUNDING_QUERY_WINDOW_MS / (60 * 60 * 1000),
+                'query_window_hours': '不限（全部历史）',
                 'test_attempts': self.FUNDING_TEST_ATTEMPTS,
                 'retry_interval': self.FUNDING_RETRY_INTERVAL,
-                'description': '账户获取后立即测试所有incomeType参数'
+                'description': '账户获取后立即测试，不限时间不限合约'
             },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
