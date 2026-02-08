@@ -1,3 +1,4 @@
+
 """
 私人HTTP数据获取器 - 严格零缓存模式
 完全模仿private_ws_pool的架构和交互方式
@@ -54,6 +55,10 @@ class PrivateHTTPFetcher:
         self.last_log_time = 0  # 上次日志时间
         self.log_interval = 60  # 日志间隔（秒）
 
+        # 🔴 新增：重启机制
+        self.restart_attempts = 0  # 重启尝试次数
+        self.in_restart_cooldown = False  # 是否在重启冷却中
+
         # 连接质量统计（模仿pool_manager）
         self.quality_stats = {
             'account_fetch': {
@@ -62,9 +67,10 @@ class PrivateHTTPFetcher:
                 'last_success': None,
                 'last_error': None,
                 'success_rate': 100.0,
-                'retry_count': 0
+                'retry_count': 0,
+                'restart_count': 0,  # 新增：重启次数统计
+                'last_restart': None  # 新增：上次重启时间
             }
-            # 移除了 position_fetch 相关统计
         }
 
         # 🔴 币安API端点配置（模拟交易 vs 真实交易）
@@ -82,7 +88,7 @@ class PrivateHTTPFetcher:
         # 🔴 优化：记录当前使用的环境
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
         logger.info(
-            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 指数退避重试 + recvWindow）")
+            f"🔗 [HTTP获取器] 初始化完成（环境: {self.environment} | 自适应频率 | 指数退避重试 + recvWindow + 自动重启）")
 
     async def start(self, brain_store):
         """
@@ -113,50 +119,69 @@ class PrivateHTTPFetcher:
         2. 尝试获取账户资产（5次指数退避重试）
         3. 账户成功后启动自适应频率的账户数据获取任务
         """
-        try:
-            # ========== 第一阶段：等待4分钟 ==========
-            logger.info("⏳ [HTTP获取器] 第一阶段：等待4分钟，让其他模块先运行...")
-            for i in range(240):  # 240秒 = 4分钟
-                if not self.running:
-                    return
-                if i % 60 == 0:  # 每分钟记录一次
-                    remaining = 240 - i
-                    logger.info(f"⏳ [HTTP获取器] 等待中...剩余{remaining}秒")
-                await asyncio.sleep(1)
+        while self.running:
+            try:
+                # 重置重启冷却标志
+                self.in_restart_cooldown = False
+                
+                # ========== 第一阶段：等待4分钟 ==========
+                logger.info("⏳ [HTTP获取器] 第一阶段：等待4分钟，让其他模块先运行...")
+                for i in range(240):  # 240秒 = 4分钟
+                    if not self.running or self.in_restart_cooldown:
+                        return
+                    if i % 60 == 0:  # 每分钟记录一次
+                        remaining = 240 - i
+                        logger.info(f"⏳ [HTTP获取器] 等待中...剩余{remaining}秒")
+                    await asyncio.sleep(1)
 
-            logger.info("✅ [HTTP获取器] 4分钟等待完成，开始账户获取（5次尝试）")
+                logger.info("✅ [HTTP获取器] 4分钟等待完成，开始账户获取（5次尝试）")
 
-            # ========== 第二阶段：获取账户资产（5次指数退避重试） ==========
-            self.account_fetch_success = await self._fetch_account_with_retry()
+                # ========== 第二阶段：获取账户资产（5次指数退避重试） ==========
+                self.account_fetch_success = await self._fetch_account_with_retry()
 
-            if self.account_fetch_success:
-                logger.info("✅ [HTTP获取器] 账户获取成功，启动自适应频率的账户数据获取任务")
+                if self.account_fetch_success:
+                    logger.info("✅ [HTTP获取器] 账户获取成功，启动自适应频率的账户数据获取任务")
 
-                # ========== 第三阶段：启动自适应频率的账户数据获取 ==========
-                # 再等待30秒，确保完全冷却
-                logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
-                await asyncio.sleep(30)
+                    # ========== 第三阶段：启动自适应频率的账户数据获取 ==========
+                    # 再等待30秒，确保完全冷却
+                    logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
+                    for i in range(30):
+                        if not self.running or self.in_restart_cooldown:
+                            break
+                        await asyncio.sleep(1)
 
-                # 🔴 修改：启动自适应频率的账户数据获取任务
-                account_task = asyncio.create_task(
-                    self._fetch_account_adaptive_freq())
-                self.fetch_tasks.append(account_task)
-                logger.info(
-                    "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒）")
-            else:
-                logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，不启动后续任务")
+                    if self.running and not self.in_restart_cooldown:
+                        # 🔴 修改：启动自适应频率的账户数据获取任务
+                        account_task = asyncio.create_task(
+                            self._fetch_account_adaptive_freq())
+                        self.fetch_tasks.append(account_task)
+                        logger.info(
+                            "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒）")
+                        
+                        # 等待任务完成（正常情况下会一直运行直到被取消或遇到错误）
+                        await account_task
+                        
+                        # 如果任务正常结束（非取消），说明遇到了需要重启的错误
+                        if self.running and not self.in_restart_cooldown:
+                            logger.warning("⚠️ [HTTP获取器] 账户任务结束，触发重启")
+                            await self._handle_restart("账户任务结束")
+                else:
+                    logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，触发重启")
+                    if self.running:
+                        await self._handle_restart("账户获取失败")
 
-        except asyncio.CancelledError:
-            logger.info("🛑 [HTTP获取器] 调度器被取消")
-        except Exception as e:
-            logger.error(f"❌ [HTTP获取器] 调度器异常: {e}")
+            except asyncio.CancelledError:
+                logger.info("🛑 [HTTP获取器] 调度器被取消")
+                break
+            except Exception as e:
+                logger.error(f"❌ [HTTP获取器] 调度器异常: {e}")
+                if self.running and not self.in_restart_cooldown:
+                    await self._handle_restart(f"调度器异常: {e}")
 
     async def _fetch_account_with_retry(self):
         """
         获取账户资产 - 5次指数退避重试
         第1次尝试 + 4次重试（10秒, 20秒, 40秒, 60秒后）
-
-        🔴 关键修复：418/401错误立即停止，不再重试
         """
         retry_count = 0
         total_attempts = 0
@@ -166,9 +191,9 @@ class PrivateHTTPFetcher:
         result = await self._fetch_account_single()
         total_attempts += 1
 
-        # 🔴 修复：检查是否遇到418（IP封禁）或401（权限错误）
-        if result == 'PERMANENT_STOP':
-            logger.error("🚨 [HTTP获取器] 遇到不可逆错误（418/401），停止所有重试")
+        # 🔴 检查是否遇到需要重启的错误
+        if result == 'NEED_RESTART':
+            logger.warning("⚠️ [HTTP获取器] 遇到需要重启的错误，停止当前重试循环")
             self.quality_stats['account_fetch']['retry_count'] = 0
             return False
 
@@ -177,7 +202,7 @@ class PrivateHTTPFetcher:
             return True
 
         # 4次重试（指数退避）
-        while retry_count < self.max_account_retries and self.running:
+        while retry_count < self.max_account_retries and self.running and not self.in_restart_cooldown:
             delay = self.account_retry_delays[retry_count]
             logger.info(
                 f"⏳ [HTTP获取器] {delay}秒后重试账户获取（第{retry_count + 2}次尝试）...")
@@ -188,10 +213,10 @@ class PrivateHTTPFetcher:
             total_attempts += 1
             retry_count += 1
 
-            # 🔴 修复：检查是否遇到418或401
-            if result == 'PERMANENT_STOP':
-                logger.error(
-                    f"🚨 [HTTP获取器] 第{retry_count}次尝试遇到不可逆错误，停止重试")
+            # 🔴 检查是否遇到需要重启的错误
+            if result == 'NEED_RESTART':
+                logger.warning(
+                    f"⚠️ [HTTP获取器] 第{retry_count}次尝试遇到需要重启的错误")
                 self.quality_stats['account_fetch']['retry_count'] = retry_count
                 return False
 
@@ -211,7 +236,7 @@ class PrivateHTTPFetcher:
         Returns:
             True: 成功
             False: 失败，可重试
-            'PERMANENT_STOP': 遇到不可逆错误（418/401），停止所有重试
+            'NEED_RESTART': 遇到需要重启的错误（418/401），触发重启
         """
         try:
             self.quality_stats['account_fetch']['total_attempts'] += 1
@@ -257,33 +282,24 @@ class PrivateHTTPFetcher:
                     error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                     self.quality_stats['account_fetch']['last_error'] = error_msg
 
-                    # 🔴 关键修复：418（IP封禁）- 立即停止所有重试
+                    # 🔴 关键修复：418（IP封禁）- 触发重启
                     if resp.status == 418:
-                        retry_after = int(resp.headers.get('Retry-After', 10))
-                        logger.error(
-                            f"🚨 [HTTP获取器] IP被封禁(418)，需等待{retry_after}秒")
-                        # 🔴 修复：返回特殊标记，让上层知道要停止所有重试
-                        return 'PERMANENT_STOP'
-
-                    # 🔴 关键修复：401（API密钥无效或权限不足）- 立即停止
-                    if resp.status == 401:
-                        logger.error(
-                            f"🚨 [HTTP获取器] API密钥无效或权限不足(401)")
-                        logger.error(f"   当前环境: {self.environment}")
-                        logger.error(f"   请检查：")
-                        logger.error(
-                            f"   1. API密钥是否匹配当前环境（模拟/真实）")
-                        logger.error(
-                            f"   2. API密钥是否启用了合约权限")
-                        logger.error(f"   3. IP白名单是否正确")
-                        return 'PERMANENT_STOP'
-
-                    # 🔴 优化：429（频率限制）- 等待后重试
-                    if resp.status == 429:
-                        retry_after = int(resp.headers.get('Retry-After', 60))
                         logger.warning(
-                            f"⚠️ [HTTP获取器] 触发频率限制(429)，等待{retry_after}秒后重试")
-                        await asyncio.sleep(retry_after)
+                            f"⚠️ [HTTP获取器] IP被封禁(418)，触发重启")
+                        return 'NEED_RESTART'
+
+                    # 🔴 关键修复：401（API密钥无效或权限不足）- 触发重启
+                    if resp.status == 401:
+                        logger.warning(
+                            f"⚠️ [HTTP获取器] API密钥无效或权限不足(401)，触发重启")
+                        return 'NEED_RESTART'
+
+                    # 🔴 优化：429（频率限制）- 等待后重试（HTTP短连接，无需特殊处理）
+                    if resp.status == 429:
+                        wait_time = await self._get_retry_after_time(resp)
+                        logger.warning(
+                            f"⚠️ [HTTP获取器] 触发频率限制(429)，等待{wait_time}秒后重试")
+                        await asyncio.sleep(wait_time)
                         return False
 
                     logger.error(f"❌ [HTTP获取器] 账户请求失败 {error_msg}")
@@ -302,7 +318,7 @@ class PrivateHTTPFetcher:
 
     async def _fetch_account_adaptive_freq(self):
         """
-        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 日志控制）
+        自适应频率获取账户数据（优化版：有持仓1秒/无持仓60秒 + 日志控制 + 自动重启）
         从账户数据本身的positions字段判断是否有持仓
         """
         request_count = 0
@@ -310,7 +326,7 @@ class PrivateHTTPFetcher:
         # 初始等待
         await asyncio.sleep(30)
 
-        while self.running:
+        while self.running and not self.in_restart_cooldown:
             try:
                 request_count += 1
 
@@ -396,27 +412,25 @@ class PrivateHTTPFetcher:
                         error_text = await resp.text()
                         error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                         self.quality_stats['account_fetch']['last_error'] = error_msg
-                        logger.error(f"❌ [HTTP获取器] 账户请求失败 {error_msg}")
 
-                        # 🔴 优化：正确处理418和401（永久停止）
+                        # 🔴 正确处理：418/401错误 - 触发重启
                         if resp.status in [418, 401]:
-                            retry_after = int(
-                                resp.headers.get('Retry-After', 3600))
-                            logger.error(
-                                f"🚨 [HTTP获取器] 账户请求触发严重错误({resp.status})，等待{retry_after}秒后永久停止")
-                            await asyncio.sleep(retry_after)
-                            # 账户任务遇到418/401也停止
-                            logger.error(f"🚨 [HTTP获取器] 账户任务永久停止")
-                            break
-
-                        # 🔴 优化：正确处理429
-                        if resp.status == 429:
-                            retry_after = int(
-                                resp.headers.get('Retry-After', 60))
                             logger.warning(
-                                f"⚠️ [HTTP获取器] 账户请求触发频率限制(429)，等待{retry_after}秒")
-                            await asyncio.sleep(retry_after)
+                                f"⚠️ [HTTP获取器] 遇到严重错误({resp.status})，触发重启")
+                            asyncio.create_task(self._handle_restart(f"HTTP {resp.status}错误"))
+                            return  # 退出当前任务
+
+                        # 🔴 正确处理：429频率限制 - 等待后继续（HTTP短连接，无需特殊处理）
+                        elif resp.status == 429:
+                            wait_time = await self._get_retry_after_time(resp)
+                            logger.warning(
+                                f"⚠️ [HTTP获取器] 触发频率限制(429)，等待{wait_time}秒后继续")
+                            await asyncio.sleep(wait_time)
+                            continue  # 继续循环，无需清理连接
+
+                        # 其他错误
                         else:
+                            logger.error(f"❌ [HTTP获取器] 账户请求失败 {error_msg}")
                             await asyncio.sleep(self.account_check_interval)
 
             except asyncio.CancelledError:
@@ -426,6 +440,77 @@ class PrivateHTTPFetcher:
                 self.quality_stats['account_fetch']['last_error'] = error_msg
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
+
+    async def _get_retry_after_time(self, resp) -> int:
+        """
+        从429响应中获取建议的等待时间（简化版）
+        
+        Args:
+            resp: HTTP响应对象
+            
+        Returns:
+            建议等待时间（秒）
+        """
+        # 1. 优先从响应头获取建议等待时间
+        for header in ['Retry-After', 'retry-after']:
+            if header in resp.headers:
+                try:
+                    wait_time = int(resp.headers[header])
+                    # 确保在合理范围内（10-300秒）
+                    return max(10, min(wait_time, 300))
+                except (ValueError, TypeError):
+                    continue
+        
+        # 2. 默认60秒（统一简单处理）
+        return 60
+
+    async def _handle_restart(self, reason: str):
+        """
+        处理重启逻辑 - 所有严重错误都立即重启
+        
+        🔴 注意：418/401错误需要清理session，因为可能是IP封禁或权限问题
+        """
+        if self.in_restart_cooldown:
+            return
+            
+        self.in_restart_cooldown = True
+        self.restart_attempts += 1
+        
+        logger.warning(f"🔄 [HTTP获取器] 立即重启（原因: {reason} | 第{self.restart_attempts}次重启）")
+        
+        # 1. 取消所有fetch任务
+        for task in self.fetch_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        self.fetch_tasks.clear()
+        
+        # 2. 🔴 关闭当前session（清理可能的被封禁连接）
+        if self.session and not self.session.closed:
+            await self.session.close()
+            logger.info("✅ [HTTP获取器] 重启前清理HTTP会话")
+        
+        if not self.running:
+            return
+        
+        # 3. 立即重新创建session（不等待）
+        timeout = aiohttp.ClientTimeout(total=30)
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        
+        # 4. 更新统计信息
+        self.quality_stats['account_fetch']['restart_count'] = self.restart_attempts
+        self.quality_stats['account_fetch']['last_restart'] = datetime.now().isoformat()
+        
+        # 5. 重置状态标志
+        self.account_fetched = False
+        self.account_fetch_success = False
+        self.has_position = False
+        self.account_check_interval = 1
+        
+        logger.info(f"✅ [HTTP获取器] 重启完成，准备重新执行调度流程（将等待4分钟）")
 
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -475,6 +560,7 @@ class PrivateHTTPFetcher:
         """关闭获取器 - 模仿pool_manager.shutdown()"""
         logger.info("🛑 [HTTP获取器] 正在关闭...")
         self.running = False
+        self.in_restart_cooldown = True  # 阻止重启
 
         # 取消调度任务
         if self.scheduler_task:
@@ -518,6 +604,11 @@ class PrivateHTTPFetcher:
                 'high_freq': self.account_high_freq,
                 'low_freq': self.account_low_freq
             },
+            'restart_info': {
+                'restart_attempts': self.restart_attempts,
+                'in_restart_cooldown': self.in_restart_cooldown,
+                'last_restart': self.quality_stats['account_fetch'].get('last_restart')
+            },
             'quality_stats': self.quality_stats,
             'retry_strategy': {
                 'account_retries': f"{self.max_account_retries}次重试",
@@ -530,7 +621,9 @@ class PrivateHTTPFetcher:
             },
             'schedule': {
                 'account': '启动后4分钟开始，5次指数退避重试，然后自适应频率',
-                'data_type': '仅获取账户数据（包含持仓信息）'
+                'data_type': '仅获取账户数据（包含持仓信息）',
+                'auto_restart': '遇到418/401错误立即重启（无限次）',
+                'rate_limit': '429错误等待建议时间后继续（无需特殊处理）'
             },
             'endpoints': {
                 'account': self.ACCOUNT_ENDPOINT,
