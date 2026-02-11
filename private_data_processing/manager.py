@@ -38,7 +38,7 @@ class PrivateDataProcessor:
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
             
-            # 🔴 === 币安订单更新专用处理（分类+追加+清理）===
+            # 🔴 === 币安订单更新专用处理（分类+去重+覆盖+清理）===
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
                 
                 o = raw_data['o']
@@ -75,14 +75,31 @@ class PrivateDataProcessor:
                     classified[classified_key] = []
                     logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
                 
-                # 4. 追加新记录
-                classified[classified_key].append({
-                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                    'received_at': private_data.get('received_at', datetime.now().isoformat()),
-                    'data': raw_data
-                })
-                
-                logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                # 4. 去重检查并追加新记录（按订单ID去重）
+                order_id = raw_data['o'].get('i')
+                if order_id:
+                    # 检查是否已存在相同订单ID
+                    existing = False
+                    for item in classified[classified_key]:
+                        if item['data']['o'].get('i') == order_id:
+                            existing = True
+                            logger.debug(f"🔄 [币安订单] 跳过重复订单: {order_id}")
+                            break
+                    
+                    if not existing:
+                        classified[classified_key].append({
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                            'data': raw_data
+                        })
+                        logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                else:
+                    classified[classified_key].append({
+                        'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                        'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                        'data': raw_data
+                    })
+                    logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
                 # 5. 平仓清理：删除该合约所有分类缓存
                 if is_closing_event(category):
