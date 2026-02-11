@@ -38,15 +38,13 @@ class PrivateDataProcessor:
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
             
-            # 🔴【新增】判断是否是币安订单更新
-            is_binance_order = (
-                exchange == 'binance' 
-                and raw_data.get('e') == 'ORDER_TRADE_UPDATE'
-            )
-            
-            # 🔴【新增】币安订单分类缓存流程
-            if is_binance_order:
+            # 🟢【置顶】币安订单更新专用通道 - 优先执行
+            if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
+                
                 # 1. 分类
+                from .classifier import classify_binance_order
+                from .cache_manager import save_order_event, clear_symbol_cache
+                
                 category = classify_binance_order(private_data)
                 
                 # 2. 提取合约名
@@ -73,8 +71,8 @@ class PrivateDataProcessor:
                     'received_at': datetime.now().isoformat()
                 }
                 
-                logger.debug(f"📨 [币安订单] {symbol} {category}")
-                return  # 直接返回，不走下面的通用流程
+                logger.info(f"✅ [币安订单分类] {symbol} {category}")
+                return  # ⚠️ 立即返回，不走老逻辑
             
             # ---------- 原有代码，一字不改 ----------
             # 🔴 判断数据来源：HTTP获取器 vs WebSocket
