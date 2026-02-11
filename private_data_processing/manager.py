@@ -1,15 +1,15 @@
 """
-私人数据处理器 - 增加币安订单分类缓存
-只修改 receive_private_data 方法，其他完全不变
+私人数据处理器 - 最简版本
+只接收、存储、查看私人数据
 """
 import logging
 from datetime import datetime
 from typing import Dict, Any
 
-from .classifier import classify_binance_order
-from .cache_manager import save_order_event, clear_symbol_cache
-
 logger = logging.getLogger(__name__)
+
+from .binance_classifier import classify_binance_order, is_closing_event
+
 
 class PrivateDataProcessor:
     """私人数据处理器（单例模式）"""
@@ -23,7 +23,7 @@ class PrivateDataProcessor:
     
     def __init__(self):
         if not self._initialized:
-            # 仿制大脑的存储结构
+            # 🔴 仿制大脑的存储结构
             self.memory_store = {'private_data': {}}
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
@@ -38,44 +38,48 @@ class PrivateDataProcessor:
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
             
-            # 🟢【置顶】币安订单更新专用通道 - 优先执行
+            # 🔴 === 币安订单更新专用处理（分类+追加+清理）===
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
                 
                 # 1. 分类
-                from .classifier import classify_binance_order
-                from .cache_manager import save_order_event, clear_symbol_cache
-                
                 category = classify_binance_order(private_data)
+                symbol = raw_data['o']['s']
+                classified_key = f"{symbol}_{category}"
                 
-                # 2. 提取合约名
-                try:
-                    symbol = raw_data['o']['s']
-                except (KeyError, TypeError):
-                    logger.error("❌ 币安订单数据缺少 o.s 字段")
-                    symbol = 'unknown'
+                # 2. 初始化/获取分类存储结构
+                if 'binance_order_update' not in self.memory_store['private_data']:
+                    self.memory_store['private_data']['binance_order_update'] = {
+                        'exchange': 'binance',
+                        'data_type': 'order_update',
+                        'classified': {}
+                    }
                 
-                # 3. 保存到分类文件（追加）
-                save_order_event(symbol, category, private_data)
+                classified = self.memory_store['private_data']['binance_order_update']['classified']
                 
-                # 4. 如果是平仓类事件，清理该合约所有缓存
-                if category in ['08_主动平仓', '06_触发止损', '07_触发止盈']:
-                    clear_symbol_cache(symbol)
+                # 3. 按分类key追加数据
+                if classified_key not in classified:
+                    classified[classified_key] = []
                 
-                # 5. 仍然存入 memory_store（保持API兼容）
-                storage_key = f"{exchange}_order_update"
-                self.memory_store['private_data'][storage_key] = {
-                    'exchange': exchange,
-                    'data_type': 'order_update',
-                    'data': raw_data,
+                classified[classified_key].append({
                     'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                    'received_at': datetime.now().isoformat()
-                }
+                    'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                    'data': raw_data
+                })
                 
-                logger.info(f"✅ [币安订单分类] {symbol} {category}")
-                return  # ⚠️ 立即返回，不走老逻辑
+                logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                
+                # 4. 平仓清理：删除该合约所有分类缓存
+                if is_closing_event(category):
+                    keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+                    for k in keys_to_delete:
+                        del classified[k]
+                    logger.info(f"🧹 [币安订单] 平仓清理: {symbol} 所有缓存已删除 ({len(keys_to_delete)}类)")
+                
+                # 🔴 币安订单处理完毕，直接返回（不走老逻辑）
+                return
             
-            # ---------- 原有代码，一字不改 ----------
-            # 🔴 判断数据来源：HTTP获取器 vs WebSocket
+            # === 以下为原有代码（完全不变）===
+            # 🔴 【关键修复】判断数据来源：HTTP获取器 vs WebSocket
             if source == 'http_fetcher':
                 # HTTP获取器的数据：直接使用传入的 data_type
                 final_data_type = private_data.get('data_type', 'unknown')
@@ -94,7 +98,6 @@ class PrivateDataProcessor:
                     # 🗺️ 2. 币安事件类型映射
                     binance_mapping = {
                         'ACCOUNT_UPDATE': 'account_update',
-                        'ORDER_TRADE_UPDATE': 'order_update',
                         'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
                         'MARGIN_CALL': 'risk_event',
                         'listenKeyExpired': 'system_event',
@@ -103,17 +106,22 @@ class PrivateDataProcessor:
                         'executionReport': 'order_update'
                     }
                     
+                    # 使用映射后的data_type
                     if event_type in binance_mapping:
                         final_data_type = binance_mapping[event_type]
                         logger.debug(f"📨 [私人数据处理] 币安事件映射: {event_type} -> {final_data_type}")
                     else:
+                        # 对于未映射的事件，使用原生事件名的小写
                         final_data_type = event_type.lower()
                         
                 else:
                     # 其他交易所（如OKX）保持原有的data_type
                     final_data_type = private_data.get('data_type', 'unknown')
             
-            # 存储数据到 memory_store
+            # 🔴 【新增】记录完整信息便于调试
+            logger.debug(f"📨 [私人数据处理] 收到{exchange}.{final_data_type}数据")
+            
+            # 存储数据
             storage_key = f"{exchange}_{final_data_type}"
             
             self.memory_store['private_data'][storage_key] = {
@@ -121,7 +129,7 @@ class PrivateDataProcessor:
                 'data_type': final_data_type,
                 'data': raw_data,
                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                'received_at': datetime.now().isoformat()
+                'received_at': private_data.get('received_at', datetime.now().isoformat())
             }
             
             logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
@@ -129,7 +137,6 @@ class PrivateDataProcessor:
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
     
-    # ---------- 以下所有方法一字不改，完全保留 ----------
     async def get_all_data(self) -> Dict[str, Any]:
         """获取所有私人数据概览（仿制大脑接口）"""
         try:
@@ -192,6 +199,20 @@ class PrivateDataProcessor:
         try:
             key = f"{exchange.lower()}_{data_type.lower()}"
             
+            # 🔴 特殊处理：币安订单更新，返回分类结构
+            if key == 'binance_order_update':
+                if key in self.memory_store['private_data']:
+                    return self.memory_store['private_data'][key]
+                else:
+                    # 还没有任何订单数据时，返回空分类结构
+                    return {
+                        "exchange": "binance",
+                        "data_type": "order_update",
+                        "classified": {},
+                        "note": "暂无订单数据"
+                    }
+            
+            # 其他数据类型：保持原样返回
             if key in self.memory_store['private_data']:
                 data = self.memory_store['private_data'][key]
                 return {
@@ -218,6 +239,7 @@ class PrivateDataProcessor:
                 "timestamp": datetime.now().isoformat()
             }
 
+
 # 全局单例实例
 _global_processor = PrivateDataProcessor()
 
@@ -226,5 +248,8 @@ def get_processor():
     return _global_processor
 
 async def receive_private_data(private_data):
-    """供连接池调用的函数接口"""
+    """
+    供连接池调用的函数接口
+    使用全局单例
+    """
     return await _global_processor.receive_private_data(private_data)
