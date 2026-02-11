@@ -1,6 +1,6 @@
 """
-私人数据处理模块
-简化版：只接收、存储、查看私人数据
+私人数据处理模块初始化文件
+导出接口保持不变，完全兼容
 """
 from .manager import (
     PrivateDataProcessor,
@@ -8,7 +8,11 @@ from .manager import (
     receive_private_data
 )
 
-__version__ = '1.0.0'
+# 新增导出（可选，不导出也不影响核心功能）
+from .classifier import classify_binance_order
+from .cache_manager import save_order_event, clear_symbol_cache
+
+__version__ = '1.1.0'  # 版本号升级
 __all__ = [
     'PrivateDataProcessor',
     'get_processor',

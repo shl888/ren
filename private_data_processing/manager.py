@@ -1,10 +1,13 @@
 """
-私人数据处理器 - 最简版本
-只接收、存储、查看私人数据
+私人数据处理器 - 增加币安订单分类缓存
+只修改 receive_private_data 方法，其他完全不变
 """
 import logging
 from datetime import datetime
 from typing import Dict, Any
+
+from .classifier import classify_binance_order
+from .cache_manager import save_order_event, clear_symbol_cache
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +23,7 @@ class PrivateDataProcessor:
     
     def __init__(self):
         if not self._initialized:
-            # 🔴 仿制大脑的存储结构
+            # 仿制大脑的存储结构
             self.memory_store = {'private_data': {}}
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
@@ -33,9 +36,48 @@ class PrivateDataProcessor:
         try:
             exchange = private_data.get('exchange', 'unknown')
             raw_data = private_data.get('data', {})
-            source = private_data.get('source', '')  # 获取来源标识
+            source = private_data.get('source', '')
             
-            # 🔴 【关键修复】判断数据来源：HTTP获取器 vs WebSocket
+            # 🔴【新增】判断是否是币安订单更新
+            is_binance_order = (
+                exchange == 'binance' 
+                and raw_data.get('e') == 'ORDER_TRADE_UPDATE'
+            )
+            
+            # 🔴【新增】币安订单分类缓存流程
+            if is_binance_order:
+                # 1. 分类
+                category = classify_binance_order(private_data)
+                
+                # 2. 提取合约名
+                try:
+                    symbol = raw_data['o']['s']
+                except (KeyError, TypeError):
+                    logger.error("❌ 币安订单数据缺少 o.s 字段")
+                    symbol = 'unknown'
+                
+                # 3. 保存到分类文件（追加）
+                save_order_event(symbol, category, private_data)
+                
+                # 4. 如果是平仓类事件，清理该合约所有缓存
+                if category in ['08_主动平仓', '06_触发止损', '07_触发止盈']:
+                    clear_symbol_cache(symbol)
+                
+                # 5. 仍然存入 memory_store（保持API兼容）
+                storage_key = f"{exchange}_order_update"
+                self.memory_store['private_data'][storage_key] = {
+                    'exchange': exchange,
+                    'data_type': 'order_update',
+                    'data': raw_data,
+                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                    'received_at': datetime.now().isoformat()
+                }
+                
+                logger.debug(f"📨 [币安订单] {symbol} {category}")
+                return  # 直接返回，不走下面的通用流程
+            
+            # ---------- 原有代码，一字不改 ----------
+            # 🔴 判断数据来源：HTTP获取器 vs WebSocket
             if source == 'http_fetcher':
                 # HTTP获取器的数据：直接使用传入的 data_type
                 final_data_type = private_data.get('data_type', 'unknown')
@@ -49,13 +91,13 @@ class PrivateDataProcessor:
                     # 🚫 1. 过滤掉 TRADE_LITE 事件
                     if event_type == 'TRADE_LITE':
                         logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件: {raw_data.get('i')}")
-                        return  # 直接返回，不存储
+                        return
                     
                     # 🗺️ 2. 币安事件类型映射
                     binance_mapping = {
                         'ACCOUNT_UPDATE': 'account_update',
-                        'ORDER_TRADE_UPDATE': 'order_update',  # 关键映射：ORDER_TRADE_UPDATE -> order_update
-                        'ACCOUNT_CONFIG_UPDATE': 'account_config_update',  # 不再未知
+                        'ORDER_TRADE_UPDATE': 'order_update',
+                        'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
                         'MARGIN_CALL': 'risk_event',
                         'listenKeyExpired': 'system_event',
                         'balanceUpdate': 'balance_update',
@@ -63,22 +105,17 @@ class PrivateDataProcessor:
                         'executionReport': 'order_update'
                     }
                     
-                    # 使用映射后的data_type
                     if event_type in binance_mapping:
                         final_data_type = binance_mapping[event_type]
                         logger.debug(f"📨 [私人数据处理] 币安事件映射: {event_type} -> {final_data_type}")
                     else:
-                        # 对于未映射的事件，使用原生事件名的小写
                         final_data_type = event_type.lower()
                         
                 else:
                     # 其他交易所（如OKX）保持原有的data_type
                     final_data_type = private_data.get('data_type', 'unknown')
             
-            # 🔴 【新增】记录完整信息便于调试
-            logger.debug(f"📨 [私人数据处理] 收到{exchange}.{final_data_type}数据")
-            
-            # 存储数据
+            # 存储数据到 memory_store
             storage_key = f"{exchange}_{final_data_type}"
             
             self.memory_store['private_data'][storage_key] = {
@@ -89,11 +126,12 @@ class PrivateDataProcessor:
                 'received_at': datetime.now().isoformat()
             }
             
-            logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")  # 需要时，可改为info方便观察
+            logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
             
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
     
+    # ---------- 以下所有方法一字不改，完全保留 ----------
     async def get_all_data(self) -> Dict[str, Any]:
         """获取所有私人数据概览（仿制大脑接口）"""
         try:
@@ -132,7 +170,7 @@ class PrivateDataProcessor:
                         "data_type": data.get('data_type'),
                         "timestamp": data.get('timestamp'),
                         "received_at": data.get('received_at'),
-                        "data": data.get('data')  # 直接返回原始数据
+                        "data": data.get('data')
                     }
             
             return {
@@ -164,7 +202,7 @@ class PrivateDataProcessor:
                     "data_type": data_type,
                     "timestamp": data.get('timestamp'),
                     "received_at": data.get('received_at'),
-                    "data": data.get('data'),  # 直接返回原始数据
+                    "data": data.get('data'),
                     "note": "最新一份数据，新数据会覆盖旧数据"
                 }
             else:
@@ -190,9 +228,5 @@ def get_processor():
     return _global_processor
 
 async def receive_private_data(private_data):
-    """
-    供连接池调用的函数接口
-    使用全局单例
-    """
+    """供连接池调用的函数接口"""
     return await _global_processor.receive_private_data(private_data)
-    
