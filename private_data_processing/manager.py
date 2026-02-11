@@ -41,14 +41,17 @@ class PrivateDataProcessor:
             # 🔴 === 币安订单更新专用处理（分类+追加+清理）===
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
                 
-                # 🚫 过滤未成交的中间状态（NEW, l=0, z=0）
                 o = raw_data['o']
-                if o.get('X') == 'NEW' and o.get('l') == '0' and o.get('z') == '0':
-                    logger.debug(f"⏭️ [币安订单] 过滤未成交中间状态: {o.get('i')}")
+                
+                # 🚫 只过滤市价单的未成交中间状态（开仓/平仓的NEW状态）
+                if o.get('o') == 'MARKET' and o.get('ot') == 'MARKET' and o.get('X') == 'NEW' and o.get('l') == '0' and o.get('z') == '0':
+                    logger.debug(f"⏭️ [币安订单] 过滤市价单未成交中间状态: {o.get('i')}")
                     return
                 
                 # 1. 分类
                 category = classify_binance_order(private_data)
+                logger.debug(f"🔍 [币安订单] 分类结果: {category}")
+                
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
                 
