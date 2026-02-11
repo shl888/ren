@@ -41,6 +41,12 @@ class PrivateDataProcessor:
             # 🔴 === 币安订单更新专用处理（分类+追加+清理）===
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
                 
+                # 🚫 过滤未成交的中间状态（NEW, l=0, z=0）
+                o = raw_data['o']
+                if o.get('X') == 'NEW' and o.get('l') == '0' and o.get('z') == '0':
+                    logger.debug(f"⏭️ [币安订单] 过滤未成交中间状态: {o.get('i')}")
+                    return
+                
                 # 1. 分类
                 category = classify_binance_order(private_data)
                 symbol = raw_data['o']['s']
@@ -56,10 +62,25 @@ class PrivateDataProcessor:
                 
                 classified = self.memory_store['private_data']['binance_order_update']['classified']
                 
-                # 3. 按分类key追加数据
+                # 3. 按分类key存储，止盈止损设置/取消需要覆盖更新
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
+                # 🔴 止盈止损的设置和取消 → 删除同合约、同ot、同client_id的旧记录
+                if category in ['02_设止损', '03_取消止损', '04_设止盈', '05_取消止盈']:
+                    client_id = raw_data['o'].get('c', '')
+                    original_order_type = raw_data['o'].get('ot', '')
+                    
+                    # 只删除同合约、同原始订单类型、同客户端ID的记录
+                    classified[classified_key] = [
+                        item for item in classified[classified_key]
+                        if not (
+                            item['data']['o'].get('c') == client_id 
+                            and item['data']['o'].get('ot') == original_order_type
+                        )
+                    ]
+                
+                # 4. 追加新记录
                 classified[classified_key].append({
                     'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                     'received_at': private_data.get('received_at', datetime.now().isoformat()),
@@ -68,7 +89,7 @@ class PrivateDataProcessor:
                 
                 logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
-                # 4. 平仓清理：删除该合约所有分类缓存
+                # 5. 平仓清理：删除该合约所有分类缓存
                 if is_closing_event(category):
                     keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                     for k in keys_to_delete:
@@ -170,13 +191,30 @@ class PrivateDataProcessor:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
                 if key.startswith(f"{exchange.lower()}_"):
-                    exchange_data[key] = {
-                        "exchange": data.get('exchange'),
-                        "data_type": data.get('data_type'),
-                        "timestamp": data.get('timestamp'),
-                        "received_at": data.get('received_at'),
-                        "data": data.get('data')
-                    }
+                    # 🔴 特殊处理：币安订单更新，返回分类统计摘要
+                    if key == 'binance_order_update':
+                        classified = data.get('classified', {})
+                        summary = {}
+                        for k, v in classified.items():
+                            summary[k] = len(v)
+                        
+                        exchange_data[key] = {
+                            "exchange": data.get('exchange'),
+                            "data_type": data.get('data_type'),
+                            "timestamp": data.get('timestamp'),
+                            "received_at": data.get('received_at'),
+                            "summary": summary,
+                            "note": "各类别事件数量统计，详情请查询具体data_type"
+                        }
+                    else:
+                        # 其他数据类型保持原样
+                        exchange_data[key] = {
+                            "exchange": data.get('exchange'),
+                            "data_type": data.get('data_type'),
+                            "timestamp": data.get('timestamp'),
+                            "received_at": data.get('received_at'),
+                            "data": data.get('data')
+                        }
             
             return {
                 "exchange": exchange,
