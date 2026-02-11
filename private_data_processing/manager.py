@@ -65,23 +65,15 @@ class PrivateDataProcessor:
                 
                 classified = self.memory_store['private_data']['binance_order_update']['classified']
                 
-                # 3. 按分类key存储，止盈止损设置/取消需要覆盖更新
+                # 3. 按分类key存储
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
-                # 🔴 止盈止损的设置和取消 → 删除同合约、同ot、同client_id的旧记录
+                # 🔴 止盈止损的设置和取消 → 同一个合约只能保留最新一条
                 if category in ['02_设止损', '03_取消止损', '04_设止盈', '05_取消止盈']:
-                    client_id = raw_data['o'].get('c', '')
-                    original_order_type = raw_data['o'].get('ot', '')
-                    
-                    # 只删除同合约、同原始订单类型、同客户端ID的记录
-                    classified[classified_key] = [
-                        item for item in classified[classified_key]
-                        if not (
-                            item['data']['o'].get('c') == client_id 
-                            and item['data']['o'].get('ot') == original_order_type
-                        )
-                    ]
+                    # 直接清空该合约下这类事件的所有历史记录
+                    classified[classified_key] = []
+                    logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
                 
                 # 4. 追加新记录
                 classified[classified_key].append({
