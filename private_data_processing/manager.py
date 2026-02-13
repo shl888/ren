@@ -92,7 +92,8 @@ class PrivateDataProcessor:
                     classified[classified_key] = []
                 
                 # 🔴 止盈止损的设置和取消 → 同一个合约只能保留最新一条
-                if category in ['02_设止损', '03_取消止损', '04_设止盈', '05_取消止盈']:
+                # 更新分类名称
+                if category in ['02_设置止损', '03_设置止盈', '07_取消止损', '08_取消止盈']:
                     # 直接清空该合约下这类事件的所有历史记录
                     classified[classified_key] = []
                     logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
@@ -124,6 +125,7 @@ class PrivateDataProcessor:
                     logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
                 # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
+                # is_closing_event 已经返回 ['06_主动平仓', '04_触发止损', '05_触发止盈']
                 if is_closing_event(category):
                     # 只获取该symbol相关的keys（不影响其他持仓合约）
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
