@@ -3,8 +3,9 @@
 只接收、存储、查看私人数据
 """
 import logging
-from datetime import datetime
-from typing import Dict, Any
+import asyncio
+from datetime import datetime, timedelta
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,27 @@ class PrivateDataProcessor:
             self.memory_store = {'private_data': {}}
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
+    
+    async def _delayed_delete(self, keys: List[str], symbol: str):
+        """5分钟后删除指定keys"""
+        try:
+            await asyncio.sleep(300)  # 5分钟 = 300秒
+            
+            # 检查并获取分类存储
+            if 'binance_order_update' not in self.memory_store['private_data']:
+                return
+                
+            classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
+            
+            # 再次确认这些key还存在（可能已经被手动清理或其他操作）
+            still_exist = [k for k in keys if k in classified]
+            for k in still_exist:
+                del classified[k]
+            
+            if still_exist:
+                logger.info(f"🧹 [币安订单] 延迟清理完成: {symbol} 已删除 {len(still_exist)}类")
+        except Exception as e:
+            logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
     
     async def receive_private_data(self, private_data):
         """
@@ -101,12 +123,15 @@ class PrivateDataProcessor:
                     })
                     logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
-                # 5. 平仓清理：删除该合约所有分类缓存
+                # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
                 if is_closing_event(category):
-                    keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                    for k in keys_to_delete:
-                        del classified[k]
-                    logger.info(f"🧹 [币安订单] 平仓清理: {symbol} 所有缓存已删除 ({len(keys_to_delete)}类)")
+                    # 只获取该symbol相关的keys（不影响其他持仓合约）
+                    keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+                    
+                    # 启动异步延迟删除任务
+                    asyncio.create_task(self._delayed_delete(keys_to_delayed_delete, symbol))
+                    
+                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5分钟后清理 ({len(keys_to_delayed_delete)}类)")
                 
                 # 🔴 币安订单处理完毕，直接返回（不走老逻辑）
                 return
