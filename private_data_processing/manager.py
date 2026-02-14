@@ -125,7 +125,7 @@ class PrivateDataProcessor:
                     logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
                 # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
-                # is_closing_event 已经返回 ['06_主动平仓', '04_触发止损', '05_触发止盈']
+                # is_closing_event 已经返回 ['04_触发止损', '05_触发止盈', '06_主动平仓']
                 if is_closing_event(category):
                     # 只获取该symbol相关的keys（不影响其他持仓合约）
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
