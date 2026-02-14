@@ -1,6 +1,6 @@
 """
 币安订单事件分类器 - 纯函数，无状态
-13种事件分类规则（包含开仓细分），输入原始data，返回分类字符串
+16种事件分类规则，输入原始data，返回分类字符串
 """
 from typing import Dict, Any
 
@@ -9,11 +9,14 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
     """
     币安订单更新事件分类
     返回: 
-    '01_开仓(部分)', '02_开仓(全部)', '03_设置止损', '04_设置止盈', 
-    '05_触发止损', '06_触发止盈', '07_主动平仓',
-    '08_取消止损', '09_取消止盈', 
-    '10_止损过期(被触发)', '11_止损过期(被取消)', 
-    '12_止盈过期(被触发)', '13_止盈过期(被取消)',
+    '01_开仓(部分成交)', '02_开仓(全部成交)',
+    '03_设置止损', '04_设置止盈',
+    '05_触发止损(部分成交)', '06_触发止损(全部成交)',
+    '07_触发止盈(部分成交)', '08_触发止盈(全部成交)',
+    '09_主动平仓(部分成交)', '10_主动平仓(全部成交)',
+    '11_取消止损', '12_取消止盈',
+    '13_止损过期(被触发)', '14_止损过期(被取消)',
+    '15_止盈过期(被触发)', '16_止盈过期(被取消)',
     '99_其他'
     """
     try:
@@ -27,58 +30,65 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         cp = o.get('cp', False)   # 是否条件单
         er = o.get('er', '0')     # 错误码
         
-        # 1-2. 开仓细分：买单 + 原始市价单
+        # ===== 开仓 =====
         if s == 'BUY' and ot == 'MARKET':
             if x_status == 'PARTIALLY_FILLED':
-                return '01_开仓(部分)'
+                return '01_开仓(部分成交)'
             if x_status == 'FILLED':
-                return '02_开仓(全部)'
+                return '02_开仓(全部成交)'
         
-        # 3. 设置止损：止损单 + 新建状态
+        # ===== 设置类 =====
         if ot == 'STOP_MARKET' and x_status == 'NEW':
             return '03_设置止损'
         
-        # 4. 设置止盈：止盈单 + 新建状态
         if ot == 'TAKE_PROFIT_MARKET' and x_status == 'NEW':
             return '04_设置止盈'
         
-        # 5. 触发止损：当前市价单 + 原始止损单 + 有触发价 + 成交
-        if o_type == 'MARKET' and ot == 'STOP_MARKET' and sp != '0' and x_status == 'FILLED':
-            return '05_触发止损'
+        # ===== 触发止损 =====
+        if o_type == 'MARKET' and ot == 'STOP_MARKET' and sp != '0':
+            if x_status == 'PARTIALLY_FILLED':
+                return '05_触发止损(部分成交)'
+            if x_status == 'FILLED':
+                return '06_触发止损(全部成交)'
         
-        # 6. 触发止盈：当前市价单 + 原始止盈单 + 有触发价 + 成交
-        if o_type == 'MARKET' and ot == 'TAKE_PROFIT_MARKET' and sp != '0' and x_status == 'FILLED':
-            return '06_触发止盈'
+        # ===== 触发止盈 =====
+        if o_type == 'MARKET' and ot == 'TAKE_PROFIT_MARKET' and sp != '0':
+            if x_status == 'PARTIALLY_FILLED':
+                return '07_触发止盈(部分成交)'
+            if x_status == 'FILLED':
+                return '08_触发止盈(全部成交)'
         
-        # 7. 主动平仓：卖单 + 原始市价单 + 无触发价 + 不是条件单 + 成交
-        if s == 'SELL' and ot == 'MARKET' and sp == '0' and cp is False and x_status == 'FILLED':
-            return '07_主动平仓'
+        # ===== 主动平仓 =====
+        if s == 'SELL' and ot == 'MARKET' and sp == '0' and cp is False:
+            if x_status == 'PARTIALLY_FILLED':
+                return '09_主动平仓(部分成交)'
+            if x_status == 'FILLED':
+                return '10_主动平仓(全部成交)'
         
-        # 8. 取消止损：止损单 + 取消状态
+        # ===== 取消类 =====
         if ot == 'STOP_MARKET' and x_status == 'CANCELED':
-            return '08_取消止损'
+            return '11_取消止损'
         
-        # 9. 取消止盈：止盈单 + 取消状态
         if ot == 'TAKE_PROFIT_MARKET' and x_status == 'CANCELED':
-            return '09_取消止盈'
+            return '12_取消止盈'
         
-        # 10-13. 过期分类（核心规律）
+        # ===== 过期类 =====
         if x_status == 'EXPIRED':
-            # 止损单过期
+            # 止损过期
             if ot == 'STOP_MARKET':
                 if er == '8':
-                    return '10_止损过期(被触发)'  # 被触发而结束
-                else:  # er == '6' 或其他
-                    return '11_止损过期(被取消)'  # 被动取消
+                    return '13_止损过期(被触发)'
+                else:
+                    return '14_止损过期(被取消)'
             
-            # 止盈单过期
+            # 止盈过期
             if ot == 'TAKE_PROFIT_MARKET':
                 if er == '8':
-                    return '12_止盈过期(被触发)'  # 被触发而结束
-                else:  # er == '6' 或其他
-                    return '13_止盈过期(被取消)'  # 被动取消
+                    return '15_止盈过期(被触发)'
+                else:
+                    return '16_止盈过期(被取消)'
         
-        # 99. 其他：所有未匹配的情况
+        # ===== 其他 =====
         return '99_其他'
     
     except (KeyError, TypeError, AttributeError):
@@ -86,5 +96,9 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
 
 
 def is_closing_event(category: str) -> bool:
-    """判断是否是平仓类事件（需要清理缓存）- 触发条件不变，还是3个"""
-    return category in ['05_触发止损', '06_触发止盈', '07_主动平仓']
+    """判断是否是平仓类事件（需要清理缓存）- 只有全部成交才触发"""
+    return category in [
+        '06_触发止损(全部成交)',
+        '08_触发止盈(全部成交)', 
+        '10_主动平仓(全部成交)'
+    ]
