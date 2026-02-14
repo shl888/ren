@@ -1,6 +1,6 @@
 """
 币安订单事件分类器 - 纯函数，无状态
-10种事件分类规则，输入原始data，返回分类字符串
+12种事件分类规则（包含过期细分），输入原始data，返回分类字符串
 """
 from typing import Dict, Any
 
@@ -8,9 +8,13 @@ from typing import Dict, Any
 def classify_binance_order(data: Dict[str, Any]) -> str:
     """
     币安订单更新事件分类
-    返回: '01_开仓', '02_设置止损', '03_设置止盈', '04_触发止损', '05_触发止盈', 
-          '06_主动平仓', '07_取消止损', '08_取消止盈', '09_止损过期', '10_止盈过期', 
-          '99_其他'
+    返回: 
+    '01_开仓', '02_设置止损', '03_设置止盈', 
+    '04_触发止损', '05_触发止盈', '06_主动平仓',
+    '07_取消止损', '08_取消止盈', 
+    '09_止损过期(触发)', '10_止损过期(取消)', 
+    '11_止盈过期(触发)', '12_止盈过期(取消)',
+    '99_其他'
     """
     try:
         o = data['data']['o']
@@ -55,13 +59,21 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         if ot == 'TAKE_PROFIT_MARKET' and x_status == 'CANCELED':
             return '08_取消止盈'
         
-        # 9. 止损过期：止损单 + 过期状态 + 错误码6（仓位已平导致自动取消）
-        if ot == 'STOP_MARKET' and x_status == 'EXPIRED' and er == '6':
-            return '09_止损过期'
-        
-        # 10. 止盈过期：止盈单 + 过期状态 + 错误码6（仓位已平导致自动取消）
-        if ot == 'TAKE_PROFIT_MARKET' and x_status == 'EXPIRED' and er == '6':
-            return '10_止盈过期'
+        # 9-12. 过期分类（核心规律）
+        if x_status == 'EXPIRED':
+            # 止损单过期
+            if ot == 'STOP_MARKET':
+                if er == '8':
+                    return '09_止损过期(触发)'  # 被触发而结束
+                else:  # er == '6' 或其他
+                    return '10_止损过期(取消)'  # 被动取消
+            
+            # 止盈单过期
+            if ot == 'TAKE_PROFIT_MARKET':
+                if er == '8':
+                    return '11_止盈过期(触发)'  # 被触发而结束
+                else:  # er == '6' 或其他
+                    return '12_止盈过期(取消)'  # 被动取消
         
         # 99. 其他：所有未匹配的情况
         return '99_其他'
