@@ -2,8 +2,11 @@
 币安订单事件分类器 - 纯函数，无状态
 12种事件分类规则（包含过期细分），输入原始data，返回分类字符串
 """
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def classify_binance_order(data: Dict[str, Any]) -> str:
@@ -60,7 +63,7 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         if ot == 'TAKE_PROFIT_MARKET' and x_status == 'CANCELED':
             return '08_取消止盈'
         
-        # 9-12. 过期分类（核心规律）
+        # 9-12. 过期分类
         if x_status == 'EXPIRED':
             # 止损单过期
             if ot == 'STOP_MARKET':
@@ -79,8 +82,30 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         # 99. 其他：所有未匹配的情况
         return '99_其他'
     
-    except (KeyError, TypeError, AttributeError):
+    except (KeyError, TypeError, AttributeError) as e:
+        logger.error(f"分类器错误: {e}")
         return '99_其他'
+
+
+def is_looking_event(category: str) -> bool:
+    """
+    判断是否是关注的事件
+    所有12种事件都是需要关注的
+    """
+    return category in [
+        '01_开仓',
+        '02_设置止损',
+        '03_设置止盈',
+        '04_触发止损',
+        '05_触发止盈',
+        '06_主动平仓',
+        '07_取消止损',
+        '08_取消止盈',
+        '09_止损过期(被触发)',
+        '10_止损过期(被取消)',
+        '11_止盈过期(被触发)',
+        '12_止盈过期(被取消)'
+    ]
 
 
 def is_trigger_event(category: str) -> bool:
@@ -145,6 +170,7 @@ class StrategyCache:
             'data': data,
             'timestamp': time.time()
         }
+        logger.debug(f"更新缓存: {strategy_name} - {category}")
         
     def cleanup_strategy_data(self, strategy_name: str, current_time: float = None):
         """
@@ -170,12 +196,13 @@ class StrategyCache:
         
         # 执行清理
         for category in categories_to_delete:
-            print(f"清理缓存: {strategy_name} - {category} (延迟{self.delay_seconds}秒)")
+            logger.info(f"清理缓存: {strategy_name} - {category} (延迟{self.delay_seconds}秒)")
             del strategy_data[category]
         
         # 如果策略下没有数据了，删除整个策略条目
         if not strategy_data:
             del self.strategies_data[strategy_name]
+            logger.info(f"删除空策略: {strategy_name}")
             
     def on_order_update(self, strategy_name: str, category: str, data: Dict[str, Any]):
         """
@@ -189,10 +216,10 @@ class StrategyCache:
         
         # 2. 判断是否触发清理动作
         if is_trigger_event(category):
-            print(f"触发清理动作: {strategy_name} - {category}")
+            logger.info(f"触发清理动作: {strategy_name} - {category}")
             self.cleanup_strategy_data(strategy_name)
             
-    def get_strategy_data(self, strategy_name: str, category: str = None) -> Dict:
+    def get_strategy_data(self, strategy_name: str, category: str = None) -> Optional[Dict]:
         """
         获取策略数据
         :param strategy_name: 策略名称
@@ -205,7 +232,21 @@ class StrategyCache:
         if category is None:
             return self.strategies_data[strategy_name]
             
-        return self.strategies_data[strategy_name].get(category, {}).get('data')
+        data_entry = self.strategies_data[strategy_name].get(category)
+        return data_entry.get('data') if data_entry else None
+    
+    def get_strategy_timestamp(self, strategy_name: str, category: str) -> Optional[float]:
+        """
+        获取策略数据的时间戳
+        :param strategy_name: 策略名称
+        :param category: 分类
+        :return: 时间戳或None
+        """
+        if strategy_name not in self.strategies_data:
+            return None
+            
+        data_entry = self.strategies_data[strategy_name].get(category)
+        return data_entry.get('timestamp') if data_entry else None
     
     def force_cleanup_all(self):
         """强制清理所有过期的策略数据（可定时调用）"""
@@ -221,10 +262,25 @@ class StrategyCache:
         # 清理空策略
         for strategy_name in strategies_to_delete:
             del self.strategies_data[strategy_name]
+        
+        if strategies_to_delete:
+            logger.info(f"定时清理完成，清理了 {len(strategies_to_delete)} 个空策略")
+
+
+# 创建全局缓存管理器实例
+global_cache = StrategyCache(delay_seconds=300)
+
+
+def get_cache_manager() -> StrategyCache:
+    """获取全局缓存管理器实例"""
+    return global_cache
 
 
 # 使用示例
 if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(level=logging.INFO)
+    
     # 创建缓存管理器（延迟5分钟）
     cache_manager = StrategyCache(delay_seconds=300)
     
@@ -238,12 +294,38 @@ if __name__ == "__main__":
         # 分类事件
         category = classify_binance_order(raw_data)
         
-        if category != '99_其他':
+        if is_looking_event(category):
             # 更新缓存并触发清理（如果需要）
             cache_manager.on_order_update(strategy_name, category, raw_data)
+            print(f"处理事件: {strategy_name} - {category}")
+        else:
+            print(f"忽略事件: {strategy_name} - {category}")
     
-    # 定时任务：强制清理所有过期数据（可每5分钟执行一次）
+    # 模拟数据
+    mock_data = {
+        "data": {
+            "o": {
+                "s": "XANUSDT",
+                "S": "SELL",
+                "ot": "STOP_MARKET",
+                "o": "STOP_MARKET",
+                "X": "EXPIRED",
+                "sp": "0.00812",
+                "cp": False,
+                "er": "6"
+            }
+        }
+    }
+    
+    # 测试
+    process_order_update(mock_data, "XANUSDT_10")
+    
+    # 定时清理任务（可每5分钟执行一次）
     def scheduled_cleanup():
         """定时清理任务"""
-        print("执行定时清理任务...")
+        logger.info("执行定时清理任务...")
         cache_manager.force_cleanup_all()
+    
+    # 模拟5分钟后清理
+    time.sleep(1)  # 实际使用时改为300秒
+    scheduled_cleanup()
