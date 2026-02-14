@@ -2,7 +2,8 @@
 币安订单事件分类器 - 纯函数，无状态
 12种事件分类规则（包含过期细分），输入原始data，返回分类字符串
 """
-from typing import Dict, Any
+from typing import Dict, Any, List, Tuple
+import time
 
 
 def classify_binance_order(data: Dict[str, Any]) -> str:
@@ -82,6 +83,167 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         return '99_其他'
 
 
-def is_closing_event(category: str) -> bool:
-    """判断是否是平仓类事件（需要清理缓存）"""
+def is_trigger_event(category: str) -> bool:
+    """
+    判断是否是触发清理动作的事件
+    只有这三种事件会触发缓存清理动作：
+    - 04_触发止损
+    - 05_触发止盈
+    - 06_主动平仓
+    """
     return category in ['04_触发止损', '05_触发止盈', '06_主动平仓']
+
+
+# 所有需要被清理的数据类型列表（共12种）
+ALL_DATA_TYPES_TO_CLEAN = [
+    '01_开仓',
+    '02_设置止损',
+    '03_设置止盈',
+    '04_触发止损',
+    '05_触发止盈',
+    '06_主动平仓',
+    '07_取消止损',
+    '08_取消止盈',
+    '09_止损过期(被触发)',
+    '10_止损过期(被取消)',
+    '11_止盈过期(被触发)',
+    '12_止盈过期(被取消)'
+]
+
+
+class StrategyCache:
+    """策略缓存管理类"""
+    
+    def __init__(self, delay_seconds: int = 300):
+        """
+        初始化缓存管理器
+        :param delay_seconds: 延迟清理时间，默认300秒（5分钟）
+        """
+        self.delay_seconds = delay_seconds
+        # 策略数据存储结构
+        # {
+        #     'strategy_name': {
+        #         '01_开仓': {'data': {}, 'timestamp': 1234567890},
+        #         '02_设置止损': {'data': {}, 'timestamp': 1234567890},
+        #         ...
+        #     }
+        # }
+        self.strategies_data = {}
+        
+    def update_strategy_data(self, strategy_name: str, category: str, data: Dict[str, Any]):
+        """
+        更新策略数据
+        :param strategy_name: 策略名称（如 XANUSDT_10）
+        :param category: 事件分类（01-12）
+        :param data: 原始数据
+        """
+        if strategy_name not in self.strategies_data:
+            self.strategies_data[strategy_name] = {}
+        
+        # 存储数据并记录时间戳
+        self.strategies_data[strategy_name][category] = {
+            'data': data,
+            'timestamp': time.time()
+        }
+        
+    def cleanup_strategy_data(self, strategy_name: str, current_time: float = None):
+        """
+        清理指定策略的缓存数据（延迟5分钟）
+        :param strategy_name: 策略名称
+        :param current_time: 当前时间戳，默认使用time.time()
+        """
+        if current_time is None:
+            current_time = time.time()
+            
+        if strategy_name not in self.strategies_data:
+            return
+            
+        strategy_data = self.strategies_data[strategy_name]
+        categories_to_delete = []
+        
+        # 找出所有需要清理的数据类型（超过延迟时间的）
+        for category in ALL_DATA_TYPES_TO_CLEAN:
+            if category in strategy_data:
+                data_timestamp = strategy_data[category]['timestamp']
+                if current_time - data_timestamp >= self.delay_seconds:
+                    categories_to_delete.append(category)
+        
+        # 执行清理
+        for category in categories_to_delete:
+            print(f"清理缓存: {strategy_name} - {category} (延迟{self.delay_seconds}秒)")
+            del strategy_data[category]
+        
+        # 如果策略下没有数据了，删除整个策略条目
+        if not strategy_data:
+            del self.strategies_data[strategy_name]
+            
+    def on_order_update(self, strategy_name: str, category: str, data: Dict[str, Any]):
+        """
+        订单更新事件处理
+        :param strategy_name: 策略名称
+        :param category: 事件分类
+        :param data: 原始数据
+        """
+        # 1. 先存储当前数据
+        self.update_strategy_data(strategy_name, category, data)
+        
+        # 2. 判断是否触发清理动作
+        if is_trigger_event(category):
+            print(f"触发清理动作: {strategy_name} - {category}")
+            self.cleanup_strategy_data(strategy_name)
+            
+    def get_strategy_data(self, strategy_name: str, category: str = None) -> Dict:
+        """
+        获取策略数据
+        :param strategy_name: 策略名称
+        :param category: 可选，指定分类
+        :return: 策略数据
+        """
+        if strategy_name not in self.strategies_data:
+            return {} if category is None else None
+            
+        if category is None:
+            return self.strategies_data[strategy_name]
+            
+        return self.strategies_data[strategy_name].get(category, {}).get('data')
+    
+    def force_cleanup_all(self):
+        """强制清理所有过期的策略数据（可定时调用）"""
+        current_time = time.time()
+        strategies_to_delete = []
+        
+        for strategy_name in list(self.strategies_data.keys()):
+            self.cleanup_strategy_data(strategy_name, current_time)
+            # 检查策略是否为空
+            if not self.strategies_data[strategy_name]:
+                strategies_to_delete.append(strategy_name)
+        
+        # 清理空策略
+        for strategy_name in strategies_to_delete:
+            del self.strategies_data[strategy_name]
+
+
+# 使用示例
+if __name__ == "__main__":
+    # 创建缓存管理器（延迟5分钟）
+    cache_manager = StrategyCache(delay_seconds=300)
+    
+    # 模拟收到订单更新
+    def process_order_update(raw_data: Dict[str, Any], strategy_name: str):
+        """
+        处理收到的订单更新
+        :param raw_data: 原始数据
+        :param strategy_name: 策略名称
+        """
+        # 分类事件
+        category = classify_binance_order(raw_data)
+        
+        if category != '99_其他':
+            # 更新缓存并触发清理（如果需要）
+            cache_manager.on_order_update(strategy_name, category, raw_data)
+    
+    # 定时任务：强制清理所有过期数据（可每5分钟执行一次）
+    def scheduled_cleanup():
+        """定时清理任务"""
+        print("执行定时清理任务...")
+        cache_manager.force_cleanup_all()
