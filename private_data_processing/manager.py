@@ -30,7 +30,7 @@ class PrivateDataProcessor:
             logger.info("✅ [私人数据处理] 模块已初始化")
     
     async def _delayed_delete(self, keys: List[str], symbol: str):
-        """5分钟后删除指定keys"""
+        """5分钟后删除该symbol所有当前存在的key（包括后来新增的）"""
         try:
             await asyncio.sleep(300)  # 5分钟 = 300秒
             
@@ -40,13 +40,17 @@ class PrivateDataProcessor:
                 
             classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
             
-            # 再次确认这些key还存在（可能已经被手动清理或其他操作）
-            still_exist = [k for k in keys if k in classified]
-            for k in still_exist:
+            # 🔴 重新获取该symbol当前的所有key（包括5分钟内新增的过期数据）
+            current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+            
+            for k in current_keys:
                 del classified[k]
             
-            if still_exist:
-                logger.info(f"🧹 [币安订单] 延迟清理完成: {symbol} 已删除 {len(still_exist)}类")
+            if current_keys:
+                logger.info(f"🧹 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
+            else:
+                logger.debug(f"⏭️ [币安订单] 延迟清理: {symbol} 已无数据可删")
+                
         except Exception as e:
             logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
     
