@@ -108,7 +108,13 @@ class PrivateDataProcessor:
                         logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已立即删除设置止盈记录")
                     return  # 直接返回，不保存取消数据
                 
-                # 3. 按分类key存储（只处理非取消类事件）
+                # ===== 过期事件不保存 =====
+                if category in ['13_止损过期(被触发)', '14_止损过期(被取消)', 
+                                '15_止盈过期(被触发)', '16_止盈过期(被取消)']:
+                    logger.debug(f"⏭️ [币安订单] 过期事件不缓存: {category}")
+                    return  # 直接返回，不保存
+                
+                # 3. 按分类key存储（只处理需要保存的事件）
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
