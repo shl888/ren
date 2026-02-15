@@ -91,13 +91,29 @@ class PrivateDataProcessor:
                 
                 classified = self.memory_store['private_data']['binance_order_update']['classified']
                 
-                # 3. 按分类key存储
+                # ===== 取消止损/止盈的立即清除逻辑 =====
+                if category == '11_取消止损':
+                    # 不保存取消数据，立即删除该合约的设置止损记录
+                    stop_loss_key = f"{symbol}_03_设置止损"
+                    if stop_loss_key in classified:
+                        del classified[stop_loss_key]
+                        logger.info(f"🗑️ [币安订单] {symbol} 取消止损，已立即删除设置止损记录")
+                    return  # 直接返回，不保存取消数据
+                
+                if category == '12_取消止盈':
+                    # 不保存取消数据，立即删除该合约的设置止盈记录
+                    take_profit_key = f"{symbol}_04_设置止盈"
+                    if take_profit_key in classified:
+                        del classified[take_profit_key]
+                        logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已立即删除设置止盈记录")
+                    return  # 直接返回，不保存取消数据
+                
+                # 3. 按分类key存储（只处理非取消类事件）
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
-                # 🔴 止盈止损的设置和取消 → 同一个合约只能保留最新一条
-                # 更新分类名称
-                if category in ['03_设置止损', '04_设置止盈', '11_取消止损', '12_取消止盈']:
+                # 🔴 止盈止损的设置事件 → 同一个合约只能保留最新一条
+                if category in ['03_设置止损', '04_设置止盈']:
                     # 直接清空该合约下这类事件的所有历史记录
                     classified[classified_key] = []
                     logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
