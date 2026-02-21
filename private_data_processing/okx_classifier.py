@@ -74,7 +74,7 @@ def classify_okx_order(data: Union[Dict[str, Any], list]) -> str:
                 logger.info(f"OKX分类: 开仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}")
                 return '02_开仓(部分成交)'
             elif reduce_only == 'true':
-                logger.info(f"OKX分类: 平仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}')
+                logger.info(f"OKX分类: 平仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}")
                 return '04_平仓(部分成交)'
             else:
                 logger.info(f"OKX分类: 其他部分成交 - {inst_id}, ordId={ord_id}")
