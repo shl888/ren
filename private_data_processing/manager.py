@@ -30,9 +30,9 @@ class PrivateDataProcessor:
             logger.info("✅ [私人数据处理] 模块已初始化")
     
     async def _binance_delayed_delete(self, keys: List[str], symbol: str):
-        """5分钟后删除该symbol所有当前存在的key（币安使用）"""
+        """30秒后删除该symbol所有当前存在的key（币安使用）"""
         try:
-            await asyncio.sleep(300)
+            await asyncio.sleep(30)
             
             if 'binance_order_update' not in self.memory_store['private_data']:
                 return
@@ -51,11 +51,11 @@ class PrivateDataProcessor:
     
     async def _okx_delayed_delete(self, symbol: str):
         """
-        5分钟后清理该symbol的所有相关数据
+        30秒后清理该symbol的所有相关数据
         包括：订单数据和持仓数据
         """
         try:
-            await asyncio.sleep(300)
+            await asyncio.sleep(30)
             
             # ===== 清理订单数据 =====
             if 'okx_order_update' in self.memory_store['private_data']:
@@ -68,31 +68,22 @@ class PrivateDataProcessor:
                 if order_keys:
                     logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(order_keys)}个订单分类")
             
-            # ===== 清理持仓数据 =====
-            # 清理positions数据
-            if 'okx_positions' in self.memory_store['private_data']:
-                positions_data = self.memory_store['private_data']['okx_positions']
-                if 'data' in positions_data and isinstance(positions_data['data'], list):
-                    # 过滤掉该symbol的持仓
-                    filtered_positions = []
-                    for pos in positions_data['data']:
-                        pos_symbol = pos.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
-                        if pos_symbol != symbol:
-                            filtered_positions.append(pos)
-                    
-                    positions_data['data'] = filtered_positions
-                    logger.info(f"🧹 [OKX持仓] 延迟清理完成: {symbol} 已从持仓中移除")
-            
-            # 清理position数据（单个持仓）
-            pos_key = f"okx_position_{symbol}"
+            # ===== 清理持仓数据 - 只清理 okx_position_update =====
+            pos_key = 'okx_position_update'
             if pos_key in self.memory_store['private_data']:
-                del self.memory_store['private_data'][pos_key]
-                logger.info(f"🧹 [OKX持仓] 延迟清理完成: 已删除 {pos_key}")
-            
-            # 清理账户更新中的相关数据
-            if 'okx_account_update' in self.memory_store['private_data']:
-                # 账户更新数据可能不需要清理特定symbol，但可以记录
-                logger.info(f"🧹 [OKX账户] 清理触发: {symbol} 平仓，账户数据保留")
+                # 检查这个持仓数据是否属于要清理的symbol
+                pos_data = self.memory_store['private_data'][pos_key]
+                data_field = pos_data.get('data', {})
+                
+                # 从原始数据格式中提取instId
+                if 'data' in data_field and isinstance(data_field['data'], list) and len(data_field['data']) > 0:
+                    inst_id = data_field['data'][0].get('instId', '')
+                    pos_symbol = inst_id.replace('-SWAP', '').replace('-USDT', '')
+                    
+                    # 只有属于这个symbol的才清理
+                    if pos_symbol == symbol:
+                        del self.memory_store['private_data'][pos_key]
+                        logger.info(f"🧹 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})")
             
             logger.info(f"✅ [OKX清理] {symbol} 所有相关数据清理完成")
                 
@@ -191,11 +182,11 @@ class PrivateDataProcessor:
                         'data': raw_data
                     })
                 
-                # 平仓处理：延迟5分钟清理
+                # 平仓处理：延迟30秒清理
                 if is_binance_closing(category):
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                     asyncio.create_task(self._binance_delayed_delete(keys_to_delayed_delete, symbol))
-                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5分钟后清理")
+                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在30秒后清理")
                 
                 return
             
@@ -303,10 +294,10 @@ class PrivateDataProcessor:
                         })
                         logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
                     
-                    # ===== 平仓全部成交：延迟5分钟清理所有相关数据 =====
+                    # ===== 平仓全部成交：延迟30秒清理所有相关数据 =====
                     if is_okx_closing(category):
                         asyncio.create_task(self._okx_delayed_delete(symbol))
-                        logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在5分钟后清理所有相关数据（订单+持仓）")
+                        logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在30秒后清理所有相关数据（订单+持仓）")
                     
                     return
                     
@@ -317,47 +308,23 @@ class PrivateDataProcessor:
                     return
             
             # ========== OKX持仓更新处理 ==========
-            if exchange == 'okx' and private_data.get('data_type') == 'positions':
+            if exchange == 'okx' and private_data.get('data_type') == 'position_update':
                 
                 logger.info(f"📥 [OKX持仓] 收到持仓更新")
                 
                 try:
-                    # 存储持仓数据
-                    storage_key = f"{exchange}_positions"
+                    # 直接存储原始数据 - 使用你提供的格式
+                    storage_key = f"{exchange}_position_update"
                     
-                    # 如果是数组格式，可能需要处理
-                    if isinstance(raw_data, list):
-                        self.memory_store['private_data'][storage_key] = {
-                            'exchange': exchange,
-                            'data_type': 'positions',
-                            'data': raw_data,
-                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                            'received_at': private_data.get('received_at', datetime.now().isoformat())
-                        }
-                    else:
-                        self.memory_store['private_data'][storage_key] = {
-                            'exchange': exchange,
-                            'data_type': 'positions',
-                            'data': raw_data,
-                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                            'received_at': private_data.get('received_at', datetime.now().isoformat())
-                        }
+                    self.memory_store['private_data'][storage_key] = {
+                        'exchange': exchange,
+                        'data_type': 'position_update',
+                        'data': raw_data,  # 直接存储原始数据
+                        'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                        'received_at': private_data.get('received_at', datetime.now().isoformat())
+                    }
                     
-                    # 同时存储单个持仓的便捷访问
-                    if isinstance(raw_data, list):
-                        for pos in raw_data:
-                            pos_symbol = pos.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
-                            if pos_symbol:
-                                pos_key = f"{exchange}_position_{pos_symbol}"
-                                self.memory_store['private_data'][pos_key] = {
-                                    'exchange': exchange,
-                                    'data_type': f'position_{pos_symbol}',
-                                    'data': pos,
-                                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                                    'received_at': private_data.get('received_at', datetime.now().isoformat())
-                                }
-                    
-                    logger.info(f"✅ [OKX持仓] 已保存")
+                    logger.info(f"✅ [OKX持仓] 已保存: {storage_key}")
                     
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
