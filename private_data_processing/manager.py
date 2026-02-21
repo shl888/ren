@@ -4,8 +4,7 @@
 """
 import logging
 import asyncio
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
@@ -155,26 +154,30 @@ class PrivateDataProcessor:
                 logger.info(f"📥 [OKX订单] 收到订单更新")
                 
                 try:
-                    # 提取订单数据 - OKX的数据结构: data.data 是一个数组
+                    # 提取订单数据 - OKX的数据结构: raw_data['data'] 是一个数组
                     if 'data' not in raw_data:
                         logger.error(f"❌ [OKX订单] 缺少data字段: {list(raw_data.keys())}")
                         return
                     
-                    if 'data' not in raw_data['data']:
-                        logger.error(f"❌ [OKX订单] 缺少data.data字段: {list(raw_data['data'].keys())}")
+                    # raw_data['data'] 应该是一个数组
+                    if not isinstance(raw_data['data'], list):
+                        logger.error(f"❌ [OKX订单] data不是数组: {type(raw_data['data'])}")
                         return
                     
-                    if not isinstance(raw_data['data']['data'], list):
-                        logger.error(f"❌ [OKX订单] data.data不是数组: {type(raw_data['data']['data'])}")
+                    if len(raw_data['data']) == 0:
+                        logger.error(f"❌ [OKX订单] data数组为空")
                         return
                     
-                    if len(raw_data['data']['data']) == 0:
-                        logger.error(f"❌ [OKX订单] data.data数组为空")
+                    # 获取第一个订单数据（通常在data数组的第一个元素）
+                    order_data = raw_data['data'][0]
+                    
+                    # 验证order_data是否包含必要的订单信息
+                    if not isinstance(order_data, dict):
+                        logger.error(f"❌ [OKX订单] 订单数据不是字典: {type(order_data)}")
                         return
                     
-                    # 获取第一个订单数据
-                    order_data = raw_data['data']['data'][0]
-                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_data.get('ordId')}, 状态: {order_data.get('state')}")
+                    order_id = order_data.get('ordId', 'unknown')
+                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_id}, 状态: {order_data.get('state')}")
                     
                     # 分类 - 传入完整的private_data以保持接口一致
                     category = classify_okx_order(private_data)
@@ -205,19 +208,16 @@ class PrivateDataProcessor:
                         classified[classified_key] = []
                     
                     # 去重追加
-                    order_id = order_data.get('ordId')
-                    if order_id:
+                    if order_id and order_id != 'unknown':
                         existing = False
                         for item in classified[classified_key]:
                             # 检查item中的订单ID
                             item_data = item.get('data', {})
-                            if 'data' in item_data and 'data' in item_data['data']:
-                                item_orders = item_data['data']['data']
-                                if isinstance(item_orders, list) and len(item_orders) > 0:
-                                    if item_orders[0].get('ordId') == order_id:
-                                        existing = True
-                                        logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
-                                        break
+                            if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
+                                if item_data['data'][0].get('ordId') == order_id:
+                                    existing = True
+                                    logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
+                                    break
                         
                         if not existing:
                             classified[classified_key].append({
