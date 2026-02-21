@@ -10,7 +10,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 from .binance_classifier import classify_binance_order, is_closing_event
-from .okx_classifier import classify_okx_order, is_closing_event as is_okx_closing  # 新增
+from .okx_classifier import classify_okx_order
 
 
 class PrivateDataProcessor:
@@ -25,23 +25,19 @@ class PrivateDataProcessor:
     
     def __init__(self):
         if not self._initialized:
-            # 🔴 仿制大脑的存储结构
             self.memory_store = {'private_data': {}}
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
     
     async def _delayed_delete(self, keys: List[str], symbol: str):
-        """5分钟后删除该symbol所有当前存在的key（包括后来新增的）"""
+        """5分钟后删除该symbol所有当前存在的key（仅币安使用）"""
         try:
-            await asyncio.sleep(300)  # 5分钟 = 300秒
+            await asyncio.sleep(300)
             
-            # 检查并获取分类存储
             if 'binance_order_update' not in self.memory_store['private_data']:
                 return
                 
             classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
-            
-            # 🔴 重新获取该symbol当前的所有key（包括5分钟内新增的过期数据）
             current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
             
             for k in current_keys:
@@ -49,40 +45,13 @@ class PrivateDataProcessor:
             
             if current_keys:
                 logger.info(f"🧹 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
-            else:
-                logger.debug(f"⏭️ [币安订单] 延迟清理: {symbol} 已无数据可删")
                 
         except Exception as e:
             logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
     
-    async def _delayed_delete_okx(self, keys: List[str], symbol: str):
-        """5分钟后删除该symbol所有OKX当前存在的key"""
-        try:
-            await asyncio.sleep(300)  # 5分钟 = 300秒
-            
-            # 检查并获取分类存储
-            if 'okx_order_update' not in self.memory_store['private_data']:
-                return
-                
-            classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
-            
-            # 重新获取该symbol当前的所有key
-            current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-            
-            for k in current_keys:
-                del classified[k]
-            
-            if current_keys:
-                logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
-            else:
-                logger.debug(f"⏭️ [OKX订单] 延迟清理: {symbol} 已无数据可删")
-                
-        except Exception as e:
-            logger.error(f"❌ [OKX订单] 延迟清理失败: {e}")
-    
     async def receive_private_data(self, private_data):
         """
-        接收私人数据（仿制大脑接口）
+        接收私人数据
         格式：{'exchange': 'binance', 'data_type': 'account_update', 'data': {...}, 'timestamp': '...'}
         """
         try:
@@ -90,24 +59,24 @@ class PrivateDataProcessor:
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
             
-            # 🔴 === 币安订单更新专用处理（分类+去重+覆盖+清理）===
+            # ========== 币安订单更新处理 ==========
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
                 
                 o = raw_data['o']
                 
-                # 🚫 只过滤市价单的未成交中间状态（开仓/平仓的NEW状态）
+                # 过滤市价单未成交中间状态
                 if o.get('o') == 'MARKET' and o.get('ot') == 'MARKET' and o.get('X') == 'NEW' and o.get('l') == '0' and o.get('z') == '0':
                     logger.debug(f"⏭️ [币安订单] 过滤市价单未成交中间状态: {o.get('i')}")
                     return
                 
-                # 1. 分类
+                # 分类
                 category = classify_binance_order(private_data)
                 logger.debug(f"🔍 [币安订单] 分类结果: {category}")
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
                 
-                # 2. 初始化/获取分类存储结构
+                # 初始化存储
                 if 'binance_order_update' not in self.memory_store['private_data']:
                     self.memory_store['private_data']['binance_order_update'] = {
                         'exchange': 'binance',
@@ -117,43 +86,39 @@ class PrivateDataProcessor:
                 
                 classified = self.memory_store['private_data']['binance_order_update']['classified']
                 
-                # ===== 取消止损/止盈的立即清除逻辑 =====
+                # 取消止损/止盈的立即清除
                 if category == '11_取消止损':
-                    # 不保存取消数据，立即删除该合约的设置止损记录
                     stop_loss_key = f"{symbol}_03_设置止损"
                     if stop_loss_key in classified:
                         del classified[stop_loss_key]
-                        logger.info(f"🗑️ [币安订单] {symbol} 取消止损，已立即删除设置止损记录")
-                    return  # 直接返回，不保存取消数据
+                        logger.info(f"🗑️ [币安订单] {symbol} 取消止损，已删除设置止损记录")
+                    return
                 
                 if category == '12_取消止盈':
-                    # 不保存取消数据，立即删除该合约的设置止盈记录
                     take_profit_key = f"{symbol}_04_设置止盈"
                     if take_profit_key in classified:
                         del classified[take_profit_key]
-                        logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已立即删除设置止盈记录")
-                    return  # 直接返回，不保存取消数据
+                        logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
+                    return
                 
-                # ===== 过期事件不保存 =====
+                # 过期事件不保存
                 if category in ['13_止损过期(被触发)', '14_止损过期(被取消)', 
                                 '15_止盈过期(被触发)', '16_止盈过期(被取消)']:
                     logger.debug(f"⏭️ [币安订单] 过期事件不缓存: {category}")
-                    return  # 直接返回，不保存
+                    return
                 
-                # 3. 按分类key存储（只处理需要保存的事件）
+                # 按分类存储
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
-                # 🔴 止盈止损的设置事件 → 同一个合约只能保留最新一条
+                # 止盈止损的设置事件只保留最新一条
                 if category in ['03_设置止损', '04_设置止盈']:
-                    # 直接清空该合约下这类事件的所有历史记录
                     classified[classified_key] = []
                     logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
                 
-                # 4. 去重检查并追加新记录（按订单ID去重）
+                # 去重追加
                 order_id = raw_data['o'].get('i')
                 if order_id:
-                    # 检查是否已存在相同订单ID
                     existing = False
                     for item in classified[classified_key]:
                         if item['data']['o'].get('i') == order_id:
@@ -167,29 +132,22 @@ class PrivateDataProcessor:
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
-                        logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 else:
                     classified[classified_key].append({
                         'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                         'received_at': private_data.get('received_at', datetime.now().isoformat()),
                         'data': raw_data
                     })
-                    logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
-                # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
+                # 平仓处理：延迟5分钟清理
                 if is_closing_event(category):
-                    # 只获取该symbol相关的keys（不影响其他持仓合约）
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                    
-                    # 启动异步延迟删除任务
                     asyncio.create_task(self._delayed_delete(keys_to_delayed_delete, symbol))
-                    
-                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5分钟后清理 ({len(keys_to_delayed_delete)}类)")
+                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5分钟后清理")
                 
-                # 🔴 币安订单处理完毕，直接返回
                 return
             
-            # 🔴 === OKX订单更新专用处理（新增）===
+            # ========== OKX订单更新处理（纯净版：只分类存储，不清理）==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
                 # 确保数据结构正确
@@ -197,24 +155,19 @@ class PrivateDataProcessor:
                     logger.debug(f"⏭️ [OKX订单] 数据格式不正确")
                     return
                 
-                # 1. 分类
+                # 分类
                 category = classify_okx_order(private_data)
                 logger.debug(f"🔍 [OKX订单] 分类结果: {category}")
                 
-                # 只处理开仓和平仓，其他分类不存储
-                if category not in ['01_开仓', '02_平仓']:
-                    logger.debug(f"⏭️ [OKX订单] 跳过非开仓/平仓事件: {category}")
-                    return
-                
                 # 获取交易对
                 d = raw_data['data']['data'][0]
-                symbol = d.get('instId', '').replace('-SWAP', '').replace('-USDT', '')  # 简化交易对名称
+                symbol = d.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
                 if not symbol:
                     symbol = d.get('instId', 'unknown')
                 
                 classified_key = f"{symbol}_{category}"
                 
-                # 2. 初始化/获取分类存储结构
+                # 初始化存储
                 if 'okx_order_update' not in self.memory_store['private_data']:
                     self.memory_store['private_data']['okx_order_update'] = {
                         'exchange': 'okx',
@@ -224,11 +177,11 @@ class PrivateDataProcessor:
                 
                 classified = self.memory_store['private_data']['okx_order_update']['classified']
                 
-                # 3. 按分类key存储
+                # 按分类存储（不过滤任何分类）
                 if classified_key not in classified:
                     classified[classified_key] = []
                 
-                # 4. 去重检查并追加新记录（按订单ID去重）
+                # 去重追加
                 order_id = d.get('ordId')
                 if order_id:
                     existing = False
@@ -245,42 +198,29 @@ class PrivateDataProcessor:
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
-                        logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                        logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加")
                 else:
                     classified[classified_key].append({
                         'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                         'received_at': private_data.get('received_at', datetime.now().isoformat()),
                         'data': raw_data
                     })
-                    logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                    logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加")
                 
-                # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
-                if is_okx_closing(category):
-                    keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                    asyncio.create_task(self._delayed_delete_okx(keys_to_delayed_delete, symbol))
-                    logger.info(f"⏰ [OKX订单] 平仓标记: {symbol} 将在5分钟后清理 ({len(keys_to_delayed_delete)}类)")
-                
-                # 🔴 OKX订单处理完毕，直接返回
+                # 没有清理逻辑，只有分类存储
                 return
             
-            # === 以下为原有代码（其他交易所和数据类型）===
-            # 🔴 【关键修复】判断数据来源：HTTP获取器 vs WebSocket
+            # ========== 其他数据类型 ==========
             if source == 'http_fetcher':
-                # HTTP获取器的数据：直接使用传入的 data_type
                 final_data_type = private_data.get('data_type', 'unknown')
-                logger.debug(f"📨 [私人数据处理] HTTP数据: {exchange}.{final_data_type}")
-                
             else:
-                # WebSocket数据：原有逻辑，通过 'e' 字段映射
                 event_type = raw_data.get('e', 'unknown')
                 
                 if exchange == 'binance':
-                    # 🚫 1. 过滤掉 TRADE_LITE 事件
                     if event_type == 'TRADE_LITE':
-                        logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件: {raw_data.get('i')}")
+                        logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件")
                         return
                     
-                    # 🗺️ 2. 币安事件类型映射
                     binance_mapping = {
                         'ACCOUNT_UPDATE': 'account_update',
                         'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
@@ -291,24 +231,15 @@ class PrivateDataProcessor:
                         'executionReport': 'order_update'
                     }
                     
-                    # 使用映射后的data_type
                     if event_type in binance_mapping:
                         final_data_type = binance_mapping[event_type]
-                        logger.debug(f"📨 [私人数据处理] 币安事件映射: {event_type} -> {final_data_type}")
                     else:
-                        # 对于未映射的事件，使用原生事件名的小写
                         final_data_type = event_type.lower()
-                        
                 else:
-                    # 其他交易所（如OKX）保持原有的data_type
                     final_data_type = private_data.get('data_type', 'unknown')
             
-            # 🔴 【新增】记录完整信息便于调试
-            logger.debug(f"📨 [私人数据处理] 收到{exchange}.{final_data_type}数据")
-            
-            # 存储数据
+            # 存储其他数据
             storage_key = f"{exchange}_{final_data_type}"
-            
             self.memory_store['private_data'][storage_key] = {
                 'exchange': exchange,
                 'data_type': final_data_type,
@@ -323,7 +254,7 @@ class PrivateDataProcessor:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
     
     async def get_all_data(self) -> Dict[str, Any]:
-        """获取所有私人数据概览（仿制大脑接口）"""
+        """获取所有私人数据概览"""
         try:
             formatted_data = {}
             for key, data in self.memory_store['private_data'].items():
@@ -343,19 +274,14 @@ class PrivateDataProcessor:
             }
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 获取所有数据失败: {e}")
-            return {
-                "timestamp": datetime.now().isoformat(),
-                "error": str(e),
-                "private_data": {}
-            }
+            return {"timestamp": datetime.now().isoformat(), "error": str(e), "private_data": {}}
     
     async def get_data_by_exchange(self, exchange: str) -> Dict[str, Any]:
-        """按交易所获取私人数据（仿制大脑接口）"""
+        """按交易所获取私人数据"""
         try:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
                 if key.startswith(f"{exchange.lower()}_"):
-                    # 🔴 特殊处理：币安/OKX订单更新，返回分类统计摘要
                     if key in ['binance_order_update', 'okx_order_update']:
                         classified = data.get('classified', {})
                         summary = {}
@@ -371,7 +297,6 @@ class PrivateDataProcessor:
                             "note": "各类别事件数量统计，详情请查询具体data_type"
                         }
                     else:
-                        # 其他数据类型保持原样
                         exchange_data[key] = {
                             "exchange": data.get('exchange'),
                             "data_type": data.get('data_type'),
@@ -385,28 +310,21 @@ class PrivateDataProcessor:
                 "timestamp": datetime.now().isoformat(),
                 "count": len(exchange_data),
                 "data": exchange_data,
-                "note": f"{exchange}私人数据（最新一份）"
+                "note": f"{exchange}私人数据"
             }
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 按交易所获取数据失败: {e}")
-            return {
-                "exchange": exchange,
-                "timestamp": datetime.now().isoformat(),
-                "error": str(e),
-                "data": {}
-            }
+            return {"exchange": exchange, "timestamp": datetime.now().isoformat(), "error": str(e), "data": {}}
     
     async def get_data_detail(self, exchange: str, data_type: str) -> Dict[str, Any]:
-        """获取特定私人数据详情（仿制大脑接口）"""
+        """获取特定私人数据详情"""
         try:
             key = f"{exchange.lower()}_{data_type.lower()}"
             
-            # 🔴 特殊处理：币安/OKX订单更新，返回分类结构
             if key in ['binance_order_update', 'okx_order_update']:
                 if key in self.memory_store['private_data']:
                     return self.memory_store['private_data'][key]
                 else:
-                    # 还没有任何订单数据时，返回空分类结构
                     return {
                         "exchange": exchange,
                         "data_type": data_type,
@@ -414,7 +332,6 @@ class PrivateDataProcessor:
                         "note": "暂无订单数据"
                     }
             
-            # 其他数据类型：保持原样返回
             if key in self.memory_store['private_data']:
                 data = self.memory_store['private_data'][key]
                 return {
@@ -434,12 +351,7 @@ class PrivateDataProcessor:
                 }
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 获取数据详情失败: {e}")
-            return {
-                "error": str(e),
-                "exchange": exchange,
-                "data_type": data_type,
-                "timestamp": datetime.now().isoformat()
-            }
+            return {"error": str(e), "exchange": exchange, "data_type": data_type, "timestamp": datetime.now().isoformat()}
 
 
 # 全局单例实例
@@ -450,8 +362,5 @@ def get_processor():
     return _global_processor
 
 async def receive_private_data(private_data):
-    """
-    供连接池调用的函数接口
-    使用全局单例
-    """
+    """供连接池调用的函数接口"""
     return await _global_processor.receive_private_data(private_data)
