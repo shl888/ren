@@ -10,6 +10,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 from .binance_classifier import classify_binance_order, is_closing_event
+from .okx_classifier import classify_okx_order, is_closing_event as is_okx_closing  # 新增
 
 
 class PrivateDataProcessor:
@@ -53,6 +54,31 @@ class PrivateDataProcessor:
                 
         except Exception as e:
             logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
+    
+    async def _delayed_delete_okx(self, keys: List[str], symbol: str):
+        """5分钟后删除该symbol所有OKX当前存在的key"""
+        try:
+            await asyncio.sleep(300)  # 5分钟 = 300秒
+            
+            # 检查并获取分类存储
+            if 'okx_order_update' not in self.memory_store['private_data']:
+                return
+                
+            classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
+            
+            # 重新获取该symbol当前的所有key
+            current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+            
+            for k in current_keys:
+                del classified[k]
+            
+            if current_keys:
+                logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
+            else:
+                logger.debug(f"⏭️ [OKX订单] 延迟清理: {symbol} 已无数据可删")
+                
+        except Exception as e:
+            logger.error(f"❌ [OKX订单] 延迟清理失败: {e}")
     
     async def receive_private_data(self, private_data):
         """
@@ -151,7 +177,6 @@ class PrivateDataProcessor:
                     logger.debug(f"📦 [币安订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
                 
                 # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
-                # is_closing_event 已经返回 ['06_触发止损(全部成交)', '08_触发止盈(全部成交)', '10_主动平仓(全部成交)']
                 if is_closing_event(category):
                     # 只获取该symbol相关的keys（不影响其他持仓合约）
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
@@ -161,10 +186,84 @@ class PrivateDataProcessor:
                     
                     logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5分钟后清理 ({len(keys_to_delayed_delete)}类)")
                 
-                # 🔴 币安订单处理完毕，直接返回（不走老逻辑）
+                # 🔴 币安订单处理完毕，直接返回
                 return
             
-            # === 以下为原有代码（完全不变）===
+            # 🔴 === OKX订单更新专用处理（新增）===
+            if exchange == 'okx' and private_data.get('data_type') == 'order_update':
+                
+                # 确保数据结构正确
+                if 'data' not in raw_data or 'data' not in raw_data['data']:
+                    logger.debug(f"⏭️ [OKX订单] 数据格式不正确")
+                    return
+                
+                # 1. 分类
+                category = classify_okx_order(private_data)
+                logger.debug(f"🔍 [OKX订单] 分类结果: {category}")
+                
+                # 只处理开仓和平仓，其他分类不存储
+                if category not in ['01_开仓', '02_平仓']:
+                    logger.debug(f"⏭️ [OKX订单] 跳过非开仓/平仓事件: {category}")
+                    return
+                
+                # 获取交易对
+                d = raw_data['data']['data'][0]
+                symbol = d.get('instId', '').replace('-SWAP', '').replace('-USDT', '')  # 简化交易对名称
+                if not symbol:
+                    symbol = d.get('instId', 'unknown')
+                
+                classified_key = f"{symbol}_{category}"
+                
+                # 2. 初始化/获取分类存储结构
+                if 'okx_order_update' not in self.memory_store['private_data']:
+                    self.memory_store['private_data']['okx_order_update'] = {
+                        'exchange': 'okx',
+                        'data_type': 'order_update',
+                        'classified': {}
+                    }
+                
+                classified = self.memory_store['private_data']['okx_order_update']['classified']
+                
+                # 3. 按分类key存储
+                if classified_key not in classified:
+                    classified[classified_key] = []
+                
+                # 4. 去重检查并追加新记录（按订单ID去重）
+                order_id = d.get('ordId')
+                if order_id:
+                    existing = False
+                    for item in classified[classified_key]:
+                        item_data = item['data']['data']['data'][0]
+                        if item_data.get('ordId') == order_id:
+                            existing = True
+                            logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
+                            break
+                    
+                    if not existing:
+                        classified[classified_key].append({
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                            'data': raw_data
+                        })
+                        logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                else:
+                    classified[classified_key].append({
+                        'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                        'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                        'data': raw_data
+                    })
+                    logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加，当前总数: {len(classified[classified_key])}")
+                
+                # 5. 平仓处理：延迟5分钟清理该合约所有分类缓存
+                if is_okx_closing(category):
+                    keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+                    asyncio.create_task(self._delayed_delete_okx(keys_to_delayed_delete, symbol))
+                    logger.info(f"⏰ [OKX订单] 平仓标记: {symbol} 将在5分钟后清理 ({len(keys_to_delayed_delete)}类)")
+                
+                # 🔴 OKX订单处理完毕，直接返回
+                return
+            
+            # === 以下为原有代码（其他交易所和数据类型）===
             # 🔴 【关键修复】判断数据来源：HTTP获取器 vs WebSocket
             if source == 'http_fetcher':
                 # HTTP获取器的数据：直接使用传入的 data_type
@@ -256,8 +355,8 @@ class PrivateDataProcessor:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
                 if key.startswith(f"{exchange.lower()}_"):
-                    # 🔴 特殊处理：币安订单更新，返回分类统计摘要
-                    if key == 'binance_order_update':
+                    # 🔴 特殊处理：币安/OKX订单更新，返回分类统计摘要
+                    if key in ['binance_order_update', 'okx_order_update']:
                         classified = data.get('classified', {})
                         summary = {}
                         for k, v in classified.items():
@@ -302,15 +401,15 @@ class PrivateDataProcessor:
         try:
             key = f"{exchange.lower()}_{data_type.lower()}"
             
-            # 🔴 特殊处理：币安订单更新，返回分类结构
-            if key == 'binance_order_update':
+            # 🔴 特殊处理：币安/OKX订单更新，返回分类结构
+            if key in ['binance_order_update', 'okx_order_update']:
                 if key in self.memory_store['private_data']:
                     return self.memory_store['private_data'][key]
                 else:
                     # 还没有任何订单数据时，返回空分类结构
                     return {
-                        "exchange": "binance",
-                        "data_type": "order_update",
+                        "exchange": exchange,
+                        "data_type": data_type,
                         "classified": {},
                         "note": "暂无订单数据"
                     }
