@@ -1,6 +1,6 @@
 """
 OKX订单事件分类器 - 纯函数，无状态
-3种事件分类规则：开仓、平仓、其他
+5种事件分类规则：挂单、开仓、平仓、部分成交、已取消、其他
 """
 from typing import Dict, Any
 import logging
@@ -12,9 +12,12 @@ def classify_okx_order(data: Dict[str, Any]) -> str:
     """
     OKX订单更新事件分类
     返回: 
-    '01_开仓',
-    '02_平仓',
-    '99_其他'
+    '01_挂单',          # 新挂单（未成交）
+    '02_开仓成交',       # 开仓成交
+    '03_平仓成交',       # 平仓成交
+    '04_部分成交',       # 部分成交
+    '05_已取消',         # 已取消
+    '99_其他'           # 其他情况
     """
     try:
         # 提取原始数据 - OKX的数据结构: data是一个数组
@@ -44,26 +47,37 @@ def classify_okx_order(data: Dict[str, Any]) -> str:
         ord_id = order_data.get('ordId', 'unknown')
         pos_side = order_data.get('posSide', '')
         ord_type = order_data.get('ordType', '')
+        acc_fill_sz = order_data.get('accFillSz', '0')
         
-        # 只处理已成交的订单（避免中间状态干扰）
-        if state != 'filled':
-            logger.debug(f"OKX分类: 订单未成交, state={state}, ordId={ord_id}")
-            return '99_其他'
+        # ===== 挂单状态处理（未成交）- 需要被过滤 =====
+        if state == 'live':
+            logger.debug(f"OKX分类: 挂单 - {inst_id}, reduceOnly={reduce_only}, ordId={ord_id}")
+            return '01_挂单'
         
-        # ===== 开仓判断 =====
-        # reduceOnly=false 且 pnl == 0（无盈亏） 且 订单已成交
-        if reduce_only == 'false' and (pnl == '0' or pnl == 0):
-            logger.debug(f"OKX分类: 开仓 - {inst_id}, pnl={pnl}, ordId={ord_id}")
-            return '01_开仓'
-            
-        # ===== 平仓判断 =====
-        # reduceOnly=true 且 pnl != 0（有盈亏） 且 订单已成交
-        if reduce_only == 'true' and pnl != '0' and pnl != 0:
-            logger.debug(f"OKX分类: 平仓 - {inst_id}, pnl={pnl}, ordId={ord_id}")
-            return '02_平仓'
-            
-        # ===== 其他 =====
-        logger.debug(f"OKX分类: 其他情况 - reduceOnly={reduce_only}, pnl={pnl}, state={state}")
+        # ===== 部分成交状态 =====
+        if state == 'partially_filled':
+            logger.debug(f"OKX分类: 部分成交 - {inst_id}, accFillSz={acc_fill_sz}")
+            return '04_部分成交'
+        
+        # ===== 已成交订单处理 =====
+        if state == 'filled':
+            # 开仓判断：reduceOnly=false 且 pnl == 0（无盈亏）
+            if reduce_only == 'false' and (pnl == '0' or pnl == 0):
+                logger.debug(f"OKX分类: 开仓成交 - {inst_id}, pnl={pnl}, ordId={ord_id}")
+                return '02_开仓成交'
+                
+            # 平仓判断：reduceOnly=true 且 pnl != 0（有盈亏）
+            if reduce_only == 'true' and pnl != '0' and pnl != 0:
+                logger.debug(f"OKX分类: 平仓成交 - {inst_id}, pnl={pnl}, ordId={ord_id}")
+                return '03_平仓成交'
+        
+        # ===== 已取消订单 =====
+        if state == 'canceled':
+            logger.debug(f"OKX分类: 已取消 - {inst_id}, ordId={ord_id}")
+            return '05_已取消'
+        
+        # ===== 其他状态 =====
+        logger.debug(f"OKX分类: 其他 - state={state}, reduceOnly={reduce_only}, pnl={pnl}")
         return '99_其他'
     
     except (KeyError, TypeError, IndexError, AttributeError) as e:
@@ -76,4 +90,4 @@ def classify_okx_order(data: Dict[str, Any]) -> str:
 
 def is_closing_event(category: str) -> bool:
     """判断是否是平仓事件"""
-    return category == '02_平仓'
+    return category == '03_平仓成交'

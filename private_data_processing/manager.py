@@ -147,7 +147,7 @@ class PrivateDataProcessor:
                 
                 return
             
-            # ========== OKX订单更新处理（修复版）==========
+            # ========== OKX订单更新处理（过滤挂单版）==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
                 # 添加调试日志
@@ -177,11 +177,17 @@ class PrivateDataProcessor:
                         return
                     
                     order_id = order_data.get('ordId', 'unknown')
-                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_id}, 状态: {order_data.get('state')}")
+                    state = order_data.get('state', 'unknown')
+                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
                     
                     # 分类 - 传入完整的private_data以保持接口一致
                     category = classify_okx_order(private_data)
                     logger.info(f"🔍 [OKX订单] 分类结果: {category}")
+                    
+                    # ===== 关键修改：过滤挂单（01_挂单）不保存 =====
+                    if category == '01_挂单':
+                        logger.info(f"⏭️ [OKX订单] 过滤挂单: {order_id}, 不保存")
+                        return
                     
                     # 获取交易对
                     symbol = order_data.get('instId', 'unknown')
