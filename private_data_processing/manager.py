@@ -4,6 +4,7 @@
 """
 import logging
 import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
@@ -147,68 +148,100 @@ class PrivateDataProcessor:
                 
                 return
             
-            # ========== OKX订单更新处理（纯净版：只分类存储，不清理）==========
+            # ========== OKX订单更新处理（修复版）==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
-                # 确保数据结构正确
-                if 'data' not in raw_data or 'data' not in raw_data['data']:
-                    logger.debug(f"⏭️ [OKX订单] 数据格式不正确")
-                    return
+                # 添加调试日志
+                logger.info(f"📥 [OKX订单] 收到订单更新")
                 
-                # 分类
-                category = classify_okx_order(private_data)
-                logger.debug(f"🔍 [OKX订单] 分类结果: {category}")
-                
-                # 获取交易对
-                d = raw_data['data']['data'][0]
-                symbol = d.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
-                if not symbol:
-                    symbol = d.get('instId', 'unknown')
-                
-                classified_key = f"{symbol}_{category}"
-                
-                # 初始化存储
-                if 'okx_order_update' not in self.memory_store['private_data']:
-                    self.memory_store['private_data']['okx_order_update'] = {
-                        'exchange': 'okx',
-                        'data_type': 'order_update',
-                        'classified': {}
-                    }
-                
-                classified = self.memory_store['private_data']['okx_order_update']['classified']
-                
-                # 按分类存储（不过滤任何分类）
-                if classified_key not in classified:
-                    classified[classified_key] = []
-                
-                # 去重追加
-                order_id = d.get('ordId')
-                if order_id:
-                    existing = False
-                    for item in classified[classified_key]:
-                        item_data = item['data']['data']['data'][0]
-                        if item_data.get('ordId') == order_id:
-                            existing = True
-                            logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
-                            break
+                try:
+                    # 提取订单数据 - OKX的数据结构: data.data 是一个数组
+                    if 'data' not in raw_data:
+                        logger.error(f"❌ [OKX订单] 缺少data字段: {list(raw_data.keys())}")
+                        return
                     
-                    if not existing:
+                    if 'data' not in raw_data['data']:
+                        logger.error(f"❌ [OKX订单] 缺少data.data字段: {list(raw_data['data'].keys())}")
+                        return
+                    
+                    if not isinstance(raw_data['data']['data'], list):
+                        logger.error(f"❌ [OKX订单] data.data不是数组: {type(raw_data['data']['data'])}")
+                        return
+                    
+                    if len(raw_data['data']['data']) == 0:
+                        logger.error(f"❌ [OKX订单] data.data数组为空")
+                        return
+                    
+                    # 获取第一个订单数据
+                    order_data = raw_data['data']['data'][0]
+                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_data.get('ordId')}, 状态: {order_data.get('state')}")
+                    
+                    # 分类 - 传入完整的private_data以保持接口一致
+                    category = classify_okx_order(private_data)
+                    logger.info(f"🔍 [OKX订单] 分类结果: {category}")
+                    
+                    # 获取交易对
+                    symbol = order_data.get('instId', 'unknown')
+                    # 清理交易对名称
+                    if '-SWAP' in symbol:
+                        symbol = symbol.replace('-SWAP', '')
+                    if '-USDT' in symbol:
+                        symbol = symbol.replace('-USDT', '')
+                    
+                    classified_key = f"{symbol}_{category}"
+                    
+                    # 初始化存储
+                    if 'okx_order_update' not in self.memory_store['private_data']:
+                        self.memory_store['private_data']['okx_order_update'] = {
+                            'exchange': 'okx',
+                            'data_type': 'order_update',
+                            'classified': {}
+                        }
+                    
+                    classified = self.memory_store['private_data']['okx_order_update']['classified']
+                    
+                    # 按分类存储
+                    if classified_key not in classified:
+                        classified[classified_key] = []
+                    
+                    # 去重追加
+                    order_id = order_data.get('ordId')
+                    if order_id:
+                        existing = False
+                        for item in classified[classified_key]:
+                            # 检查item中的订单ID
+                            item_data = item.get('data', {})
+                            if 'data' in item_data and 'data' in item_data['data']:
+                                item_orders = item_data['data']['data']
+                                if isinstance(item_orders, list) and len(item_orders) > 0:
+                                    if item_orders[0].get('ordId') == order_id:
+                                        existing = True
+                                        logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
+                                        break
+                        
+                        if not existing:
+                            classified[classified_key].append({
+                                'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                                'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                                'data': raw_data  # 保存原始数据
+                            })
+                            logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
+                    else:
                         classified[classified_key].append({
                             'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
-                        logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加")
-                else:
-                    classified[classified_key].append({
-                        'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                        'received_at': private_data.get('received_at', datetime.now().isoformat()),
-                        'data': raw_data
-                    })
-                    logger.debug(f"📦 [OKX订单] {symbol} {category} 已追加")
-                
-                # 没有清理逻辑，只有分类存储
-                return
+                        logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
+                    
+                    # OKX没有清理逻辑，只有分类存储
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"❌ [OKX订单] 处理失败: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    return
             
             # ========== 其他数据类型 ==========
             if source == 'http_fetcher':
@@ -252,6 +285,8 @@ class PrivateDataProcessor:
             
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     async def get_all_data(self) -> Dict[str, Any]:
         """获取所有私人数据概览"""
