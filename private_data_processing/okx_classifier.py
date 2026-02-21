@@ -1,6 +1,6 @@
 """
 OKX订单事件分类器 - 纯函数，无状态
-5种事件分类规则：挂单、开仓、平仓、部分成交、已取消、其他
+8种事件分类规则：挂单、开仓部分成交、开仓全部成交、平仓部分成交、平仓全部成交、已取消、其他
 """
 from typing import Dict, Any, Union
 import logging
@@ -12,12 +12,13 @@ def classify_okx_order(data: Union[Dict[str, Any], list]) -> str:
     """
     OKX订单更新事件分类
     返回: 
-    '01_挂单',          # 新挂单（未成交）
-    '02_开仓成交',       # 开仓成交
-    '03_平仓成交',       # 平仓成交
-    '04_部分成交',       # 部分成交
-    '05_已取消',         # 已取消
-    '99_其他'           # 其他情况
+    '01_挂单',                # 新挂单（未成交）- 过滤
+    '02_开仓(部分成交)',       # 开仓部分成交 - 过滤
+    '03_开仓(全部成交)',       # 开仓全部成交
+    '04_平仓(部分成交)',       # 平仓部分成交 - 过滤
+    '05_平仓(全部成交)',       # 平仓全部成交
+    '06_已取消',              # 已取消
+    '99_其他'                 # 其他情况
     """
     try:
         # 处理不同可能的数据结构
@@ -57,8 +58,9 @@ def classify_okx_order(data: Union[Dict[str, Any], list]) -> str:
         inst_id = order_data.get('instId', 'unknown')
         ord_id = order_data.get('ordId', 'unknown')
         acc_fill_sz = order_data.get('accFillSz', '0')
+        sz = order_data.get('sz', '0')
         
-        logger.debug(f"OKX分类: 处理订单 {ord_id}, state={state}, reduceOnly={reduce_only}, pnl={pnl}")
+        logger.debug(f"OKX分类: 处理订单 {ord_id}, state={state}, reduceOnly={reduce_only}, pnl={pnl}, accFillSz={acc_fill_sz}, sz={sz}")
         
         # ===== 挂单状态处理（未成交）- 需要被过滤 =====
         if state == 'live':
@@ -67,26 +69,46 @@ def classify_okx_order(data: Union[Dict[str, Any], list]) -> str:
         
         # ===== 部分成交状态 =====
         if state == 'partially_filled':
-            logger.info(f"OKX分类: 部分成交 - {inst_id}, accFillSz={acc_fill_sz}")
-            return '04_部分成交'
-        
-        # ===== 已成交订单处理（不再依赖pnl判断）=====
-        if state == 'filled':
-            # 只要成交，根据reduceOnly判断开平
+            # 判断是开仓还是平仓的部分成交
             if reduce_only == 'false':
-                logger.info(f"OKX分类: 开仓成交 - {inst_id}, ordId={ord_id}")
-                return '02_开仓成交'
+                logger.info(f"OKX分类: 开仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}")
+                return '02_开仓(部分成交)'
             elif reduce_only == 'true':
-                logger.info(f"OKX分类: 平仓成交 - {inst_id}, ordId={ord_id}")
-                return '03_平仓成交'
+                logger.info(f"OKX分类: 平仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}')
+                return '04_平仓(部分成交)'
+            else:
+                logger.info(f"OKX分类: 其他部分成交 - {inst_id}, ordId={ord_id}")
+                return '99_其他'
+        
+        # ===== 已成交订单处理 =====
+        if state == 'filled':
+            # 判断是否全部成交
+            is_full_filled = (acc_fill_sz == sz) or (float(acc_fill_sz) >= float(sz) - 0.000001)
+            
+            if reduce_only == 'false':
+                # 开仓成交
+                if is_full_filled:
+                    logger.info(f"OKX分类: 开仓(全部成交) - {inst_id}, ordId={ord_id}")
+                    return '03_开仓(全部成交)'
+                else:
+                    logger.info(f"OKX分类: 开仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}")
+                    return '02_开仓(部分成交)'
+            elif reduce_only == 'true':
+                # 平仓成交
+                if is_full_filled:
+                    logger.info(f"OKX分类: 平仓(全部成交) - {inst_id}, ordId={ord_id}")
+                    return '05_平仓(全部成交)'
+                else:
+                    logger.info(f"OKX分类: 平仓(部分成交) - {inst_id}, accFillSz={acc_fill_sz}/{sz}, ordId={ord_id}")
+                    return '04_平仓(部分成交)'
             else:
                 logger.info(f"OKX分类: 其他成交 - {inst_id}, ordId={ord_id}")
-                return '04_部分成交'
+                return '99_其他'
         
         # ===== 已取消订单 =====
         if state == 'canceled':
             logger.info(f"OKX分类: 已取消 - {inst_id}, ordId={ord_id}")
-            return '05_已取消'
+            return '06_已取消'
         
         # ===== 其他状态 =====
         logger.info(f"OKX分类: 其他 - state={state}, reduceOnly={reduce_only}, pnl={pnl}")
@@ -100,5 +122,5 @@ def classify_okx_order(data: Union[Dict[str, Any], list]) -> str:
 
 
 def is_closing_event(category: str) -> bool:
-    """判断是否是平仓事件（全部成交才触发清理）"""
-    return category == '03_平仓成交'
+    """判断是否是平仓全部成交事件（需要清理缓存）"""
+    return category == '05_平仓(全部成交)'

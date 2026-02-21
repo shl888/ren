@@ -49,25 +49,57 @@ class PrivateDataProcessor:
         except Exception as e:
             logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
     
-    async def _okx_delayed_delete(self, keys: List[str], symbol: str):
-        """5分钟后删除该symbol所有当前存在的key（OKX使用）"""
+    async def _okx_delayed_delete(self, symbol: str):
+        """
+        5分钟后清理该symbol的所有相关数据
+        包括：订单数据和持仓数据
+        """
         try:
             await asyncio.sleep(300)
             
-            if 'okx_order_update' not in self.memory_store['private_data']:
-                return
+            # ===== 清理订单数据 =====
+            if 'okx_order_update' in self.memory_store['private_data']:
+                classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
+                order_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                 
-            classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
-            current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+                for k in order_keys:
+                    del classified[k]
+                
+                if order_keys:
+                    logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(order_keys)}个订单分类")
             
-            for k in current_keys:
-                del classified[k]
+            # ===== 清理持仓数据 =====
+            # 清理positions数据
+            if 'okx_positions' in self.memory_store['private_data']:
+                positions_data = self.memory_store['private_data']['okx_positions']
+                if 'data' in positions_data and isinstance(positions_data['data'], list):
+                    # 过滤掉该symbol的持仓
+                    filtered_positions = []
+                    for pos in positions_data['data']:
+                        pos_symbol = pos.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
+                        if pos_symbol != symbol:
+                            filtered_positions.append(pos)
+                    
+                    positions_data['data'] = filtered_positions
+                    logger.info(f"🧹 [OKX持仓] 延迟清理完成: {symbol} 已从持仓中移除")
             
-            if current_keys:
-                logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
+            # 清理position数据（单个持仓）
+            pos_key = f"okx_position_{symbol}"
+            if pos_key in self.memory_store['private_data']:
+                del self.memory_store['private_data'][pos_key]
+                logger.info(f"🧹 [OKX持仓] 延迟清理完成: 已删除 {pos_key}")
+            
+            # 清理账户更新中的相关数据
+            if 'okx_account_update' in self.memory_store['private_data']:
+                # 账户更新数据可能不需要清理特定symbol，但可以记录
+                logger.info(f"🧹 [OKX账户] 清理触发: {symbol} 平仓，账户数据保留")
+            
+            logger.info(f"✅ [OKX清理] {symbol} 所有相关数据清理完成")
                 
         except Exception as e:
             logger.error(f"❌ [OKX订单] 延迟清理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     async def receive_private_data(self, private_data):
         """
@@ -167,7 +199,7 @@ class PrivateDataProcessor:
                 
                 return
             
-            # ========== OKX订单更新处理（带清理逻辑）==========
+            # ========== OKX订单更新处理（细分版本）==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
                 logger.info(f"📥 [OKX订单] 收到订单更新")
@@ -201,9 +233,15 @@ class PrivateDataProcessor:
                     category = classify_okx_order(raw_data['data'])
                     logger.info(f"🔍 [OKX订单] 分类结果: {category}")
                     
-                    # 过滤挂单（01_挂单）不保存
-                    if category == '01_挂单':
-                        logger.info(f"⏭️ [OKX订单] 过滤挂单: {order_id}, 不保存")
+                    # 过滤不需要保存的分类
+                    filtered_categories = [
+                        '01_挂单',              # 挂单过滤
+                        '02_开仓(部分成交)',     # 部分成交过滤
+                        '04_平仓(部分成交)'      # 部分成交过滤
+                    ]
+                    
+                    if category in filtered_categories:
+                        logger.info(f"⏭️ [OKX订单] 过滤 {category}: {order_id}, 不保存")
                         return
                     
                     # 获取交易对
@@ -225,16 +263,19 @@ class PrivateDataProcessor:
                     
                     classified = self.memory_store['private_data']['okx_order_update']['classified']
                     
-                    # ===== 取消类处理（类似币安）=====
-                    if category == '05_已取消':
-                        # 如果是取消，检查是否有对应的挂单需要清理
+                    # 取消订单处理
+                    if category == '06_已取消':
                         logger.info(f"🗑️ [OKX订单] {symbol} 订单取消，等待后续清理")
-                        # 这里可以添加具体的清理逻辑，如果需要的话
                         return
                     
                     # 按分类存储
                     if classified_key not in classified:
                         classified[classified_key] = []
+                    
+                    # 开仓/平仓全部成交事件只保留最新一条
+                    if category in ['03_开仓(全部成交)', '05_平仓(全部成交)']:
+                        classified[classified_key] = []
+                        logger.debug(f"🔄 [OKX订单] {symbol} {category} 已清空旧记录")
                     
                     # 去重追加
                     if order_id and order_id != 'unknown':
@@ -262,11 +303,10 @@ class PrivateDataProcessor:
                         })
                         logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
                     
-                    # ===== 平仓处理：延迟5分钟清理（仿币安）=====
+                    # ===== 平仓全部成交：延迟5分钟清理所有相关数据 =====
                     if is_okx_closing(category):
-                        keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                        asyncio.create_task(self._okx_delayed_delete(keys_to_delayed_delete, symbol))
-                        logger.info(f"⏰ [OKX订单] 平仓标记: {symbol} 将在5分钟后清理")
+                        asyncio.create_task(self._okx_delayed_delete(symbol))
+                        logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在5分钟后清理所有相关数据（订单+持仓）")
                     
                     return
                     
@@ -275,6 +315,54 @@ class PrivateDataProcessor:
                     import traceback
                     logger.error(traceback.format_exc())
                     return
+            
+            # ========== OKX持仓更新处理 ==========
+            if exchange == 'okx' and private_data.get('data_type') == 'positions':
+                
+                logger.info(f"📥 [OKX持仓] 收到持仓更新")
+                
+                try:
+                    # 存储持仓数据
+                    storage_key = f"{exchange}_positions"
+                    
+                    # 如果是数组格式，可能需要处理
+                    if isinstance(raw_data, list):
+                        self.memory_store['private_data'][storage_key] = {
+                            'exchange': exchange,
+                            'data_type': 'positions',
+                            'data': raw_data,
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat())
+                        }
+                    else:
+                        self.memory_store['private_data'][storage_key] = {
+                            'exchange': exchange,
+                            'data_type': 'positions',
+                            'data': raw_data,
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat())
+                        }
+                    
+                    # 同时存储单个持仓的便捷访问
+                    if isinstance(raw_data, list):
+                        for pos in raw_data:
+                            pos_symbol = pos.get('instId', '').replace('-SWAP', '').replace('-USDT', '')
+                            if pos_symbol:
+                                pos_key = f"{exchange}_position_{pos_symbol}"
+                                self.memory_store['private_data'][pos_key] = {
+                                    'exchange': exchange,
+                                    'data_type': f'position_{pos_symbol}',
+                                    'data': pos,
+                                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                                    'received_at': private_data.get('received_at', datetime.now().isoformat())
+                                }
+                    
+                    logger.info(f"✅ [OKX持仓] 已保存")
+                    
+                except Exception as e:
+                    logger.error(f"❌ [OKX持仓] 处理失败: {e}")
+                
+                return
             
             # ========== 其他数据类型 ==========
             if source == 'http_fetcher':
