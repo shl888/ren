@@ -174,7 +174,7 @@ class DataManager:
                     
                     storage_key = f"market_{symbol}"
                     
-                    # 🎯 创建简化格式数据（按指定顺序）
+                    # 🎯 创建简化格式数据（按指定顺序）- ✅ 已修改为新字段名
                     simplified_data = self._create_simplified_market_data(item)
                     
                     # ✅ 直接存储简化数据
@@ -211,33 +211,41 @@ class DataManager:
             logger.error(f"❌【智能大脑】存储市场数据失败: {e}")
             return {}
     
+    # ==================== ✅ 唯一修改的方法 ====================
     def _create_simplified_market_data(self, raw_data):
-        """创建简化格式的市场数据（按指定顺序，包含所有字段）"""
+        """创建简化格式的市场数据（使用新字段名）"""
         try:
             # 从原始数据中提取必要的字段
             metadata = raw_data.get('metadata', {})
             
-            # 🎯 创建按指定顺序的简化数据，始终包含所有字段
+            # 🎯 创建按指定顺序的简化数据，使用新字段名
             simplified_data = {
                 'symbol': raw_data.get('symbol'),
-                'price_diff': raw_data.get('price_diff'),
-                'price_diff_percent': raw_data.get('price_diff_percent'),
+                # ✅ 跨平台计算字段（新字段名）
+                'trade_price_diff': raw_data.get('trade_price_diff'),
+                'trade_price_diff_percent': raw_data.get('trade_price_diff_percent'),
                 'rate_diff': raw_data.get('rate_diff'),
-                'okx_price': raw_data.get('okx_price'),
+                # ✅ OKX字段（新字段名）
+                'okx_trade_price': raw_data.get('okx_trade_price'),
+                'okx_mark_price': raw_data.get('okx_mark_price'),
+                'okx_price_to_mark_diff': raw_data.get('okx_price_to_mark_diff'),
+                'okx_price_to_mark_diff_percent': raw_data.get('okx_price_to_mark_diff_percent'),
                 'okx_funding_rate': raw_data.get('okx_funding_rate'),
                 'okx_period_seconds': raw_data.get('okx_period_seconds'),
                 'okx_countdown_seconds': raw_data.get('okx_countdown_seconds'),
-                # 🎯 重要：始终包含okx_last_settlement，即使值为None
                 'okx_last_settlement': raw_data.get('okx_last_settlement'),
                 'okx_current_settlement': raw_data.get('okx_current_settlement'),
                 'okx_next_settlement': raw_data.get('okx_next_settlement'),
-                'binance_price': raw_data.get('binance_price'),
+                # ✅ 币安字段（新字段名）
+                'binance_trade_price': raw_data.get('binance_trade_price'),
+                'binance_mark_price': raw_data.get('binance_mark_price'),
+                'binance_price_to_mark_diff': raw_data.get('binance_price_to_mark_diff'),
+                'binance_price_to_mark_diff_percent': raw_data.get('binance_price_to_mark_diff_percent'),
                 'binance_funding_rate': raw_data.get('binance_funding_rate'),
                 'binance_period_seconds': raw_data.get('binance_period_seconds'),
                 'binance_countdown_seconds': raw_data.get('binance_countdown_seconds'),
                 'binance_last_settlement': raw_data.get('binance_last_settlement'),
                 'binance_current_settlement': raw_data.get('binance_current_settlement'),
-                # 🎯 重要：始终包含binance_next_settlement，即使值为None
                 'binance_next_settlement': raw_data.get('binance_next_settlement'),
                 'calculated_at': metadata.get('calculated_at', datetime.now().isoformat()),
                 'source': metadata.get('source', 'step5_cross_calc')
@@ -251,17 +259,23 @@ class DataManager:
             # 返回一个基本结构，确保字段完整
             return {
                 'symbol': raw_data.get('symbol', 'unknown'),
-                'price_diff': None,
-                'price_diff_percent': None,
+                'trade_price_diff': None,
+                'trade_price_diff_percent': None,
                 'rate_diff': None,
-                'okx_price': None,
+                'okx_trade_price': None,
+                'okx_mark_price': None,
+                'okx_price_to_mark_diff': None,
+                'okx_price_to_mark_diff_percent': None,
                 'okx_funding_rate': None,
                 'okx_period_seconds': None,
                 'okx_countdown_seconds': None,
                 'okx_last_settlement': None,
                 'okx_current_settlement': None,
                 'okx_next_settlement': None,
-                'binance_price': None,
+                'binance_trade_price': None,
+                'binance_mark_price': None,
+                'binance_price_to_mark_diff': None,
+                'binance_price_to_mark_diff_percent': None,
                 'binance_funding_rate': None,
                 'binance_period_seconds': None,
                 'binance_countdown_seconds': None,
