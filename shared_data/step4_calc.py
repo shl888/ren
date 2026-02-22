@@ -20,8 +20,13 @@ class PlatformData:
     contract_name: str
     
     # 价格和费率
-    latest_price: Optional[str] = None
+    trade_price: Optional[str] = None           # ✅ renamed: latest_price → trade_price
+    mark_price: Optional[str] = None             # ✅ NEW
     funding_rate: Optional[str] = None
+    
+    # ✅ NEW: 成交与标记价差计算
+    price_to_mark_diff: Optional[float] = None          # |trade - mark| 绝对值
+    price_to_mark_diff_percent: Optional[float] = None  # 以低价为基准的百分比
     
     # 时间字段
     last_settlement_time: Optional[str] = None
@@ -147,7 +152,8 @@ class Step4Calc:
         if aligned_item.okx_current_ts:
             self.platform_cache[symbol]["okx"] = {
                 "contract_name": aligned_item.okx_contract_name or "",
-                "latest_price": aligned_item.okx_price,
+                "trade_price": aligned_item.okx_trade_price,           # ✅ renamed
+                "mark_price": aligned_item.okx_mark_price,             # ✅ NEW
                 "funding_rate": aligned_item.okx_funding_rate,
                 "last_settlement_time": None,
                 "current_settlement_time": aligned_item.okx_current_settlement,
@@ -177,7 +183,8 @@ class Step4Calc:
         if "binance" not in self.platform_cache[symbol]:
             self.platform_cache[symbol]["binance"] = {
                 "contract_name": "",
-                "latest_price": "",
+                "trade_price": "",                # ✅ renamed
+                "mark_price": "",                  # ✅ NEW
                 "funding_rate": "",
                 "last_settlement_time": "",
                 "current_settlement_time": "",
@@ -210,8 +217,11 @@ class Step4Calc:
         if aligned_item.binance_contract_name:
             cache["contract_name"] = aligned_item.binance_contract_name
         
-        if aligned_item.binance_price:
-            cache["latest_price"] = aligned_item.binance_price
+        if aligned_item.binance_trade_price:                 # ✅ renamed
+            cache["trade_price"] = aligned_item.binance_trade_price
+        
+        if aligned_item.binance_mark_price:                   # ✅ NEW
+            cache["mark_price"] = aligned_item.binance_mark_price
         
         if aligned_item.binance_funding_rate:
             cache["funding_rate"] = aligned_item.binance_funding_rate
@@ -245,7 +255,8 @@ class Step4Calc:
         # 3. 统计更新
         has_effective_update = any([
             aligned_item.binance_contract_name,
-            aligned_item.binance_price,
+            aligned_item.binance_trade_price,      # ✅ renamed
+            aligned_item.binance_mark_price,        # ✅ NEW
             aligned_item.binance_funding_rate,
             aligned_item.binance_current_ts,
             aligned_item.binance_last_ts
@@ -269,7 +280,8 @@ class Step4Calc:
                 symbol=symbol,
                 exchange="okx",
                 contract_name=cache_data["contract_name"],
-                latest_price=cache_data["latest_price"],
+                trade_price=cache_data["trade_price"],           # ✅ renamed
+                mark_price=cache_data["mark_price"],             # ✅ NEW
                 funding_rate=cache_data["funding_rate"],
                 last_settlement_time=cache_data["last_settlement_time"],
                 current_settlement_time=cache_data["current_settlement_time"],
@@ -278,6 +290,21 @@ class Step4Calc:
                 current_settlement_ts=cache_data["current_settlement_ts"],
                 next_settlement_ts=cache_data["next_settlement_ts"],
             )
+            
+            # ✅ NEW: 计算成交与标记价差
+            trade_price = self._safe_float(data.trade_price)
+            mark_price = self._safe_float(data.mark_price)
+            
+            if trade_price is not None and mark_price is not None:
+                # 绝对价差
+                data.price_to_mark_diff = abs(trade_price - mark_price)
+                
+                # 百分比价差 (以低价为基准)
+                min_price = min(trade_price, mark_price)
+                if min_price > 1e-10:
+                    data.price_to_mark_diff_percent = (data.price_to_mark_diff / min_price) * 100
+                else:
+                    data.price_to_mark_diff_percent = 0.0
             
             # 计算OKX费率周期（下次→上次）
             if data.current_settlement_ts and data.next_settlement_ts:
@@ -298,7 +325,8 @@ class Step4Calc:
                 symbol=symbol,
                 exchange="binance",
                 contract_name=cache_data["contract_name"],
-                latest_price=cache_data["latest_price"],
+                trade_price=cache_data["trade_price"],           # ✅ renamed
+                mark_price=cache_data["mark_price"],             # ✅ NEW
                 funding_rate=cache_data["funding_rate"],
                 last_settlement_time=cache_data["last_settlement_time"],
                 current_settlement_time=cache_data["current_settlement_time"],
@@ -307,6 +335,21 @@ class Step4Calc:
                 current_settlement_ts=cache_data["current_settlement_ts"],
                 next_settlement_ts=cache_data["next_settlement_ts"],
             )
+            
+            # ✅ NEW: 计算成交与标记价差
+            trade_price = self._safe_float(data.trade_price)
+            mark_price = self._safe_float(data.mark_price)
+            
+            if trade_price is not None and mark_price is not None:
+                # 绝对价差
+                data.price_to_mark_diff = abs(trade_price - mark_price)
+                
+                # 百分比价差 (以低价为基准)
+                min_price = min(trade_price, mark_price)
+                if min_price > 1e-10:
+                    data.price_to_mark_diff_percent = (data.price_to_mark_diff / min_price) * 100
+                else:
+                    data.price_to_mark_diff_percent = 0.0
             
             # 计算币安费率周期（本次→上次）- 有历史数据才计算
             if data.current_settlement_ts and data.last_settlement_ts:
@@ -326,6 +369,15 @@ class Step4Calc:
             return None
         
         return data
+    
+    def _safe_float(self, value: Any) -> Optional[float]:
+        """安全转换为float"""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
     
     def _calc_countdown(self, settlement_ts: Optional[int]) -> Optional[int]:
         """计算倒计时"""
@@ -403,6 +455,8 @@ class Step4Calc:
                 report["okx_contracts"] += 1
                 okx_cache = exchanges["okx"]
                 symbol_report["okx"] = {
+                    "trade_price": okx_cache.get("trade_price"),
+                    "mark_price": okx_cache.get("mark_price"),
                     "last_time": okx_cache.get("last_settlement_time"),
                     "last_ts": okx_cache.get("last_settlement_ts"),
                     "current_time": okx_cache.get("current_settlement_time"),
@@ -422,6 +476,8 @@ class Step4Calc:
                     report["binance_without_history"] += 1
                 
                 symbol_report["binance"] = {
+                    "trade_price": binance_cache.get("trade_price"),
+                    "mark_price": binance_cache.get("mark_price"),
                     "last_time": binance_cache.get("last_settlement_time"),
                     "last_ts": binance_cache.get("last_settlement_ts"),
                     "current_time": binance_cache.get("current_settlement_time"),
@@ -441,3 +497,4 @@ class Step4Calc:
         self.platform_cache.clear()
         self._protected_symbols.clear()  # 同时清空保护统计
         logger.info("🗑️【流水线步骤4】缓存已清空")
+        

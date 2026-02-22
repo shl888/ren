@@ -37,8 +37,8 @@ __all__ = [
 ]
 
 # 版本信息
-__version__ = "4.1.0"  # ✅ 版本号更新
-__description__ = "管理员-执行者架构数据处理系统（已集成Step0限流器）"
+__version__ = "4.2.0"  # ✅ 版本号更新（新增标记价格字段）
+__description__ = "管理员-执行者架构数据处理系统（新增标记价格字段）"
 
 # 初始化日志
 import logging
@@ -46,4 +46,4 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 # 模块加载日志
 logger = logging.getLogger(__name__)
-logger.info(f"✅ shared_data v{__version__} 加载完成（已集成Step0限流器）")
+logger.info(f"✅ shared_data v{__version__} 加载完成（新增标记价格字段）")

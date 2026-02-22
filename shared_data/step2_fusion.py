@@ -1,6 +1,6 @@
 """
 第二步：数据融合与统一规格
-功能：将Step1提取的5种数据源，按交易所+合约名合并成一条
+功能：将Step1提取的6种数据源，按交易所+合约名合并成一条
 输出：每个交易所每个合约一条完整数据
 """
 
@@ -22,7 +22,8 @@ class FusedData:
     exchange: str
     symbol: str
     contract_name: str
-    latest_price: Optional[str] = None
+    trade_price: Optional[str] = None      # ✅ renamed: latest_price → trade_price
+    mark_price: Optional[str] = None        # ✅ NEW: 标记价格
     funding_rate: Optional[str] = None
     last_settlement_time: Optional[int] = None      # 币安历史数据提供
     current_settlement_time: Optional[int] = None   # 实时数据提供
@@ -198,7 +199,7 @@ class Step2Fusion:
             return None
     
     def _merge_okx(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
-        """合并OKX数据：ticker + funding_rate"""
+        """合并OKX数据：ticker + funding_rate + mark_price"""
         
         for item in items:
             payload = item.payload
@@ -207,18 +208,22 @@ class Step2Fusion:
             if not fused.contract_name and "contract_name" in payload:
                 fused.contract_name = payload["contract_name"]
             
-            # ticker数据：提取价格
+            # ticker数据：提取成交价格
             if item.data_type == "okx_ticker":
-                fused.latest_price = payload.get("latest_price")
+                fused.trade_price = payload.get("trade_price")  # ✅ renamed
             
             # funding_rate数据：提取费率和时间
             elif item.data_type == "okx_funding_rate":
                 fused.funding_rate = payload.get("funding_rate")
                 fused.current_settlement_time = self._to_int(payload.get("current_settlement_time"))
                 fused.next_settlement_time = self._to_int(payload.get("next_settlement_time"))
+            
+            # ✅ NEW: mark_price数据：提取标记价格
+            elif item.data_type == "okx_mark_price":
+                fused.mark_price = payload.get("mark_price")
         
-        # 验证：至少要有价格或费率之一
-        if not any([fused.latest_price, fused.funding_rate]):
+        # 验证：至少要有价格、费率或标记价格之一
+        if not any([fused.trade_price, fused.funding_rate, fused.mark_price]):
             return None
         
         return fused
@@ -241,15 +246,16 @@ class Step2Fusion:
         fused.contract_name = mark_payload.get("contract_name", fused.symbol)
         fused.funding_rate = mark_payload.get("funding_rate")
         fused.current_settlement_time = self._to_int(mark_payload.get("current_settlement_time"))
+        fused.mark_price = mark_payload.get("mark_price")  # ✅ 标记价格
         
         # 验证：mark_price必须有费率
         if fused.funding_rate is None:
             return None
         
-        # ticker数据：提取价格
+        # ticker数据：提取成交价格
         for item in items:
             if item.data_type == "binance_ticker":
-                fused.latest_price = item.payload.get("latest_price")
+                fused.trade_price = item.payload.get("trade_price")  # ✅ renamed
                 break
         
         # funding_settlement数据：填充上次结算时间
@@ -268,3 +274,4 @@ class Step2Fusion:
             return int(value)
         except (ValueError, TypeError):
             return None
+            

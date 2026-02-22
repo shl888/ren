@@ -20,14 +20,16 @@ class AlignedData:
     binance_contract_name: Optional[str] = None
     
     # OKX数据
-    okx_price: Optional[str] = None
+    okx_trade_price: Optional[str] = None           # ✅ renamed: okx_price → okx_trade_price
+    okx_mark_price: Optional[str] = None             # ✅ NEW
     okx_funding_rate: Optional[str] = None
     okx_last_settlement: Optional[str] = None
     okx_current_settlement: Optional[str] = None
     okx_next_settlement: Optional[str] = None
     
     # 币安数据
-    binance_price: Optional[str] = None
+    binance_trade_price: Optional[str] = None        # ✅ renamed: binance_price → binance_trade_price
+    binance_mark_price: Optional[str] = None          # ✅ NEW
     binance_funding_rate: Optional[str] = None
     binance_last_settlement: Optional[str] = None
     binance_current_settlement: Optional[str] = None
@@ -226,7 +228,8 @@ class Step3Align:
         # OKX数据
         if okx_item:
             aligned.okx_contract_name = okx_item.contract_name
-            aligned.okx_price = okx_item.latest_price
+            aligned.okx_trade_price = okx_item.trade_price           # ✅ renamed
+            aligned.okx_mark_price = okx_item.mark_price             # ✅ NEW
             aligned.okx_funding_rate = okx_item.funding_rate
             aligned.okx_current_ts = okx_item.current_settlement_time
             aligned.okx_next_ts = okx_item.next_settlement_time
@@ -239,7 +242,8 @@ class Step3Align:
         # 币安数据
         if binance_item:
             aligned.binance_contract_name = binance_item.contract_name
-            aligned.binance_price = binance_item.latest_price
+            aligned.binance_trade_price = binance_item.trade_price   # ✅ renamed
+            aligned.binance_mark_price = binance_item.mark_price     # ✅ NEW
             aligned.binance_funding_rate = binance_item.funding_rate
             aligned.binance_last_ts = binance_item.last_settlement_time
             aligned.binance_current_ts = binance_item.current_settlement_time
@@ -269,3 +273,4 @@ class Step3Align:
         
         except Exception as e:
             return None
+            

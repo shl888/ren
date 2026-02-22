@@ -1,7 +1,7 @@
 """
-第一步：提取5种原始数据中的指定数据
-功能：精炼5种原始数据
-输出：精炼后的5种原始数据
+第一步：提取6种原始数据中的指定数据
+功能：精炼6种原始数据
+输出：精炼后的6种原始数据
 """
 import logging
 from typing import Dict, List, Any, Optional
@@ -22,7 +22,10 @@ class Step1Filter:
     FIELD_MAP = {
         "okx_ticker": {
             "path": ["data", "raw_data", "data", 0], 
-            "fields": {"contract_name": "instId", "latest_price": "last"}
+            "fields": {
+                "contract_name": "instId", 
+                "trade_price": "last"  # ✅ renamed: latest_price → trade_price
+            }
         },
         "okx_funding_rate": {
             "path": ["data", "raw_data", "data", 0], 
@@ -33,13 +36,29 @@ class Step1Filter:
                 "next_settlement_time": "nextFundingTime"
             }
         },
+        # ✅ NEW: OKX mark_price独立通道
+        "okx_mark_price": {
+            "path": ["data", "raw_data", "data", 0],
+            "fields": {
+                "contract_name": "instId",
+                "mark_price": "markPx"
+            }
+        },
         "binance_ticker": {
             "path": ["data", "raw_data"], 
-            "fields": {"contract_name": "s", "latest_price": "c"}
+            "fields": {
+                "contract_name": "s", 
+                "trade_price": "c"  # ✅ renamed: latest_price → trade_price
+            }
         },
         "binance_mark_price": {
             "path": ["data", "raw_data"], 
-            "fields": {"contract_name": "s", "funding_rate": "r", "current_settlement_time": "T"}
+            "fields": {
+                "contract_name": "s", 
+                "funding_rate": "r", 
+                "current_settlement_time": "T",
+                "mark_price": "p"  # ✅ 确保mark_price被提取
+            }
         },
         # ✅ 币安历史费率数据（统一格式）
         "binance_funding_settlement": {
@@ -86,6 +105,10 @@ class Step1Filter:
             # 生成类型键
             if exchange == "binance" and data_type == "funding_settlement":
                 type_key = "binance_funding_settlement"
+            elif exchange == "binance" and data_type == "mark_price":
+                type_key = "binance_mark_price"
+            elif exchange == "okx" and data_type == "mark_price":  # ✅ NEW
+                type_key = "okx_mark_price"
             else:
                 type_key = f"{exchange}_{data_type}"
             
@@ -149,6 +172,10 @@ class Step1Filter:
         # 生成类型键
         if exchange == "binance" and data_type == "funding_settlement":
             type_key = "binance_funding_settlement"
+        elif exchange == "binance" and data_type == "mark_price":
+            type_key = "binance_mark_price"
+        elif exchange == "okx" and data_type == "mark_price":  # ✅ NEW
+            type_key = "okx_mark_price"
         else:
             type_key = f"{exchange}_{data_type}"
         
