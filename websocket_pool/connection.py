@@ -285,6 +285,7 @@ class WebSocketConnection:
             for symbol in self.symbols:
                 all_subscriptions.append({"channel": "tickers", "instId": symbol})
                 all_subscriptions.append({"channel": "funding-rate", "instId": symbol})
+                all_subscriptions.append({"channel": "mark-price", "instId": symbol})  # 新增标记价格订阅
             
             batch_size = 100
             
@@ -479,7 +480,23 @@ class WebSocketConnection:
         symbol = arg.get("instId", "")
         
         try:
-            if channel == "funding-rate":
+            # ✅ 新增：处理标记价格
+            if channel == "mark-price":
+                if data.get("data") and len(data["data"]) > 0:
+                    processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
+                    
+                    processed = {
+                        "exchange": "okx",
+                        "symbol": processed_symbol,
+                        "data_type": "mark_price",
+                        "channel": channel,
+                        "raw_data": data,
+                        "original_symbol": symbol,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    await self.data_callback(processed)
+            
+            elif channel == "funding-rate":
                 if data.get("data") and len(data["data"]) > 0:
                     processed_symbol = symbol.replace('-USDT-SWAP', 'USDT')
                     
@@ -610,4 +627,3 @@ class WebSocketConnection:
             "heartbeat": heartbeat_status,
             "timestamp": now.isoformat()
         }
-        
