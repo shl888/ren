@@ -337,10 +337,8 @@ class PrivateDataProcessor:
             else:
                 event_type = raw_data.get('e', 'unknown')
                 
-#                if exchange == 'binance':
-#                    if event_type == 'TRADE_LITE':
-#                        logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件")
-#                        return
+                if exchange == 'binance':
+                    # TRADE_LITE 过滤已删除，现在会正常处理
                     
                     binance_mapping = {
                         'ACCOUNT_UPDATE': 'account_update',
