@@ -23,20 +23,24 @@ class CrossPlatformData:
     """最终跨平台套利数据结构"""
     symbol: str
     
-    # 计算字段（没有默认值，放前面）
+    # ========== 没有默认值的字段（必须全部放前面） ==========
+    # 跨平台计算字段
     trade_price_diff: float              # |OKX成交价 - 币安成交价|（绝对值）
     trade_price_diff_percent: float      # 成交价百分比差（以低价为准）
-    rate_diff: Optional[float] = None    # |OKX费率 - 币安费率|（百分化后的差值）
     
-    # 必须先放没有默认值的字段！
+    # OKX必填字段
     okx_trade_price: str                  # OKX成交价格
-    okx_funding_rate: Optional[str] = None # OKX费率（百分化后）
-    binance_trade_price: str               # 币安成交价格
-    binance_funding_rate: Optional[str] = None # 币安费率（百分化后）
+    okx_mark_price: str                    # OKX标记价格
     
-    # 标记价格字段
-    okx_mark_price: str
-    binance_mark_price: str
+    # 币安必填字段
+    binance_trade_price: str               # 币安成交价格
+    binance_mark_price: str                 # 币安标记价格
+    
+    # ========== 有默认值的字段（可以放后面） ==========
+    # 费率字段（可能为None）
+    rate_diff: Optional[float] = None      # |OKX费率 - 币安费率|（百分化后的差值）
+    okx_funding_rate: Optional[str] = None # OKX费率（百分化后）
+    binance_funding_rate: Optional[str] = None # 币安费率（百分化后）
     
     # 成交与标记价差计算
     okx_price_to_mark_diff: Optional[float] = None
@@ -44,7 +48,7 @@ class CrossPlatformData:
     binance_price_to_mark_diff: Optional[float] = None
     binance_price_to_mark_diff_percent: Optional[float] = None
     
-    # 再放有默认值的字段
+    # 时间字段
     okx_period_seconds: Optional[int] = None
     okx_countdown_seconds: Optional[int] = None
     okx_last_settlement: Optional[str] = None
@@ -57,7 +61,7 @@ class CrossPlatformData:
     binance_current_settlement: Optional[str] = None
     binance_next_settlement: Optional[str] = None
     
-    # 数据源标记（不含业务判断）
+    # 数据源标记
     metadata: Dict[str, Any] = field(default_factory=lambda: {
         "calculated_at": None,
         "source": "step5_cross_calc"
@@ -228,7 +232,7 @@ class Step5CrossCalc:
         except:
             return None
     
-    # ==================== 修改：_merge_pair 方法 ====================
+    # ==================== _merge_pair 方法 ====================
     
     def _merge_pair(self, symbol: str, items: List) -> Optional[CrossPlatformData]:
         """合并OKX和币安数据"""
@@ -314,25 +318,21 @@ class Step5CrossCalc:
             symbol=symbol,
             trade_price_diff=trade_price_diff,
             trade_price_diff_percent=trade_price_diff_percent,
-            rate_diff=rate_diff,
-            
-            # 必须先放没有默认值的字段
             okx_trade_price=str(okx_item.trade_price) if okx_item.trade_price else "",
-            okx_funding_rate=str(okx_rate_display) if okx_rate_display is not None else None,
-            binance_trade_price=str(binance_item.trade_price) if binance_item.trade_price else "",
-            binance_funding_rate=str(binance_rate_display) if binance_rate_display is not None else None,
-            
-            # 标记价格字段
             okx_mark_price=str(okx_item.mark_price) if okx_item.mark_price else "",
+            binance_trade_price=str(binance_item.trade_price) if binance_item.trade_price else "",
             binance_mark_price=str(binance_item.mark_price) if binance_item.mark_price else "",
             
-            # 成交与标记价差（精确值，不四舍五入）
+            # 有默认值的字段
+            rate_diff=rate_diff,
+            okx_funding_rate=str(okx_rate_display) if okx_rate_display is not None else None,
+            binance_funding_rate=str(binance_rate_display) if binance_rate_display is not None else None,
+            
             okx_price_to_mark_diff=okx_price_to_mark_diff,
             okx_price_to_mark_diff_percent=okx_price_to_mark_diff_percent,
             binance_price_to_mark_diff=binance_price_to_mark_diff,
             binance_price_to_mark_diff_percent=binance_price_to_mark_diff_percent,
             
-            # 其他字段保持不变
             okx_period_seconds=okx_item.period_seconds,
             okx_countdown_seconds=okx_item.countdown_seconds,
             okx_last_settlement=okx_item.last_settlement_time,
