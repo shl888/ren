@@ -209,7 +209,24 @@ class Step5CrossCalc:
             a = Decimal(str(a_str).strip())
             b = Decimal(str(b_str).strip())
             diff = abs(a - b)
-            return float(diff)
+            return float(diff)  # 此时已经是精确值
+        except Exception:
+            return None
+    
+    def _decimal_rate_diff(self, a_val: Optional[float], b_val: Optional[float]) -> Optional[float]:
+        """
+        用Decimal精确计算两个浮点数的绝对差
+        专门用于费率差计算，避免浮点误差
+        """
+        if a_val is None or b_val is None:
+            return None
+        
+        try:
+            # 将浮点数转换为字符串，再用Decimal计算
+            a = Decimal(str(a_val))
+            b = Decimal(str(b_val))
+            diff = abs(a - b)
+            return float(diff)  # 返回精确值
         except Exception:
             return None
     
@@ -288,11 +305,14 @@ class Step5CrossCalc:
             okx_rate_display = self._format_percent(okx_rate_pct) if okx_rate_pct is not None else None
             binance_rate_display = self._format_percent(binance_rate_pct) if binance_rate_pct is not None else None
             
-            # 3. 费率差计算（基于四舍五入后的值）
+            # 3. 费率差计算（用Decimal精确计算，避免浮点误差）
             rate_diff = None
             if okx_rate_display is not None and binance_rate_display is not None:
-                rate_diff = abs(okx_rate_display - binance_rate_display)
-                # 费率差本身已经是百分比值，不再四舍五入
+                # 使用Decimal精确计算
+                rate_diff = self._decimal_rate_diff(okx_rate_display, binance_rate_display)
+                # 费率差本身已经是百分比值，保留4位小数（消除浮点误差）
+                if rate_diff is not None:
+                    rate_diff = round(rate_diff, 4)
             
             # ========== OKX成交-标记价差百分比 ==========
             okx_price_to_mark_diff_percent = None
