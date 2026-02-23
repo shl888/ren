@@ -26,13 +26,13 @@ class CrossPlatformData:
     # 计算字段（没有默认值，放前面）
     trade_price_diff: float              # |OKX成交价 - 币安成交价|（绝对值）✅ renamed: price_diff → trade_price_diff
     trade_price_diff_percent: float      # 成交价百分比差（以低价为准）✅ renamed: price_diff_percent → trade_price_diff_percent
-    rate_diff: float                     # |OKX费率 - 币安费率|
+    rate_diff: float                     # |OKX费率 - 币安费率|（基于百分化后的值）
     
     # 必须先放没有默认值的字段！
     okx_trade_price: str                  # ✅ renamed: okx_price → okx_trade_price
-    okx_funding_rate: str
+    okx_funding_rate: float                # ✅ 修改：百分化后，四舍五入到4位
     binance_trade_price: str               # ✅ renamed: binance_price → binance_trade_price
-    binance_funding_rate: str
+    binance_funding_rate: float             # ✅ 修改：百分化后，四舍五入到4位
     
     # ✅ NEW: 标记价格字段
     okx_mark_price: str
@@ -210,8 +210,28 @@ class Step5CrossCalc:
         except Exception:
             return None
     
+    def _format_rate(self, rate_str: Optional[str]) -> Optional[float]:
+        """
+        处理费率：原始值 → 百分化 → 四舍五入到4位
+        原始值: -0.0000226151001067
+        百分化后: -0.00226151001067
+        四舍五入: -0.0023
+        """
+        if not rate_str:
+            return None
+        
+        try:
+            # 转为Decimal精确处理
+            rate_decimal = Decimal(str(rate_str).strip())
+            # 百分化（×100）
+            rate_pct = rate_decimal * Decimal('100')
+            # 转float并四舍五入到4位
+            return round(float(rate_pct), 4)
+        except Exception:
+            return None
+    
     def _format_percent(self, value: Optional[float]) -> Optional[float]:
-        """百分比保留4位小数，四舍五入"""
+        """百分比保留4位小数，四舍五入（用于价差百分比）"""
         if value is None:
             return None
         return round(value, 4)
@@ -219,7 +239,7 @@ class Step5CrossCalc:
     # ==================== 修改：_merge_pair 方法 ====================
     
     def _merge_pair(self, symbol: str, items: List) -> Optional[CrossPlatformData]:
-        """合并OKX和币安数据（精确计算价差，百分比四舍五入）"""
+        """合并OKX和币安数据（精确计算价差，费率先百分化再四舍五入）"""
         
         # 分离OKX和币安数据
         okx_item = next((item for item in items if item.exchange == "okx"), None)
@@ -252,6 +272,19 @@ class Step5CrossCalc:
                 binance_item.mark_price
             )
             
+            # ========== 费率处理：先百分化，再四舍五入 ==========
+            okx_rate_display = self._format_rate(okx_item.funding_rate)  # -0.0023
+            binance_rate_display = self._format_rate(binance_item.funding_rate)  # -0.0013
+            
+            # 如果转换失败，使用0
+            if okx_rate_display is None:
+                okx_rate_display = 0.0
+            if binance_rate_display is None:
+                binance_rate_display = 0.0
+            
+            # ========== 费率差计算（基于百分化后的值） ==========
+            rate_diff = abs(okx_rate_display - binance_rate_display)  # 0.0010
+            
             # ========== 百分比计算（用float，最后四舍五入） ==========
             
             # 成交价百分比差
@@ -264,14 +297,8 @@ class Step5CrossCalc:
                 if min_trade_price > 1e-10:
                     trade_price_diff_percent = (trade_price_diff / min_trade_price) * 100
             
-            # 费率差计算
-            okx_rate = self._safe_float(okx_item.funding_rate) or 0
-            binance_rate = self._safe_float(binance_item.funding_rate) or 0
-            rate_diff = abs(okx_rate - binance_rate)
-            
-            # ========== 百分比字段统一四舍五入到4位 ==========
+            # 成交价百分比差四舍五入到4位
             trade_price_diff_percent = self._format_percent(trade_price_diff_percent)
-            rate_diff = self._format_percent(rate_diff)
             
             # OKX成交-标记价差百分比
             okx_price_to_mark_diff_percent = None
@@ -301,9 +328,9 @@ class Step5CrossCalc:
             
             # 必须先放没有默认值的字段
             okx_trade_price=str(okx_item.trade_price) if okx_item.trade_price else "",
-            okx_funding_rate=str(okx_item.funding_rate) if okx_item.funding_rate else "",
+            okx_funding_rate=okx_rate_display,  # ✅ 已经是百分化后的值
             binance_trade_price=str(binance_item.trade_price) if binance_item.trade_price else "",
-            binance_funding_rate=str(binance_item.funding_rate) if binance_item.funding_rate else "",
+            binance_funding_rate=binance_rate_display,  # ✅ 已经是百分化后的值
             
             # 标记价格字段
             okx_mark_price=str(okx_item.mark_price) if okx_item.mark_price else "",
