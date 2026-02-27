@@ -26,7 +26,8 @@ from websocket_pool.admin import WebSocketAdmin
 from http_server.server import HTTPServer
 from shared_data.pipeline_manager import PipelineManager
 from frontend_relay import FrontendRelayServer
-from funding_settlement import FundingSettlementManager
+
+from public_http_fetcher.binance_funding_rate import FundingSettlementManager
 from smart_brain.core import SmartBrain
 
 logger = logging.getLogger(__name__)
