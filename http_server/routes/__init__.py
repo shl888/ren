@@ -17,7 +17,7 @@ if root_dir not in sys.path:
 from .main import setup_main_routes
 from .debug import setup_debug_routes
 from .monitor import setup_monitor_routes
-from funding_settlement.api_routes import setup_funding_settlement_routes
+from public_http_fetcher.binance_funding_rate.api_routes import setup_funding_settlement_routes
 
 logger = logging.getLogger(__name__)
 
