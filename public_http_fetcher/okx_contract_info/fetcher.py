@@ -151,4 +151,70 @@ class OKXContractFetcher:
                         result['error'] = f"API错误: {data.get('msg', '未知错误')}"
                         return result
                     
-                
+                    # 获取合约列表
+                    instruments = data.get('data', [])
+                    result['total_count'] = len(instruments)
+                    
+                    # 过滤出USDT结算的永续合约
+                    usdt_contracts = []
+                    for inst in instruments:
+                        # 检查结算货币是否为USDT
+                        if inst.get('settleCcy') == 'USDT':
+                            usdt_contracts.append(inst)
+                    
+                    result['usdt_count'] = len(usdt_contracts)
+                    result['filtered_data'] = {
+                        'exchange': 'okx',
+                        'type': 'contract_info',
+                        'timestamp': datetime.now().isoformat(),
+                        'total_contracts': result['total_count'],
+                        'usdt_contracts': usdt_contracts
+                    }
+                    result['success'] = True
+                    
+                    logger.info(f"✅ 原始合约: {result['total_count']}个, USDT合约: {result['usdt_count']}个")
+                    
+        except asyncio.TimeoutError:
+            result['error'] = "请求超时"
+        except aiohttp.ClientError as e:
+            result['error'] = f"网络错误: {str(e)}"
+        except Exception as e:
+            result['error'] = f"未知错误: {str(e)}"
+            logger.error(f"❌ _fetch_from_api异常: {e}")
+        
+        return result
+    
+    def _analyze_error(self, error_msg: str) -> str:
+        """分析错误类型，用于决定重试等待时间"""
+        error_msg = error_msg.lower()
+        
+        if 'timeout' in error_msg:
+            return 'timeout'
+        elif 'network' in error_msg or 'connection' in error_msg:
+            return 'network_error'
+        elif 'rate limit' in error_msg or 'too many requests' in error_msg:
+            return 'rate_limit'
+        elif 'api error' in error_msg:
+            return 'api_error'
+        else:
+            return 'default'
+    
+    async def _push_filtered_data(self, data: Dict[str, Any]):
+        """
+        推送过滤后的数据到数据处理模块
+        
+        格式:
+        {
+            'exchange': 'okx',
+            'type': 'contract_info',
+            'timestamp': '2024-01-01T00:00:00',
+            'total_contracts': 100,
+            'usdt_contracts': [...]  # 只包含USDT结算的合约
+        }
+        """
+        try:
+            # 推送到数据处理模块
+            await receive_private_data(data)
+            logger.info(f"📤 已推送{len(data['usdt_contracts'])}个USDT合约数据")
+        except Exception as e:
+            logger.error(f"❌ 推送数据失败: {e}")
