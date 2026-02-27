@@ -310,7 +310,7 @@ class PrivateDataProcessor:
             # ========== OKX持仓更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'position_update':
                 
-                logger.info(f"📥 [OKX持仓] 收到持仓更新")
+                logger.debug(f"📥 [OKX持仓] 收到持仓更新")
                 
                 try:
                     # 直接存储原始数据 - 使用你提供的格式
@@ -324,7 +324,7 @@ class PrivateDataProcessor:
                         'received_at': private_data.get('received_at', datetime.now().isoformat())
                     }
                     
-                    logger.info(f"✅ [OKX持仓] 已保存: {storage_key}")
+                    logger.debug(f"✅ [OKX持仓] 已保存: {storage_key}")
                     
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
