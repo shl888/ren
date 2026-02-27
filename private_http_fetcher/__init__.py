@@ -8,9 +8,7 @@ from .binance_account import start_account_task, PrivateHTTPFetcher
 
 __version__ = "2.0.0"
 __all__ = [
-    'start_token_task',
     'ListenKeyManager',
-    'start_account_task',
     'PrivateHTTPFetcher'
 ]
 
