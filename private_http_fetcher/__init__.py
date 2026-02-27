@@ -3,8 +3,8 @@
 包含所有需要API密钥的HTTP获取任务
 """
 
-from .binance_token import start_token_task, ListenKeyManager
-from .binance_account import start_account_task, PrivateHTTPFetcher
+from .binance_token import ListenKeyManager
+from .binance_account import PrivateHTTPFetcher
 
 __version__ = "2.0.0"
 __all__ = [
