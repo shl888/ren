@@ -1,4 +1,7 @@
-# private_http_fetcher/binance_token/__init__.py
+"""
+币安令牌管理模块
+"""
+
 from .listen_key_manager import ListenKeyManager
 
 __all__ = [
