@@ -77,37 +77,8 @@ async def delayed_ws_init(ws_admin):
     except Exception as e:
         logger.error(f"WebSocket初始化失败: {e}")
 
-# ==================== 启动令牌任务 ====================
-async def start_token_task():
-    """启动币安令牌任务（在私人模块）"""
-    try:
-        from private_http_fetcher.binance_token import start_token_task as start_binance_token
-        asyncio.create_task(start_binance_token())
-        logger.info("✅ 币安令牌任务已启动（私人模块）")
-    except ImportError as e:
-        logger.error(f"❌ 无法导入币安令牌模块: {e}")
-    except Exception as e:
-        logger.error(f"❌ 启动币安令牌任务失败: {e}")
-
-# ==================== 启动资产任务 ====================
-async def start_account_task():
-    """启动币安资产获取任务（在私人模块）"""
-    try:
-        from private_http_fetcher.binance_account import start_account_task as start_binance_account
-        # 启动资产任务，返回fetcher实例
-        account_fetcher = await start_binance_account()
-        logger.info("✅ 币安资产获取任务已启动（私人模块）")
-        return account_fetcher
-    except ImportError as e:
-        logger.error(f"❌ 无法导入币安资产模块: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"❌ 启动币安资产任务失败: {e}")
-        return None
-# ========================================================
-
 async def main():
-    """主启动函数 - 完全按照大脑原来的启动顺序"""
+    """主启动函数"""
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -118,39 +89,35 @@ async def main():
     start_keep_alive_background()
     
     logger.info("=" * 60)
-    logger.info("🚀 智能大脑启动中（重构版：启动器负责所有模块启动）...")
+    logger.info("🚀 智能大脑启动中...")
     logger.info("=" * 60)
     
-    brain = None  # 提前声明变量
+    brain = None
     
     try:
-        # ==================== 新增：验证环境变量 ====================
-        # 检查必要的环境变量
+        # ==================== 验证环境变量 ====================
         required_vars = ['BINANCE_API_KEY', 'BINANCE_API_SECRET', 
                         'OKX_API_KEY', 'OKX_API_SECRET']
         missing_vars = [var for var in required_vars if not os.getenv(var)]
         if missing_vars:
-            logger.warning(f"⚠️ 以下环境变量未设置，私人连接可能不可用: {missing_vars}")
+            logger.warning(f"⚠️ 以下环境变量未设置: {missing_vars}")
         else:
-            logger.info("✅ 所有私人连接环境变量已就绪")
-        # =========================================================
+            logger.info("✅ 所有环境变量已就绪")
         
-        # ==================== 1. 创建精简版大脑实例 ====================
-        logger.info("【1️⃣】创建精简版大脑实例...")
+        # ==================== 1. 创建大脑实例 ====================
+        logger.info("【1️⃣】创建大脑实例...")
         brain = SmartBrain(
-            http_server=None,  # 稍后设置
+            http_server=None,
             http_runner=None,
             pipeline_manager=None,
             funding_manager=None,
             frontend_relay=None
         )
         
-        # ==================== 2. 获取端口并创建HTTP服务器（传入大脑实例） ====================
-        logger.info("【2️⃣】创建HTTP服务器（传入大脑实例）...")
+        # ==================== 2. 创建HTTP服务器 ====================
+        logger.info("【2️⃣】创建HTTP服务器...")
         port = int(os.getenv('PORT', 10000))
         http_server = HTTPServer(host='0.0.0.0', port=port, brain=brain)
-        
-        # 更新大脑的http_server引用
         brain.http_server = http_server
         
         # ==================== 3. 启动HTTP服务器 ====================
@@ -162,8 +129,8 @@ async def main():
         data_store.set_http_server_ready(True)
         logger.info("✅ HTTP服务已就绪！")
 
-        # ==================== 4. 初始化PipelineManager（双管道） ====================
-        logger.info("【4️⃣】初始化PipelineManager（双管道）...")
+        # ==================== 4. 初始化PipelineManager ====================
+        logger.info("【4️⃣】初始化PipelineManager...")
         pipeline_manager = PipelineManager()
         brain.pipeline_manager = pipeline_manager
         
@@ -171,42 +138,33 @@ async def main():
         logger.info("【5️⃣】初始化资金费率管理器...")
         funding_manager = FundingSettlementManager()
         brain.funding_manager = funding_manager
-        
-        # 设置数据存储的引用
         data_store.pipeline_manager = pipeline_manager
         
-        # ==================== 6. 大脑初始化（现在会自动初始化私人连接和令牌服务） ====================
+        # ==================== 6. 大脑初始化 ====================
         logger.info("【6️⃣】大脑初始化...")
         brain_init_success = await brain.initialize()
-        
         if not brain_init_success:
-            logger.error("❌ 大脑初始化失败，程序将退出")
+            logger.error("❌ 大脑初始化失败")
             return
         
-        # ==================== 7. 初始化前端中继（需要大脑实例） ====================
+        # ==================== 7. 初始化前端中继 ====================
         logger.info("【7️⃣】初始化前端中继服务器...")
         try:
-            # 现在有大脑实例了，创建前端中继
             frontend_relay = FrontendRelayServer(
-                brain_instance=brain,  # ✅ 传入大脑实例
+                brain_instance=brain,
                 port=10001
             )
             await frontend_relay.start()
-            
-            # ✅ 将前端中继设置回大脑
             brain.frontend_relay = frontend_relay
-            
             logger.info("✅ 前端中继启动完成！")
         except ImportError:
-            logger.warning("⚠️ 前端中继模块未找到，跳过前端功能")
+            logger.warning("⚠️ 前端中继模块未找到")
         except Exception as e:
             logger.error(f"❌ 前端中继启动失败: {e}")
         
         # ==================== 8. 设置PipelineManager回调 ====================
         logger.info("【8️⃣】设置数据处理回调...")
         pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
-        # ❌ 删除这行，因为 PipelineManager 不再处理私人数据
-        # pipeline_manager.set_private_data_callback(brain.data_manager.receive_private_data)
         
         # ==================== 9. 启动数据处理管道 ====================
         logger.info("【9️⃣】启动数据处理管道...")
@@ -216,9 +174,9 @@ async def main():
         logger.info("【🔟】准备延迟启动WebSocket...")
         ws_admin = WebSocketAdmin()
         asyncio.create_task(delayed_ws_init(ws_admin))
-        brain.ws_admin = ws_admin  # 传递给大脑
+        brain.ws_admin = ws_admin
         
-        # ==================== 11. 🆕 启动私人连接池（B模块） ====================
+        # ==================== 11. 启动私人WebSocket连接池 ====================
         logger.info("【🅱️】启动私人WebSocket连接池...")
         try:
             from private_ws_pool import PrivateWebSocketPool
@@ -231,16 +189,27 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动私人连接池失败: {e}")
         
-        # ==================== 12. 🆕 启动令牌任务 ====================
+        # ==================== 12. 启动币安令牌任务 ====================
         logger.info("【🪙】启动币安令牌任务...")
-        await start_token_task()
+        try:
+            from private_http_fetcher.binance_token.listen_key_manager import ListenKeyManager
+            token_manager = ListenKeyManager(brain.data_manager)
+            await token_manager.start()
+            brain.token_manager = token_manager
+            logger.info("✅ 币安令牌任务已启动")
+        except Exception as e:
+            logger.error(f"❌ 启动币安令牌任务失败: {e}")
         
-        # ==================== 13. 🆕 启动资产任务 ====================
+        # ==================== 13. 启动币安资产获取任务 ====================
         logger.info("【💰】启动币安资产获取任务...")
-        account_fetcher = await start_account_task()
-        if account_fetcher:
+        try:
+            from private_http_fetcher.binance_account.fetcher import PrivateHTTPFetcher
+            account_fetcher = PrivateHTTPFetcher()
+            await account_fetcher.start(brain.data_manager)
             brain.private_fetcher = account_fetcher
-        # ============================================================
+            logger.info("✅ 币安资产获取任务已启动")
+        except Exception as e:
+            logger.error(f"❌ 启动币安资产获取任务失败: {e}")
         
         # ==================== 完成初始化 ====================
         brain.running = True
@@ -248,7 +217,7 @@ async def main():
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # 输出私人连接状态
+        # 输出状态
         if brain.private_pool:
             pool_status = brain.private_pool.get_status()
             logger.info(f"🔗 私人连接池状态: 运行中")
@@ -263,7 +232,6 @@ async def main():
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
         
-        # 主循环
         while brain.running:
             await asyncio.sleep(1)
         
@@ -273,7 +241,6 @@ async def main():
         logger.error(f"运行错误: {e}")
         logger.error(traceback.format_exc())
     finally:
-        # 关闭
         if brain:
             await brain.shutdown()
 
