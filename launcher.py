@@ -201,7 +201,18 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安令牌任务失败: {e}")
         
-        # ==================== 13. 启动币安资产获取任务 ====================
+        # ==================== 13. 启动OKX合约面值获取任务 ====================
+        logger.info("【📄】启动OKX合约面值获取任务...")
+        try:
+            from public_http_fetcher.okx_contract_info import OKXContractFetcher
+            okx_contract_fetcher = OKXContractFetcher()
+            asyncio.create_task(okx_contract_fetcher.startup_fetch())
+            brain.okx_contract_fetcher = okx_contract_fetcher
+            logger.info("✅ OKX合约面值获取任务已启动（延迟60秒后执行，自动过滤USDT合约）")
+        except Exception as e:
+            logger.error(f"❌ 启动OKX合约面值获取任务失败: {e}")
+        
+        # ==================== 14. 启动币安资产获取任务 ====================
         logger.info("【💰】启动币安资产获取任务...")
         try:
             from private_http_fetcher.binance_account.fetcher import PrivateHTTPFetcher
@@ -228,7 +239,7 @@ async def main():
                 else:
                     logger.info(f"  • {exchange}: ⏳ 连接中...")
         
-        # ==================== 14. 运行大脑 ====================
+        # ==================== 15. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
