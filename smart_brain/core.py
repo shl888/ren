@@ -41,7 +41,7 @@ class SmartBrain:
         # 🔴【已删除】私人连接池实例（已移除）
         # self.private_pool = None
         
-        # ✅ 新增：HTTP模块服务
+        # ✅ 新增：HTTP模块服务（用于执行交易）
         self.http_module = None
         
         # 运行状态
@@ -62,7 +62,7 @@ class SmartBrain:
             
             self.command_router = CommandRouter(self)
             
-            # 2. ✅ 新增：初始化HTTP模块服务
+            # 2. ✅ 初始化HTTP模块服务（用于执行交易）
             try:
                 from http_server.service import HTTPModuleService
                 self.http_module = HTTPModuleService()
@@ -70,7 +70,7 @@ class SmartBrain:
                 if not http_init_success:
                     logger.error("❌ HTTP模块服务初始化失败")
                     return False
-                logger.info("✅ HTTP模块服务初始化成功")
+                logger.info("✅ HTTP模块服务初始化成功（仅用于执行交易）")
             except ImportError as e:
                 logger.error(f"❌ 无法导入HTTP模块服务: {e}")
                 return False
@@ -81,11 +81,11 @@ class SmartBrain:
             # 3. 🔴【已删除】启动私人连接池
             # await self._start_private_connections()
             
-            # 4. ✅ 修改：通过HTTP模块服务启动令牌服务
-            if self.http_module:
-                listen_key_started = await self.http_module.start_listen_key_service('binance')
-                if not listen_key_started:
-                    logger.warning("⚠️ 币安令牌服务启动失败（可能API未就绪）")
+            # 4. 🔴【已删除】令牌任务已移至private_http_fetcher，不再在这里启动
+            # if self.http_module:
+            #     listen_key_started = await self.http_module.start_listen_key_service('binance')
+            #     if not listen_key_started:
+            #         logger.warning("⚠️ 币安令牌服务启动失败（可能API未就绪）")
             
             # 5. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
