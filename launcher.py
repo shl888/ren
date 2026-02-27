@@ -77,6 +77,35 @@ async def delayed_ws_init(ws_admin):
     except Exception as e:
         logger.error(f"WebSocket初始化失败: {e}")
 
+# ==================== 启动令牌任务 ====================
+async def start_token_task():
+    """启动币安令牌任务（在私人模块）"""
+    try:
+        from private_http_fetcher.binance_token import start_token_task as start_binance_token
+        asyncio.create_task(start_binance_token())
+        logger.info("✅ 币安令牌任务已启动（私人模块）")
+    except ImportError as e:
+        logger.error(f"❌ 无法导入币安令牌模块: {e}")
+    except Exception as e:
+        logger.error(f"❌ 启动币安令牌任务失败: {e}")
+
+# ==================== 启动资产任务 ====================
+async def start_account_task():
+    """启动币安资产获取任务（在私人模块）"""
+    try:
+        from private_http_fetcher.binance_account import start_account_task as start_binance_account
+        # 启动资产任务，返回fetcher实例
+        account_fetcher = await start_binance_account()
+        logger.info("✅ 币安资产获取任务已启动（私人模块）")
+        return account_fetcher
+    except ImportError as e:
+        logger.error(f"❌ 无法导入币安资产模块: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ 启动币安资产任务失败: {e}")
+        return None
+# ========================================================
+
 async def main():
     """主启动函数 - 完全按照大脑原来的启动顺序"""
     logging.basicConfig(
@@ -202,18 +231,16 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动私人连接池失败: {e}")
         
-        # ==================== 12. 🆕 启动私人HTTP获取器（C模块） ====================
-        logger.info("【©️】启动私人HTTP获取器...")
-        try:
-            from private_http_fetcher import PrivateHTTPFetcher
-            http_fetcher = PrivateHTTPFetcher()
-            await http_fetcher.start(brain.data_manager)
-            brain.private_fetcher = http_fetcher
-            logger.info("✅ 私人HTTP获取器启动成功")
-        except ImportError as e:
-            logger.error(f"❌ 无法导入HTTP获取器模块: {e}")
-        except Exception as e:
-            logger.error(f"❌ 启动HTTP获取器失败: {e}")
+        # ==================== 12. 🆕 启动令牌任务 ====================
+        logger.info("【🪙】启动币安令牌任务...")
+        await start_token_task()
+        
+        # ==================== 13. 🆕 启动资产任务 ====================
+        logger.info("【💰】启动币安资产获取任务...")
+        account_fetcher = await start_account_task()
+        if account_fetcher:
+            brain.private_fetcher = account_fetcher
+        # ============================================================
         
         # ==================== 完成初始化 ====================
         brain.running = True
@@ -231,7 +258,7 @@ async def main():
                 else:
                     logger.info(f"  • {exchange}: ⏳ 连接中...")
         
-        # ==================== 13. 运行大脑 ====================
+        # ==================== 14. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
