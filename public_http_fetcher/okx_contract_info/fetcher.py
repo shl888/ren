@@ -81,7 +81,7 @@ class OKXContractFetcher:
                     logger.info(f"🎉 [OKX合约] 获取成功！")
                     logger.info(f"📊 原始合约总数: {result['total_count']}")
                     logger.info(f"💰 过滤后USDT合约: {result['usdt_count']}")
-                    logger.info(f"📤 已推送过滤后的数据")
+                    logger.info(f"📤 已推送过滤后的数据 (仅包含USDT合约)")
                     logger.info("=" * 60)
                     
                     return True
@@ -163,18 +163,24 @@ class OKXContractFetcher:
                             usdt_contracts.append(inst)
                     
                     result['usdt_count'] = len(usdt_contracts)
+                    
+                    # 重要：只推送过滤后的USDT合约，不要包含非USDT合约
                     result['filtered_data'] = {
                         'exchange': 'okx',
                         'data_type': 'contract_info',
                         'timestamp': datetime.now().isoformat(),
-                        'data': {  # 将实际数据放在 data 字段内
+                        'data': {
                             'total_contracts': result['total_count'],
-                            'usdt_contracts': usdt_contracts
+                            'usdt_contracts': usdt_contracts  # 这里只包含USDT合约
                         }
                     }
                     result['success'] = True
                     
                     logger.info(f"✅ 原始合约: {result['total_count']}个, USDT合约: {result['usdt_count']}个")
+                    
+                    # 添加调试日志，确认过滤结果
+                    if usdt_contracts:
+                        logger.info(f"📋 第一个USDT合约: {usdt_contracts[0].get('instId', 'unknown')}")
                     
         except asyncio.TimeoutError:
             result['error'] = "请求超时"
@@ -210,36 +216,42 @@ class OKXContractFetcher:
             'exchange': 'okx',
             'data_type': 'contract_info',
             'timestamp': '2024-01-01T00:00:00',
-            'data': {  # 实际数据放在 data 字段内
-                'total_contracts': 100,
+            'data': {
+                'total_contracts': 303,
                 'usdt_contracts': [...]  # 只包含USDT结算的合约
             }
         }
         """
         try:
-            # 确保数据格式正确 - 将实际数据放在 data 字段内
+            # 确保数据格式正确
             formatted_data = {
                 'exchange': data.get('exchange', 'okx'),
                 'data_type': data.get('data_type', 'contract_info'),
                 'timestamp': data.get('timestamp', datetime.now().isoformat()),
-                'data': data.get('data', {  # 如果已经有data字段就使用，否则从顶层提取
-                    'total_contracts': data.get('total_contracts', 0),
-                    'usdt_contracts': data.get('usdt_contracts', [])
-                })
+                'data': data.get('data', {})
             }
+            
+            # 验证数据 - 检查usdt_contracts是否存在
+            if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
+                usdt_count = len(formatted_data['data']['usdt_contracts'])
+                logger.info(f"📤 准备推送 {usdt_count} 个USDT合约数据")
+                
+                # 确保没有错误地包含非USDT合约
+                if usdt_count > 0:
+                    sample = formatted_data['data']['usdt_contracts'][0]
+                    settle_ccy = sample.get('settleCcy', 'unknown')
+                    logger.info(f"📋 样例合约: {sample.get('instId', 'unknown')} - 结算货币: {settle_ccy}")
+                    
+                    if settle_ccy != 'USDT':
+                        logger.warning(f"⚠️ 警告: 发现非USDT合约! {sample.get('instId')} 结算货币为 {settle_ccy}")
             
             # 推送到数据处理模块
             await receive_private_data(formatted_data)
             
-            # 日志输出，确认数据格式
-            usdt_count = len(formatted_data['data'].get('usdt_contracts', []))
-            logger.info(f"📤 已推送{usdt_count}个USDT合约数据")
-            
-            # 可选：打印第一条合约作为样例（避免日志过大）
-            if usdt_count > 0:
-                sample = formatted_data['data']['usdt_contracts'][0]
-                logger.info(f"📋 样例合约: {sample.get('instId', 'unknown')} - 面值: {sample.get('ctVal', 'unknown')} {sample.get('ctValCcy', 'unknown')}")
+            # 确认推送完成
+            if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
+                logger.info(f"✅ 成功推送 {len(formatted_data['data']['usdt_contracts'])} 个USDT合约数据")
                 
         except Exception as e:
             logger.error(f"❌ 推送数据失败: {e}")
-            logger.error(f"❌ 问题数据: {str(data)[:200]}...")  # 打印前200个字符用于调试
+            logger.error(f"❌ 问题数据预览: {str(data)[:200]}...")
