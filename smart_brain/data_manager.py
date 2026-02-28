@@ -292,17 +292,17 @@ class DataManager:
                 sources.append({
                     "name": "public_market",
                     "description": "公开市场数据（实时行情、费率差）",
-                    "item_count": len(self.memory_store['market_data']),  # 239个币种
+                    "item_count": len(self.memory_store['market_data']),
                     "endpoint": "/api/brain/data/public_market",
                     "last_update": self._format_time_iso(self.last_market_time)
                 })
             
-            # 2. 私人用户数据
+            # 2. 私人用户数据（未来）
             if self.memory_store['user_data']:
                 sources.append({
                     "name": "private_user",
                     "description": "私人用户数据（账户、持仓、订单）",
-                    "user_count": len(self.memory_store['user_data']),  # 2条（币安+欧易）
+                    "user_count": len(self.memory_store['user_data']),
                     "endpoint": "/api/brain/data/private_user",
                     "last_update": self._format_time_iso(self.last_account_time)
                 })
@@ -320,20 +320,16 @@ class DataManager:
                 sources.append({
                     "name": "okx_contracts",
                     "description": "OKX合约面值数据",
-                    "contract_count": contract_count,  # 262个合约
+                    "contract_count": contract_count,
                     "endpoint": "/api/brain/data/okx_contracts",
                     "last_update": self._format_time_iso(self.last_reference_time)
                 })
             
             return {
                 "timestamp": datetime.now().isoformat(),
+                "source_count": len(sources),  # ← 改为 source_count，表示数据来源数量
                 "sources": sources,
-                "total_items": (  # 存储的总条目数
-                    len(self.memory_store['market_data']) +
-                    len(self.memory_store['user_data']) +
-                    len(self.memory_store['reference_data'])
-                ),
-                "note": "数据按来源分类，点击endpoint查看详情"
+                "note": f"共{len(sources)}个数据来源，点击endpoint查看详情"
             }
         except Exception as e:
             logger.error(f"❌ 获取数据大纲失败: {e}")
