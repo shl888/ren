@@ -201,16 +201,29 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安令牌任务失败: {e}")
         
-        # ==================== 13. 启动OKX合约面值获取任务 ====================
-        logger.info("【📄】启动OKX合约面值获取任务...")
+        # ==================== 13. 启动OKX合约面值系统 ====================
+        logger.info("【📄】启动OKX合约面值系统...")
         try:
-            from public_http_fetcher.okx_contract_info import OKXContractFetcher
-            okx_contract_fetcher = OKXContractFetcher()
-            asyncio.create_task(okx_contract_fetcher.startup_fetch())
-            brain.okx_contract_fetcher = okx_contract_fetcher
-            logger.info("✅ OKX合约面值获取任务已启动（延迟60秒后执行，自动过滤USDT合约）")
+            from public_http_fetcher.okx_contract_info.fetcher import OKXContractFetcher
+            from public_http_fetcher.okx_contract_info.cleaner import OKXContractCleaner
+            
+            # 1. 创建获取器
+            okx_fetcher = OKXContractFetcher()
+            
+            # 2. 执行一次获取（内部已延迟60秒）
+            raw_data = await okx_fetcher.startup_fetch()
+            
+            # 3. 如果获取成功，清洗并推送
+            if raw_data:
+                okx_cleaner = OKXContractCleaner()
+                await okx_cleaner.clean_and_push(raw_data)
+                brain.okx_cleaner = okx_cleaner  # 保存引用（可选）
+            
+            brain.okx_fetcher = okx_fetcher
+            
+            logger.info("✅ OKX合约面值系统启动完成（获取一次+清洗一次）")
         except Exception as e:
-            logger.error(f"❌ 启动OKX合约面值获取任务失败: {e}")
+            logger.error(f"❌ 启动OKX合约面值系统失败: {e}")
         
         # ==================== 14. 启动币安资产获取任务 ====================
         logger.info("【💰】启动币安资产获取任务...")
