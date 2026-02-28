@@ -352,26 +352,38 @@ class DataManager:
             }
     
     async def get_private_data_summary(self):
-        """获取私人数据概览（简化版）"""
-        formatted_private_data = {}
-        for key, data in self.memory_store['private_data'].items():
-            formatted_private_data[key] = {
-                "exchange": data.get('exchange'),
-                "data_type": data.get('data_type'),
-                "received_at": data.get('received_at'),
-                "timestamp": data.get('timestamp'),
-                "data_keys": list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else type(data.get('data')).__name__
+        """获取私人数据概览（返回大纲格式）"""
+        try:
+            formatted_private_data = {}
+            for key, data in self.memory_store['private_data'].items():
+                raw_data = data.get('data', {})
+                formatted_private_data[key] = {
+                    "exchange": data.get('exchange'),
+                    "data_type": data.get('data_type'),
+                    "received_at": data.get('received_at'),
+                    "timestamp": data.get('timestamp'),
+                    "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else type(raw_data).__name__,
+                    "note": f"详情请访问 /api/brain/data/private/{data.get('exchange')}/{data.get('data_type')}"
+                }
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "total_count": len(self.memory_store['private_data']),
+                "private_data": formatted_private_data,
+                "stats": {
+                    "last_account_update": self._format_time_diff(self.last_account_time) if self.last_account_time else "从未更新",
+                    "last_trade_update": self._format_time_diff(self.last_trade_time) if self.last_trade_time else "从未更新"
+                },
+                "note": "私人数据大纲，详情请访问具体路由"
             }
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "total_count": len(self.memory_store['private_data']),
-            "private_data": formatted_private_data,
-            "stats": {
-                "last_account_update": self._format_time_diff(self.last_account_time) if self.last_account_time else "从未更新",
-                "last_trade_update": self._format_time_diff(self.last_trade_time) if self.last_trade_time else "从未更新"
+        except Exception as e:
+            logger.error(f"❌ 获取私人数据概览失败: {e}")
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "total_count": 0,
+                "private_data": {},
+                "error": str(e)
             }
-        }
     
     async def get_api_credentials_status(self):
         """获取API凭证状态（隐藏敏感信息）"""
@@ -535,24 +547,38 @@ class DataManager:
             }
     
     async def get_private_data_by_exchange(self, exchange: str):
-        """按交易所获取私人数据（简化版）"""
-        exchange_data = {}
-        for key, data in self.memory_store['private_data'].items():
-            if key.startswith(f"{exchange.lower()}_"):
-                exchange_data[key] = {
-                    "exchange": data.get('exchange'),
-                    "data_type": data.get('data_type'),
-                    "timestamp": data.get('timestamp'),
-                    "received_at": data.get('received_at'),
-                    "data": data.get('data')  # 直接返回原始数据
-                }
-        
-        return {
-            "exchange": exchange,
-            "timestamp": datetime.now().isoformat(),
-            "count": len(exchange_data),
-            "data": exchange_data
-        }
+        """按交易所获取私人数据（返回大纲格式）"""
+        try:
+            exchange_data = {}
+            for key, data in self.memory_store['private_data'].items():
+                if key.startswith(f"{exchange.lower()}_"):
+                    # 只返回大纲，不返回完整数据
+                    raw_data = data.get('data', {})
+                    
+                    exchange_data[key] = {
+                        "exchange": data.get('exchange'),
+                        "data_type": data.get('data_type'),
+                        "timestamp": data.get('timestamp'),
+                        "received_at": data.get('received_at'),
+                        "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else str(type(raw_data)),
+                        "note": f"{data.get('data_type')}数据大纲，详情请访问 /api/brain/data/private/{exchange}/{data.get('data_type')}"
+                    }
+            
+            return {
+                "exchange": exchange,
+                "timestamp": datetime.now().isoformat(),
+                "count": len(exchange_data),
+                "private_data": exchange_data,  # 统一字段名
+                "note": f"{exchange}交易所私人数据大纲"
+            }
+        except Exception as e:
+            logger.error(f"❌ 按交易所获取私人数据失败: {e}")
+            return {
+                "exchange": exchange,
+                "timestamp": datetime.now().isoformat(),
+                "error": str(e),
+                "private_data": {}
+            }
     
     async def get_private_data_detail(self, exchange: str, data_type: str):
         """获取特定私人数据详情（简化版）"""
@@ -566,7 +592,8 @@ class DataManager:
                 "data_type": data_type,
                 "timestamp": data.get('timestamp'),
                 "received_at": data.get('received_at'),
-                "data": data.get('data')  # 直接返回原始数据
+                "data": data.get('data'),  # 直接返回原始数据（这里是完整详情）
+                "note": "最新一份数据，新数据会覆盖旧数据"
             }
         else:
             return {
