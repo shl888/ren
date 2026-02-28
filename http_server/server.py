@@ -19,6 +19,7 @@ if root_dir not in sys.path:
 from shared_data.data_store import data_store
 from websocket_pool.pool_manager import WebSocketPoolManager
 from .routes import setup_routes
+from shared_data.routes import setup_public_data_routes  # <-- 新增导入
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ class HTTPServer:
         
         # 设置基础路由
         setup_routes(self.app)
+        
+        # ✅ 新增：注册公开数据路由（从shared_data模块）
+        setup_public_data_routes(self.app)
         
         # 如果提供了大脑实例，注册大脑路由
         if self.brain:
