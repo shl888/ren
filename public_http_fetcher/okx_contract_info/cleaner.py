@@ -1,6 +1,6 @@
 """
 OKX合约面值清洗器 - 清洗模块
-职责：接收原始合约数据，清洗出8个核心字段，推送到私人数据处理模块
+职责：接收原始合约数据，清洗出8个核心字段，推送到私人数据处理模块 和 大脑模块
 """
 import asyncio
 import logging
@@ -9,6 +9,9 @@ from typing import Dict, Any, Optional, List
 
 # 导入私人数据处理模块
 from private_data_processing.manager import receive_private_data
+
+# ✅ 新增：导入大脑模块的接收函数
+from smart_brain.data_manager import receive_private_data as brain_receive_private_data
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +38,7 @@ class OKXContractCleaner:
     
     async def clean_and_push(self, raw_data: Dict[str, Any]) -> bool:
         """
-        清洗原始数据并推送到私人数据处理模块
+        清洗原始数据并推送到私人数据处理模块 和 大脑模块
         
         Args:
             raw_data: 从获取器获取的原始数据
@@ -77,30 +80,38 @@ class OKXContractCleaner:
         self.last_cleaned_data = push_data
         self.cleaned_count = len(cleaned_contracts)
         
-        # 推送到私人数据处理模块
+        # ==================== 推送目的地1：私人数据处理模块 ====================
         try:
             await receive_private_data(push_data)
-            
-            logger.info("=" * 60)
-            logger.info(f"✅ [OKX合约清洗器] 清洗并推送成功！")
-            logger.info(f"📊 原始合约: {len(raw_contracts)} 个")
-            logger.info(f"🧹 清洗后: {len(cleaned_contracts)} 个")
-            logger.info("=" * 60)
-            
-            # 打印样例
-            if cleaned_contracts:
-                sample = cleaned_contracts[0]
-                logger.info(f"📋 样例合约: {sample.get('instId')}")
-                logger.info(f"   - 面值: {sample.get('ctVal')} {sample.get('ctValCcy')}")
-                logger.info(f"   - 最小单位: {sample.get('lotSz')} 张")
-                logger.info(f"   - 最大杠杆: {sample.get('lever')}x")
-                logger.info(f"   - 结算货币: {sample.get('settleCcy')}")
-            
-            return True
-            
+            logger.info("✅ [OKX合约清洗器] 已推送到私人数据处理模块")
         except Exception as e:
-            logger.error(f"❌ [OKX合约清洗器] 推送失败: {e}")
-            return False
+            logger.error(f"❌ [OKX合约清洗器] 推送私人数据处理模块失败: {e}")
+        
+        # ==================== 推送目的地2：大脑模块 ====================
+        try:
+            await brain_receive_private_data(push_data)
+            logger.info("✅ [OKX合约清洗器] 已推送到大脑模块")
+        except Exception as e:
+            logger.error(f"❌ [OKX合约清洗器] 推送大脑模块失败: {e}")
+        
+        # ==================== 日志输出 ====================
+        logger.info("=" * 60)
+        logger.info(f"✅ [OKX合约清洗器] 清洗并推送成功！")
+        logger.info(f"📊 原始合约: {len(raw_contracts)} 个")
+        logger.info(f"🧹 清洗后: {len(cleaned_contracts)} 个")
+        logger.info("📤 推送目的地: 私人数据处理模块、大脑模块")
+        logger.info("=" * 60)
+        
+        # 打印样例
+        if cleaned_contracts:
+            sample = cleaned_contracts[0]
+            logger.info(f"📋 样例合约: {sample.get('instId')}")
+            logger.info(f"   - 面值: {sample.get('ctVal')} {sample.get('ctValCcy')}")
+            logger.info(f"   - 最小单位: {sample.get('lotSz')} 张")
+            logger.info(f"   - 最大杠杆: {sample.get('lever')}x")
+            logger.info(f"   - 结算货币: {sample.get('settleCcy')}")
+        
+        return True
     
     def _clean_single_contract(self, raw_contract: Dict) -> Optional[Dict]:
         """
