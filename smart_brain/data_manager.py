@@ -292,7 +292,7 @@ class DataManager:
                 sources.append({
                     "name": "public_market",
                     "description": "公开市场数据（实时行情、费率差）",
-                    "count": len(self.memory_store['market_data']),
+                    "item_count": len(self.memory_store['market_data']),  # 239个币种
                     "endpoint": "/api/brain/data/public_market",
                     "last_update": self._format_time_iso(self.last_market_time)
                 })
@@ -302,17 +302,25 @@ class DataManager:
                 sources.append({
                     "name": "private_user",
                     "description": "私人用户数据（账户、持仓、订单）",
-                    "count": len(self.memory_store['user_data']),
+                    "user_count": len(self.memory_store['user_data']),  # 2条（币安+欧易）
                     "endpoint": "/api/brain/data/private_user",
                     "last_update": self._format_time_iso(self.last_account_time)
                 })
             
-            # 3. 参考数据（欧易面值等）
+            # 3. 参考数据（欧易面值）
             if self.memory_store['reference_data']:
+                # 计算实际合约数量
+                contract_count = 0
+                for key, data in self.memory_store['reference_data'].items():
+                    if 'okx' in key and 'contract' in key:
+                        contract_data = data.get('data', {})
+                        contract_count = len(contract_data.get('contracts', []))
+                        break
+                
                 sources.append({
                     "name": "okx_contracts",
                     "description": "OKX合约面值数据",
-                    "count": len(self.memory_store['reference_data']),
+                    "contract_count": contract_count,  # 262个合约
                     "endpoint": "/api/brain/data/okx_contracts",
                     "last_update": self._format_time_iso(self.last_reference_time)
                 })
@@ -320,7 +328,7 @@ class DataManager:
             return {
                 "timestamp": datetime.now().isoformat(),
                 "sources": sources,
-                "total_count": (
+                "total_items": (  # 存储的总条目数
                     len(self.memory_store['market_data']) +
                     len(self.memory_store['user_data']) +
                     len(self.memory_store['reference_data'])
