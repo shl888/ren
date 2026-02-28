@@ -55,27 +55,35 @@ class HTTPServer:
         # ❌ 移除信号处理，由bsmart_brain统一管理
     
     def _setup_brain_routes(self):
-        """设置大脑数据路由"""
+        """设置大脑数据路由 - 完全替换为新结构"""
         try:
             from .routes.brain import BrainRoutes
             brain_routes = BrainRoutes(self.brain)
             
-            # 注册大脑路由
+            # ===== 基础路由 =====
             self.app.router.add_get('/api/brain/', brain_routes.api_root)
             self.app.router.add_get('/api/brain/health', brain_routes.health)
-            self.app.router.add_get('/api/brain/data', brain_routes.get_all_data)
-            self.app.router.add_get('/api/brain/data/market', brain_routes.get_market_data)
-            self.app.router.add_get('/api/brain/data/market/{exchange}', brain_routes.get_market_data_by_exchange)
-            self.app.router.add_get('/api/brain/data/market/{exchange}/{symbol}', brain_routes.get_market_data_detail)
-            self.app.router.add_get('/api/brain/data/private', brain_routes.get_private_data)
-            self.app.router.add_get('/api/brain/data/private/{exchange}', brain_routes.get_private_data_by_exchange)
-            self.app.router.add_get('/api/brain/data/private/{exchange}/{data_type}', brain_routes.get_private_data_detail)
+            
+            # ===== 数据大纲路由 =====
+            self.app.router.add_get('/api/brain/data', brain_routes.get_data_summary)
+            
+            # ===== 按来源分类的详情路由 =====
+            # 1. 公开市场数据
+            self.app.router.add_get('/api/brain/data/public_market', brain_routes.get_public_market_data)
+            
+            # 2. 私人用户数据
+            self.app.router.add_get('/api/brain/data/private_user', brain_routes.get_private_user_data)
+            
+            # 3. 参考数据（欧易面值）
+            self.app.router.add_get('/api/brain/data/okx_contracts', brain_routes.get_okx_contracts_data)
+            
+            # ===== 系统管理路由 =====
             self.app.router.add_get('/api/brain/apis', brain_routes.get_apis)
             self.app.router.add_get('/api/brain/status', brain_routes.get_status)
             self.app.router.add_delete('/api/brain/data/clear', brain_routes.clear_data)
             self.app.router.add_delete('/api/brain/data/clear/{data_type}', brain_routes.clear_data_type)
             
-            logger.info(f"✅ 已注册大脑数据API路由（共13个端点）")
+            logger.info(f"✅ 已注册大脑数据API路由（3个来源：public_market/private_user/okx_contracts）")
             
         except ImportError as e:
             logger.warning(f"无法导入大脑路由: {e}")
