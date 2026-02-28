@@ -165,10 +165,12 @@ class OKXContractFetcher:
                     result['usdt_count'] = len(usdt_contracts)
                     result['filtered_data'] = {
                         'exchange': 'okx',
-                        'data_type': 'contract_info',  # 修改：type -> data_type
+                        'data_type': 'contract_info',
                         'timestamp': datetime.now().isoformat(),
-                        'total_contracts': result['total_count'],
-                        'usdt_contracts': usdt_contracts
+                        'data': {  # 将实际数据放在 data 字段内
+                            'total_contracts': result['total_count'],
+                            'usdt_contracts': usdt_contracts
+                        }
                     }
                     result['success'] = True
                     
@@ -206,24 +208,38 @@ class OKXContractFetcher:
         格式:
         {
             'exchange': 'okx',
-            'data_type': 'contract_info',  # 修改：type -> data_type
+            'data_type': 'contract_info',
             'timestamp': '2024-01-01T00:00:00',
-            'total_contracts': 100,
-            'usdt_contracts': [...]  # 只包含USDT结算的合约
+            'data': {  # 实际数据放在 data 字段内
+                'total_contracts': 100,
+                'usdt_contracts': [...]  # 只包含USDT结算的合约
+            }
         }
         """
         try:
-            # 确保数据格式正确（使用data_type字段）
+            # 确保数据格式正确 - 将实际数据放在 data 字段内
             formatted_data = {
                 'exchange': data.get('exchange', 'okx'),
-                'data_type': data.get('data_type', 'contract_info'),  # 使用 data_type
+                'data_type': data.get('data_type', 'contract_info'),
                 'timestamp': data.get('timestamp', datetime.now().isoformat()),
-                'total_contracts': data.get('total_contracts', 0),
-                'usdt_contracts': data.get('usdt_contracts', [])
+                'data': data.get('data', {  # 如果已经有data字段就使用，否则从顶层提取
+                    'total_contracts': data.get('total_contracts', 0),
+                    'usdt_contracts': data.get('usdt_contracts', [])
+                })
             }
             
             # 推送到数据处理模块
             await receive_private_data(formatted_data)
-            logger.info(f"📤 已推送{len(formatted_data['usdt_contracts'])}个USDT合约数据")
+            
+            # 日志输出，确认数据格式
+            usdt_count = len(formatted_data['data'].get('usdt_contracts', []))
+            logger.info(f"📤 已推送{usdt_count}个USDT合约数据")
+            
+            # 可选：打印第一条合约作为样例（避免日志过大）
+            if usdt_count > 0:
+                sample = formatted_data['data']['usdt_contracts'][0]
+                logger.info(f"📋 样例合约: {sample.get('instId', 'unknown')} - 面值: {sample.get('ctVal', 'unknown')} {sample.get('ctValCcy', 'unknown')}")
+                
         except Exception as e:
             logger.error(f"❌ 推送数据失败: {e}")
+            logger.error(f"❌ 问题数据: {str(data)[:200]}...")  # 打印前200个字符用于调试
