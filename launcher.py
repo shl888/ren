@@ -30,7 +30,7 @@ from frontend_relay import FrontendRelayServer
 from public_http_fetcher.binance_funding_rate import FundingSettlementManager
 from smart_brain.core import SmartBrain
 
-# ✅ 新增：导入设置brain实例的函数
+# ✅ 导入设置brain实例的函数
 from smart_brain import set_brain_instance
 
 logger = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ async def main():
             frontend_relay=None
         )
         
-        # ✅ 设置全局brain实例（新增）
+        # ✅ 设置全局brain实例
         set_brain_instance(brain)
         logger.info("✅ 全局大脑实例已设置")
         
@@ -224,7 +224,7 @@ async def main():
             if raw_data:
                 okx_cleaner = OKXContractCleaner()
                 await okx_cleaner.clean_and_push(raw_data)
-                brain.okx_cleaner = okx_cleaner  # 保存引用（可选）
+                brain.okx_cleaner = okx_cleaner
             
             brain.okx_fetcher = okx_fetcher
             
