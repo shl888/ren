@@ -400,12 +400,15 @@ class PrivateDataProcessor:
             return {"timestamp": datetime.now().isoformat(), "error": str(e), "private_data": {}}
     
     async def get_data_by_exchange(self, exchange: str) -> Dict[str, Any]:
-        """按交易所获取私人数据"""
+        """按交易所获取私人数据（统一返回大纲格式）"""
         try:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
                 if key.startswith(f"{exchange.lower()}_"):
+                    
+                    # ===== 统一处理：所有类型都返回大纲 =====
                     if key in ['binance_order_update', 'okx_order_update']:
+                        # 订单类型：返回分类统计
                         classified = data.get('classified', {})
                         summary = {}
                         for k, v in classified.items():
@@ -420,24 +423,28 @@ class PrivateDataProcessor:
                             "note": "各类别事件数量统计，详情请查询具体data_type"
                         }
                     else:
+                        # 其他类型：返回数据键名（data_keys），不返回完整数据
+                        raw_data = data.get('data', {})
+                        
                         exchange_data[key] = {
                             "exchange": data.get('exchange'),
                             "data_type": data.get('data_type'),
                             "timestamp": data.get('timestamp'),
                             "received_at": data.get('received_at'),
-                            "data": data.get('data')
+                            "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else str(type(raw_data)),
+                            "note": f"{data.get('data_type')}数据大纲，详情请访问 /private/{exchange}/{data.get('data_type')}"
                         }
             
             return {
                 "exchange": exchange,
                 "timestamp": datetime.now().isoformat(),
                 "count": len(exchange_data),
-                "data": exchange_data,
-                "note": f"{exchange}私人数据"
+                "private_data": exchange_data,
+                "note": f"{exchange}交易所数据大纲"
             }
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 按交易所获取数据失败: {e}")
-            return {"exchange": exchange, "timestamp": datetime.now().isoformat(), "error": str(e), "data": {}}
+            return {"exchange": exchange, "timestamp": datetime.now().isoformat(), "error": str(e), "private_data": {}}
     
     async def get_data_detail(self, exchange: str, data_type: str) -> Dict[str, Any]:
         """获取特定私人数据详情"""
