@@ -10,8 +10,8 @@ from typing import Dict, Any, Optional, List
 # 导入私人数据处理模块
 from private_data_processing.manager import receive_private_data
 
-# ✅ 新增：导入大脑模块的接收函数
-from smart_brain.data_manager import receive_private_data as brain_receive_private_data
+# ✅ 导入大脑模块的接收函数
+from smart_brain import receive_private_data as brain_receive_private_data
 
 logger = logging.getLogger(__name__)
 
