@@ -8,7 +8,7 @@ import os
 import time
 import json
 import aiohttp
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional, Set, Callable
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -77,7 +77,7 @@ async def default_data_callback(data):
 
 # ============ 【极简HTTP合约获取器】============
 class SimpleSymbolFetcher:
-    """极简合约获取器 - 直接HTTP请求，替代CCXT"""
+    """极简合约获取器 - 直接HTTP请求，3次重试+换IP"""
     
     # 币安API
     BINANCE_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
@@ -85,100 +85,98 @@ class SimpleSymbolFetcher:
     # 欧意API - 直接获取U本位永续合约
     OKX_URL = "https://www.okx.com/api/v5/public/instruments?instType=SWAP&quoteCcy=USDT"
     
-    async def fetch_binance(self) -> List[str]:
-        """获取币安USDT永续合约 - 2次重试，10秒超时"""
-        for attempt in range(1, 3):
+    async def _fetch_with_retry(self, exchange_name: str, url: str, parser_func: Callable) -> List[str]:
+        """通用重试获取函数 - 3次重试，每次新连接"""
+        for attempt in range(1, 4):  # 3次重试
             try:
+                # 每次创建新会话，强制新连接（换IP）
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(self.BINANCE_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status != 200:
-                            logger.warning(f"[币安] HTTP {resp.status}，第{attempt}次尝试")
-                            if resp.status >= 500:
-                                await asyncio.sleep(3)
-                                continue
-                            elif resp.status >= 400:
-                                logger.error(f"[币安] 客户端错误 {resp.status}，不重试")
-                                return []
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        
+                        # 处理418被封的情况
+                        if resp.status == 418:
+                            logger.warning(f"[{exchange_name}] IP被封（418），第{attempt}次尝试，等待后换IP重试")
+                            await asyncio.sleep(attempt * 3)  # 3秒、6秒、9秒递增
                             continue
                         
-                        data = await resp.json()
+                        # 处理其他4xx错误（不重试）
+                        if 400 <= resp.status < 500 and resp.status != 418:
+                            logger.error(f"[{exchange_name}] 客户端错误 {resp.status}，不重试")
+                            return []
                         
-                        symbols = []
-                        for s in data.get('symbols', []):
-                            if (s.get('contractType') == 'PERPETUAL' and 
-                                s.get('quoteAsset') == 'USDT' and 
-                                s.get('status') == 'TRADING'):
-                                symbols.append(s.get('symbol'))
-                        
-                        if symbols:
-                            logger.info(f"✅ [币安] HTTP获取成功: {len(symbols)}个合约")
-                            return symbols
-                        else:
-                            logger.warning(f"[币安] 获取到空列表，第{attempt}次尝试")
-                            await asyncio.sleep(3)
+                        # 处理5xx错误（重试）
+                        if resp.status >= 500:
+                            logger.warning(f"[{exchange_name}] 服务端错误 {resp.status}，第{attempt}次尝试")
+                            await asyncio.sleep(attempt * 2)
                             continue
+                        
+                        # 200成功
+                        if resp.status == 200:
+                            data = await resp.json()
+                            symbols = await parser_func(data)
                             
+                            if symbols:
+                                logger.info(f"✅ [{exchange_name}] HTTP获取成功: {len(symbols)}个合约 (第{attempt}次)")
+                                return symbols
+                            else:
+                                logger.warning(f"[{exchange_name}] 解析后为空列表，第{attempt}次尝试")
+                                await asyncio.sleep(2)
+                                continue
+                        
+                        # 其他状态码
+                        logger.warning(f"[{exchange_name}] 未知状态码 {resp.status}，第{attempt}次尝试")
+                        await asyncio.sleep(2)
+                        continue
+                        
             except asyncio.TimeoutError:
-                logger.warning(f"[币安] 请求超时，第{attempt}次尝试")
-                await asyncio.sleep(3)
+                logger.warning(f"[{exchange_name}] 请求超时，第{attempt}次尝试")
+                await asyncio.sleep(attempt * 2)
+                
             except aiohttp.ClientConnectorError as e:
-                logger.warning(f"[币安] 连接错误: {e}，第{attempt}次尝试")
-                await asyncio.sleep(3)
+                logger.warning(f"[{exchange_name}] 连接错误: {e}，第{attempt}次尝试")
+                await asyncio.sleep(attempt * 2)
+                
             except Exception as e:
-                logger.warning(f"[币安] 请求异常: {e}，第{attempt}次尝试")
-                await asyncio.sleep(3)
+                logger.warning(f"[{exchange_name}] 请求异常: {e}，第{attempt}次尝试")
+                await asyncio.sleep(attempt * 2)
         
-        logger.error("❌ [币安] 所有尝试失败")
+        logger.error(f"❌ [{exchange_name}] 所有3次尝试失败")
         return []
     
-    async def fetch_okx(self) -> List[str]:
-        """获取欧意USDT永续合约 - 2次重试，10秒超时"""
-        for attempt in range(1, 3):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(self.OKX_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status != 200:
-                            logger.warning(f"[欧意] HTTP {resp.status}，第{attempt}次尝试")
-                            if resp.status >= 500:
-                                await asyncio.sleep(3)
-                                continue
-                            elif resp.status >= 400:
-                                logger.error(f"[欧意] 客户端错误 {resp.status}，不重试")
-                                return []
-                            continue
-                        
-                        data = await resp.json()
-                        
-                        if data.get('code') != '0':
-                            logger.warning(f"[欧意] API返回错误码: {data.get('code')}，第{attempt}次尝试")
-                            await asyncio.sleep(3)
-                            continue
-                        
-                        data_list = data.get('data', [])
-                        
-                        # 直接提取instId，API已经通过quoteCcy=USDT筛选好了
-                        symbols = [i.get('instId') for i in data_list if i.get('instId')]
-                        
-                        if symbols:
-                            logger.info(f"✅ [欧意] HTTP获取成功: {len(symbols)}个USDT永续合约")
-                            return symbols
-                        else:
-                            logger.warning(f"[欧意] 获取到空列表，第{attempt}次尝试")
-                            await asyncio.sleep(3)
-                            continue
-                            
-            except asyncio.TimeoutError:
-                logger.warning(f"[欧意] 请求超时，第{attempt}次尝试")
-                await asyncio.sleep(3)
-            except aiohttp.ClientConnectorError as e:
-                logger.warning(f"[欧意] 连接错误: {e}，第{attempt}次尝试")
-                await asyncio.sleep(3)
-            except Exception as e:
-                logger.warning(f"[欧意] 请求异常: {e}，第{attempt}次尝试")
-                await asyncio.sleep(3)
+    async def _parse_binance(self, data: dict) -> List[str]:
+        """解析币安返回数据"""
+        symbols = []
+        for s in data.get('symbols', []):
+            if (s.get('contractType') == 'PERPETUAL' and 
+                s.get('quoteAsset') == 'USDT' and 
+                s.get('status') == 'TRADING'):
+                symbols.append(s.get('symbol'))
+        return symbols
+    
+    async def _parse_okx(self, data: dict) -> List[str]:
+        """解析欧意返回数据"""
+        if data.get('code') != '0':
+            logger.warning(f"[欧意] API返回错误码: {data.get('code')}")
+            return []
         
-        logger.error("❌ [欧意] 所有尝试失败")
-        return []
+        data_list = data.get('data', [])
+        return [i.get('instId') for i in data_list if i.get('instId')]
+    
+    async def fetch_binance(self) -> List[str]:
+        """获取币安USDT永续合约 - 3次重试+换IP"""
+        return await self._fetch_with_retry(
+            exchange_name="币安",
+            url=self.BINANCE_URL,
+            parser_func=self._parse_binance
+        )
+    
+    async def fetch_okx(self) -> List[str]:
+        """获取欧意USDT永续合约 - 3次重试+换IP"""
+        return await self._fetch_with_retry(
+            exchange_name="欧意",
+            url=self.OKX_URL,
+            parser_func=self._parse_okx
+        )
 
 # ============ 【WebSocket连接池管理器类】============
 class WebSocketPoolManager:
@@ -202,10 +200,10 @@ class WebSocketPoolManager:
             "okx": {"symbols": [], "source": "unknown", "count": 0}
         }
         
-        # 极简HTTP获取器
+        # 极简HTTP获取器（3次重试+换IP）
         self.fetcher = SimpleSymbolFetcher()
         
-        logger.info("✅ WebSocketPoolManager 初始化完成（极简HTTP版）")
+        logger.info("✅ WebSocketPoolManager 初始化完成（3次重试+换IP版）")
         if admin_instance:
             logger.info("☎️【连接池】已设置管理员引用")
     
@@ -219,7 +217,7 @@ class WebSocketPoolManager:
         
         self._initializing = True
         logger.info(f"{'=' * 60}")
-        logger.info("🔄 正在初始化WebSocket连接池管理器（极简HTTP版）...")
+        logger.info("🔄 正在初始化WebSocket连接池管理器（3次重试+换IP版）...")
         logger.info("🚀 流程：独立获取 → 智能降级 → 双平台匹配")
         logger.info(f"{'=' * 60}")
         
@@ -279,7 +277,7 @@ class WebSocketPoolManager:
         symbols = []
         source = "unknown"
         
-        # 1. 优先尝试HTTP获取
+        # 1. 优先尝试HTTP获取（3次重试+换IP）
         try:
             if exchange_name == "binance":
                 symbols = await self.fetcher.fetch_binance()
