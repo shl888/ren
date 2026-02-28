@@ -30,6 +30,9 @@ from frontend_relay import FrontendRelayServer
 from public_http_fetcher.binance_funding_rate import FundingSettlementManager
 from smart_brain.core import SmartBrain
 
+# ✅ 新增：导入设置brain实例的函数
+from smart_brain import set_brain_instance
+
 logger = logging.getLogger(__name__)
 
 def start_keep_alive_background():
@@ -114,6 +117,10 @@ async def main():
             funding_manager=None,
             frontend_relay=None
         )
+        
+        # ✅ 设置全局brain实例（新增）
+        set_brain_instance(brain)
+        logger.info("✅ 全局大脑实例已设置")
         
         # ==================== 2. 创建HTTP服务器 ====================
         logger.info("【2️⃣】创建HTTP服务器...")
