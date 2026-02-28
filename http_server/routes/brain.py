@@ -19,23 +19,25 @@ class BrainRoutes:
             "service": "智能大脑数据管理器API",
             "version": "1.0.0",
             "endpoints": {
+                "/api/brain/": "API文档（本页）",
                 "/api/brain/health": "健康检查",
-                "/api/brain/data": "查看所有存储数据",
-                "/api/brain/data/market": "查看市场数据",
-                "/api/brain/data/private": "查看私人数据",
-                "/api/brain/status": "查看数据状态",
+                "/api/brain/data": "查看所有数据大纲（按来源分类）",
+                "/api/brain/data/public_market": "查看公开市场数据详情",
+                "/api/brain/data/private_user": "查看私人用户数据详情（币安+欧易）",
+                "/api/brain/data/okx_contracts": "查看OKX合约面值数据详情",
                 "/api/brain/apis": "查看API凭证状态",
-                "/api/brain/data/clear": "清空数据（谨慎使用）",
+                "/api/brain/status": "查看系统状态",
+                "/api/brain/data/clear": "清空所有数据（谨慎使用）",
                 "/api/brain/data/clear/{data_type}": "清空特定类型数据"
             },
-            "current_time": datetime.now().isoformat()
+            "current_time": datetime.now().isoformat(),
+            "note": "数据按来源分类：public_market（公开市场）、private_user（私人用户）、okx_contracts（参考数据）"
         }
         return web.json_response(api_docs)
     
     async def health(self, request):
         """健康检查"""
         try:
-            # 获取数据管理器状态
             from shared_data.data_store import data_store
             connection_status = await data_store.get_connection_status(None)
             
@@ -54,137 +56,56 @@ class BrainRoutes:
                 "error": str(e)
             }, status=500)
     
-    async def get_all_data(self, request):
-        """查看所有存储数据（概览）"""
+    async def get_data_summary(self, request):
+        """获取所有数据的大纲（按来源分类）"""
         try:
-            data = await self.brain.data_manager.get_market_data_summary()
-            private_data = await self.brain.data_manager.get_private_data_summary()
-            
-            response = {
-                "timestamp": datetime.now().isoformat(),
-                "market_data": data,
-                "private_data": private_data
-            }
-            return web.json_response(response)
+            data = await self.brain.data_manager.get_data_summary()
+            return web.json_response(data)
         except Exception as e:
-            logger.error(f"获取所有数据失败: {e}")
+            logger.error(f"获取数据大纲失败: {e}")
             return web.json_response({
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }, status=500)
     
-    async def get_market_data(self, request):
-        """查看所有市场数据"""
+    async def get_public_market_data(self, request):
+        """获取公开市场数据详情"""
         try:
-            data = await self.brain.data_manager.get_market_data_summary()
+            data = await self.brain.data_manager.get_public_market_data()
             return web.json_response(data)
         except Exception as e:
-            logger.error(f"获取市场数据失败: {e}")
+            logger.error(f"获取公开市场数据失败: {e}")
             return web.json_response({
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }, status=500)
     
-    async def get_market_data_by_exchange(self, request):
-        """按交易所查看市场数据"""
+    async def get_private_user_data(self, request):
+        """获取私人用户数据详情"""
         try:
-            exchange = request.match_info.get('exchange', '').lower()
-            if not exchange:
-                return web.json_response({
-                    "error": "需要指定交易所参数",
-                    "timestamp": datetime.now().isoformat()
-                }, status=400)
-            
-            data = await self.brain.data_manager.get_market_data_by_exchange(exchange)
+            data = await self.brain.data_manager.get_private_user_data()
             return web.json_response(data)
         except Exception as e:
-            logger.error(f"按交易所获取市场数据失败: {e}")
+            logger.error(f"获取私人用户数据失败: {e}")
             return web.json_response({
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }, status=500)
     
-    async def get_market_data_detail(self, request):
-        """查看特定市场数据详情"""
+    async def get_okx_contracts_data(self, request):
+        """获取OKX合约面值数据详情"""
         try:
-            exchange = request.match_info.get('exchange', '').lower()
-            symbol = request.match_info.get('symbol', '').upper()
-            
-            if not exchange or not symbol:
-                return web.json_response({
-                    "error": "需要指定交易所和交易对参数",
-                    "timestamp": datetime.now().isoformat()
-                }, status=400)
-            
-            data = await self.brain.data_manager.get_market_data_detail(exchange, symbol)
-            
-            if "error" in data:
-                return web.json_response(data, status=404)
+            data = await self.brain.data_manager.get_okx_contracts_data()
             return web.json_response(data)
         except Exception as e:
-            logger.error(f"获取市场数据详情失败: {e}")
-            return web.json_response({
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }, status=500)
-    
-    async def get_private_data(self, request):
-        """查看所有私人数据"""
-        try:
-            data = await self.brain.data_manager.get_private_data_summary()
-            return web.json_response(data)
-        except Exception as e:
-            logger.error(f"获取私人数据失败: {e}")
-            return web.json_response({
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }, status=500)
-    
-    async def get_private_data_by_exchange(self, request):
-        """按交易所查看私人数据"""
-        try:
-            exchange = request.match_info.get('exchange', '').lower()
-            if not exchange:
-                return web.json_response({
-                    "error": "需要指定交易所参数",
-                    "timestamp": datetime.now().isoformat()
-                }, status=400)
-            
-            data = await self.brain.data_manager.get_private_data_by_exchange(exchange)
-            return web.json_response(data)
-        except Exception as e:
-            logger.error(f"按交易所获取私人数据失败: {e}")
-            return web.json_response({
-                "error": str(e),
-                "timestamp": datetime.now().isoformat()
-            }, status=500)
-    
-    async def get_private_data_detail(self, request):
-        """查看特定私人数据详情"""
-        try:
-            exchange = request.match_info.get('exchange', '').lower()
-            data_type = request.match_info.get('data_type', '').lower()
-            
-            if not exchange or not data_type:
-                return web.json_response({
-                    "error": "需要指定交易所和数据类型参数",
-                    "timestamp": datetime.now().isoformat()
-                }, status=400)
-            
-            data = await self.brain.data_manager.get_private_data_detail(exchange, data_type)
-            
-            if "error" in data:
-                return web.json_response(data, status=404)
-            return web.json_response(data)
-        except Exception as e:
-            logger.error(f"获取私人数据详情失败: {e}")
+            logger.error(f"获取OKX合约面值数据失败: {e}")
             return web.json_response({
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }, status=500)
     
     async def get_apis(self, request):
-        """查看API凭证状态（隐藏敏感信息）"""
+        """查看API凭证状态"""
         try:
             data = await self.brain.data_manager.get_api_credentials_status()
             return web.json_response(data)
@@ -196,7 +117,7 @@ class BrainRoutes:
             }, status=500)
     
     async def get_status(self, request):
-        """查看数据状态"""
+        """查看系统状态"""
         try:
             data = await self.brain.data_manager.get_system_status()
             return web.json_response(data)
@@ -211,11 +132,9 @@ class BrainRoutes:
         """清空所有数据"""
         try:
             result = await self.brain.data_manager.clear_stored_data()
-            
             if result.get("success"):
                 return web.json_response(result)
-            else:
-                return web.json_response(result, status=400)
+            return web.json_response(result, status=400)
         except Exception as e:
             logger.error(f"清空数据失败: {e}")
             return web.json_response({
@@ -227,20 +146,19 @@ class BrainRoutes:
         """清空特定类型数据"""
         try:
             data_type = request.match_info.get('data_type', '').lower()
+            valid_types = ['market', 'user', 'reference', 'tokens']
             
-            if data_type not in ['market', 'private']:
+            if data_type not in valid_types:
                 return web.json_response({
                     "success": False,
                     "error": f"不支持的数据类型: {data_type}",
-                    "supported_types": ["market", "private"]
+                    "supported_types": valid_types
                 }, status=400)
             
             result = await self.brain.data_manager.clear_stored_data(data_type)
-            
             if result.get("success"):
                 return web.json_response(result)
-            else:
-                return web.json_response(result, status=400)
+            return web.json_response(result, status=400)
         except Exception as e:
             logger.error(f"清空{data_type}数据失败: {e}")
             return web.json_response({
