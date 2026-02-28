@@ -27,13 +27,12 @@ def setup_private_data_processing_routes(app: web.Application):
         from .private_data_processing import PrivateDataProcessingRoutes
         private_data_routes = PrivateDataProcessingRoutes()
         
-        # 注册私人数据处理模块路由（仿制brain.py格式，但只保留5个端点）
+        # 注册私人数据处理模块路由
         app.router.add_get('/api/private_data_processing/', private_data_routes.api_root)
         app.router.add_get('/api/private_data_processing/health', private_data_routes.health)
         app.router.add_get('/api/private_data_processing/data/private', private_data_routes.get_all_private_data)
         app.router.add_get('/api/private_data_processing/data/private/{exchange}', private_data_routes.get_private_data_by_exchange)
         app.router.add_get('/api/private_data_processing/data/private/{exchange}/{data_type}', private_data_routes.get_private_data_detail)
-        # 删除status和clear端点
         
         logger.info("✅ 已注册私人数据处理模块路由（共5个端点）")
         return True
@@ -55,23 +54,27 @@ def setup_routes(app: web.Application):
     setup_main_routes(app)
     
     # 功能路由
-    setup_debug_routes(app)
+    setup_debug_routes(app)           # 已精简，只有websocket_status
     setup_monitor_routes(app)
     
     # 资金费率结算路由
     setup_funding_settlement_routes(app)
     
-    # ✅ 新增：私人数据处理模块路由
+    # 私人数据处理模块路由
     setup_private_data_processing_routes(app)
+    
+    # 获取当前路由总数
+    total_routes = len(app.router.routes())
     
     logger.info("=" * 60)
     logger.info("✅ 所有路由模块加载完成")
     logger.info("📊 路由统计:")
-    logger.info(f"   - 总路由数: {len(app.router.routes())}")
-    logger.info(f"   - 调试接口: /api/debug/* (4个)")
-    logger.info(f"   - 监控接口: /api/monitor/* (3个)")
-    logger.info(f"   - 资金费率: /api/funding/settlement/* (3个)")
-    logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
+    logger.info(f"   - 总路由数: {total_routes}")
     logger.info(f"   - 基础接口: /, /health, /public/ping (3个)")
+    logger.info(f"   - 调试接口: /api/debug/websocket_status (1个)")
+    logger.info(f"   - 监控接口: /api/monitor/* (3个)")
+    logger.info(f"   - 资金费率: /api/funding/settlement/* (4个)")
+    logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
     logger.info("=" * 60)
-    
+    logger.info("📌 公开数据路由已在 server.py 中注册: /api/public/data/* (2个)")
+    logger.info("=" * 60)
