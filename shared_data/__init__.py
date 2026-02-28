@@ -6,6 +6,9 @@ shared_data 顶级模块 - 管理员-执行者架构（已集成Step0）
 from .data_store import data_store
 from .pipeline_manager import PipelineManager
 
+# ✅ 新增：导出路由模块
+from . import routes
+
 # ✅ 现在有6个步骤类（新增Step0）
 from .step0_rate_limiter import Step0RateLimiter
 from .step1_filter import Step1Filter, ExtractedData
@@ -19,6 +22,9 @@ __all__ = [
     # 核心实例
     'data_store',
     'PipelineManager',
+    
+    # ✅ 新增：路由模块
+    'routes',
     
     # ✅ 6个步骤类（新增Step0）
     'Step0RateLimiter',
@@ -47,3 +53,4 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 # 模块加载日志
 logger = logging.getLogger(__name__)
 logger.info(f"✅ shared_data v{__version__} 加载完成（新增标记价格字段）")
+logger.info(f"✅ shared_data.routes 模块已就绪")  # 新增提示
