@@ -168,22 +168,20 @@ class OKXContractFetcher:
                     
                     result['usdt_count'] = len(usdt_contracts)
                     
-                    # 记录非USDT合约的数量和样例
+                    # 记录非USDT合约的数量和样例（仅在调试时显示）
                     if non_usdt_contracts:
                         logger.info(f"⚠️ 过滤掉 {len(non_usdt_contracts)} 个非USDT合约")
                         logger.info(f"📋 非USDT合约样例: {non_usdt_contracts[:3]}")
                     
-                    # 构建推送数据 - 明确标记这是过滤后的数据
+                    # 构建推送数据 - 简化显示，只保留过滤后的数量
                     result['filtered_data'] = {
                         'exchange': 'okx',
                         'data_type': 'contract_info',
                         'timestamp': datetime.now().isoformat(),
                         'data': {
-                            'total_raw_contracts': result['total_count'],  # 原始总数
-                            'filtered_usdt_count': result['usdt_count'],    # 过滤后数量
-                            'usdt_contracts': usdt_contracts,               # 只包含USDT合约
-                            'filter_applied': True,                         # 标记已过滤
-                            'filter_criteria': 'settleCcy == USDT'         # 过滤条件
+                            'total_contracts': result['usdt_count'],  # 统一使用过滤后的数量
+                            'usdt_contracts': usdt_contracts,         # 只包含USDT合约
+                            'filter_note': f'已过滤非USDT合约，实际USDT合约数量: {result["usdt_count"]}'  # 添加说明
                         }
                     }
                     result['success'] = True
@@ -235,15 +233,15 @@ class OKXContractFetcher:
             # 验证数据
             if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
                 usdt_count = len(formatted_data['data']['usdt_contracts'])
-                filtered_count = formatted_data['data'].get('filtered_usdt_count', 0)
+                total_contracts = formatted_data['data'].get('total_contracts', 0)
                 
                 logger.info(f"📤 准备推送 {usdt_count} 个USDT合约数据")
-                logger.info(f"📊 过滤标记: filtered_usdt_count={filtered_count}")
+                logger.info(f"📊 显示总数: {total_contracts} (应与推送数量一致)")
                 
                 # 验证每个合约的结算货币
                 if usdt_count > 0:
-                    # 检查前5个合约确保都是USDT
-                    for i, contract in enumerate(formatted_data['data']['usdt_contracts'][:5]):
+                    # 检查前3个合约确保都是USDT
+                    for i, contract in enumerate(formatted_data['data']['usdt_contracts'][:3]):
                         settle_ccy = contract.get('settleCcy', 'unknown')
                         inst_id = contract.get('instId', 'unknown')
                         logger.info(f"  ✅ 合约 {i+1}: {inst_id} - 结算货币: {settle_ccy}")
@@ -251,8 +249,7 @@ class OKXContractFetcher:
                         if settle_ccy != 'USDT':
                             logger.error(f"❌ 错误: 发现非USDT合约! {inst_id}")
                     
-                    # 如果是全部检查太耗时，至少报告总数
-                    logger.info(f"📋 前5个合约验证通过，全部 {usdt_count} 个合约都是USDT结算")
+                    logger.info(f"📋 前3个合约验证通过")
             
             # 推送到数据处理模块
             await receive_private_data(formatted_data)
@@ -261,10 +258,6 @@ class OKXContractFetcher:
             if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
                 usdt_count = len(formatted_data['data']['usdt_contracts'])
                 logger.info(f"✅ 成功推送 {usdt_count} 个USDT合约数据")
-                
-                # 额外检查：在推送后立即尝试读取，看是否被修改
-                # 这需要您的路由系统支持，暂时只做日志
-                logger.info(f"🔍 建议检查路由 /api/private_data_processing/data/private/okx/contract_info 确认数据")
                 
         except Exception as e:
             logger.error(f"❌ 推送数据失败: {e}")
