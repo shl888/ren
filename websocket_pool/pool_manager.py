@@ -6,8 +6,8 @@ import logging
 import sys
 import os
 import time
+import aiohttp
 from typing import Dict, Any, List, Optional, Set
-import ccxt.async_support as ccxt_async
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -75,9 +75,115 @@ async def default_data_callback(data):
         logger.error(f"❌[数据回调] 存储失败: {e}")
         logger.error(f"❌[数据回调]失败数据: exchange={exchange}, symbol={symbol}")
 
+# ============ 【极简HTTP合约获取器】============
+class SimpleSymbolFetcher:
+    """极简合约获取器 - 直接HTTP请求，替代CCXT"""
+    
+    # 币安API
+    BINANCE_URL = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    
+    # 欧意API
+    OKX_URL = "https://www.okx.com/api/v5/public/instruments?instType=SWAP"
+    
+    async def fetch_binance(self) -> List[str]:
+        """获取币安USDT永续合约 - 2次重试，10秒超时"""
+        for attempt in range(1, 3):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(self.BINANCE_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"[币安] HTTP {resp.status}，第{attempt}次尝试")
+                            if resp.status >= 500:  # 5xx错误可以重试
+                                await asyncio.sleep(3)
+                                continue
+                            elif resp.status >= 400:  # 4xx错误不重试
+                                logger.error(f"[币安] 客户端错误 {resp.status}，不重试")
+                                return []
+                            continue
+                        
+                        data = await resp.json()
+                        
+                        symbols = []
+                        for s in data.get('symbols', []):
+                            if (s.get('contractType') == 'PERPETUAL' and 
+                                s.get('quoteAsset') == 'USDT' and 
+                                s.get('status') == 'TRADING'):
+                                symbols.append(s.get('symbol'))
+                        
+                        if symbols:
+                            logger.info(f"✅ [币安] HTTP获取成功: {len(symbols)}个合约")
+                            return symbols
+                        else:
+                            logger.warning(f"[币安] 获取到空列表，第{attempt}次尝试")
+                            await asyncio.sleep(3)
+                            continue
+                            
+            except asyncio.TimeoutError:
+                logger.warning(f"[币安] 请求超时，第{attempt}次尝试")
+                await asyncio.sleep(3)
+            except aiohttp.ClientConnectorError as e:
+                logger.warning(f"[币安] 连接错误: {e}，第{attempt}次尝试")
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"[币安] 请求异常: {e}，第{attempt}次尝试")
+                await asyncio.sleep(3)
+        
+        logger.error("❌ [币安] 所有尝试失败")
+        return []
+    
+    async def fetch_okx(self) -> List[str]:
+        """获取欧意USDT永续合约 - 2次重试，10秒超时"""
+        for attempt in range(1, 3):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(self.OKX_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"[欧意] HTTP {resp.status}，第{attempt}次尝试")
+                            if resp.status >= 500:
+                                await asyncio.sleep(3)
+                                continue
+                            elif resp.status >= 400:
+                                logger.error(f"[欧意] 客户端错误 {resp.status}，不重试")
+                                return []
+                            continue
+                        
+                        data = await resp.json()
+                        
+                        if data.get('code') != '0':
+                            logger.warning(f"[欧意] API返回错误: {data.get('msg')}，第{attempt}次尝试")
+                            await asyncio.sleep(3)
+                            continue
+                        
+                        symbols = []
+                        for i in data.get('data', []):
+                            if (i.get('quoteCcy') == 'USDT' and 
+                                i.get('state') == 'live'):
+                                symbols.append(i.get('instId'))
+                        
+                        if symbols:
+                            logger.info(f"✅ [欧意] HTTP获取成功: {len(symbols)}个合约")
+                            return symbols
+                        else:
+                            logger.warning(f"[欧意] 获取到空列表，第{attempt}次尝试")
+                            await asyncio.sleep(3)
+                            continue
+                            
+            except asyncio.TimeoutError:
+                logger.warning(f"[欧意] 请求超时，第{attempt}次尝试")
+                await asyncio.sleep(3)
+            except aiohttp.ClientConnectorError as e:
+                logger.warning(f"[欧意] 连接错误: {e}，第{attempt}次尝试")
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"[欧意] 请求异常: {e}，第{attempt}次尝试")
+                await asyncio.sleep(3)
+        
+        logger.error("❌ [欧意] 所有尝试失败")
+        return []
+
 # ============ 【WebSocket连接池管理器类】============
 class WebSocketPoolManager:
-    """WebSocket连接池管理器 - 增强版（独立获取 + 智能降级）"""
+    """WebSocket连接池管理器 - 增强版（独立获取 + 智能降级 + 精确双平台匹配）"""
     
     def __init__(self, admin_instance=None):
         """初始化连接池管理器 - 固定使用default_data_callback"""
@@ -97,7 +203,10 @@ class WebSocketPoolManager:
             "okx": {"symbols": [], "source": "unknown", "count": 0}
         }
         
-        logger.info("✅ WebSocketPoolManager 【连接池】初始化完成（增强版）")
+        # 极简HTTP获取器
+        self.fetcher = SimpleSymbolFetcher()
+        
+        logger.info("✅ WebSocketPoolManager 【连接池】初始化完成（极简HTTP版）")
         logger.info("📊 数据流向: WebSocket → default_data_callback → data_store")
         if admin_instance:
             logger.info("☎️【连接池】 已设置管理员引用，支持直接重启请求")
@@ -112,7 +221,7 @@ class WebSocketPoolManager:
         
         self._initializing = True
         logger.info(f"{'=' * 60}")
-        logger.info("🔄 正在初始化WebSocket连接池管理器（增强版）...")
+        logger.info("🔄 正在初始化WebSocket连接池管理器（极简HTTP版）...")
         logger.info("🚀 流程：独立获取 → 智能降级 → 双平台匹配")
         logger.info(f"{'=' * 60}")
         
@@ -127,7 +236,7 @@ class WebSocketPoolManager:
             await self._initialize_all_exchange_pools(common_symbols)
             
             self.initialized = True
-            logger.info("✅✅✅ WebSocket连接池管理器初始化完成（增强版）")
+            logger.info("✅✅✅ WebSocket连接池管理器初始化完成（极简HTTP版）")
             logger.info(f"{'=' * 60}")
             
             # 打印初始化摘要
@@ -177,16 +286,19 @@ class WebSocketPoolManager:
         symbols = []
         source = "unknown"
         
-        # 1. 优先尝试API获取
+        # 1. 优先尝试HTTP获取
         try:
-            api_symbols = await self._fetch_symbols_via_api(exchange_name)
-            if api_symbols:
-                symbols = api_symbols
-                source = "api"
-                logger.info(f"✅[{exchange_name}] API获取成功: {len(symbols)}个")
+            if exchange_name == "binance":
+                symbols = await self.fetcher.fetch_binance()
+            else:
+                symbols = await self.fetcher.fetch_okx()
+            
+            if symbols:
+                source = "http"
+                logger.info(f"✅[{exchange_name}] HTTP获取成功: {len(symbols)}个")
                 return {"symbols": symbols, "source": source, "count": len(symbols)}
         except Exception as e:
-            logger.warning(f"⚠️[{exchange_name}] API获取失败，尝试静态列表: {e}")
+            logger.warning(f"⚠️[{exchange_name}] HTTP获取失败，尝试静态列表: {e}")
         
         # 2. 降级：使用静态合约列表
         static_symbols = self._get_static_symbols(exchange_name)
@@ -327,7 +439,7 @@ class WebSocketPoolManager:
                 logger.info(f"    状态: ✅ 运行中")
                 logger.info(f"    数据源: {source_info.get('source', 'unknown')}")
                 logger.info(f"    原始合约: {source_info.get('count', 0)}个")
-                logger.info(f"    使用合约: {len(getattr(pool, 'symbols', []))}个")
+                logger.info(f"    使用合约: {len(pool.symbols)}个")
             else:
                 logger.info(f"  [{exchange_name.upper()}]")
                 logger.info(f"    状态: ❌ 未运行")
@@ -485,221 +597,6 @@ class WebSocketPoolManager:
             return False
         
         return True
-    
-    # ============ API获取相关方法（保持不变）============
-    
-    async def _fetch_symbols_via_api(self, exchange_name: str) -> List[str]:
-        """通过交易所API动态获取 - 修复连接泄漏版"""
-        exchange = None
-        max_retries = 2
-        last_error = None
-        
-        for attempt in range(1, max_retries + 1):
-            exchange = None
-            try:
-                # 1. 创建交易所实例（带优化配置）
-                exchange = self._create_exchange_instance(exchange_name)
-                
-                logger.info(f"[{exchange_name}] 🌎 正在加载市场数据... (尝试 {attempt}/{max_retries})")
-                
-                # 2. 获取市场数据
-                markets = await self._fetch_markets_safe(exchange, exchange_name)
-                
-                if not markets:
-                    logger.warning(f"[{exchange_name}] 获取市场数据失败，返回空")
-                    if exchange:
-                        await self._safe_close_exchange(exchange, exchange_name)
-                    continue
-                
-                # 3. 处理和筛选合约
-                filtered_symbols = self._filter_and_format_symbols(exchange_name, markets)
-                
-                # 4. 正确关闭交易所实例
-                if exchange:
-                    await self._safe_close_exchange(exchange, exchange_name)
-                
-                if filtered_symbols:
-                    logger.info(f"[{exchange_name}] ✅ 成功获取 {len(filtered_symbols)} 个合约")
-                    return filtered_symbols
-                    
-            except ccxt_async.RateLimitExceeded as e:
-                last_error = f"频率限制: {e}"
-                wait_time = 10 * attempt
-                logger.warning(f'❌[{exchange_name}] 频率限制，{wait_time}秒后重试')
-                
-                if exchange:
-                    await self._safe_close_exchange(exchange, exchange_name)
-                    
-                await asyncio.sleep(wait_time)
-                
-            except ccxt_async.DDoSProtection as e:
-                last_error = f"DDoS保护: {e}"
-                wait_time = 15 * attempt
-                logger.warning(f'❌[{exchange_name}] DDoS保护触发，{wait_time}秒后重试')
-                
-                if exchange:
-                    await self._safe_close_exchange(exchange, exchange_name)
-                    
-                await asyncio.sleep(wait_time)
-                
-            except Exception as e:
-                last_error = str(e)
-                
-                if exchange:
-                    await self._safe_close_exchange(exchange, exchange_name)
-                    
-                if attempt < max_retries:
-                    wait_time = 5 * attempt
-                    logger.warning(f'❌[{exchange_name}] 第{attempt}次尝试失败，{wait_time}秒后重试: {last_error}')
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f'❌[{exchange_name}] 所有尝试均失败: {last_error}')
-        
-        logger.error(f'❌[{exchange_name}] 所有尝试均失败，最后错误: {last_error}')
-        return []
-    
-    async def _safe_close_exchange(self, exchange, exchange_name: str):
-        """安全关闭交易所实例"""
-        try:
-            if exchange and hasattr(exchange, 'close'):
-                await exchange.close()
-                logger.debug(f"[{exchange_name}] ✅ 交易所实例已正确关闭")
-        except Exception as e:
-            logger.warning(f"[{exchange_name}] ⚠️ 关闭交易所实例时出错: {e}")
-    
-    def _create_exchange_instance(self, exchange_name: str):
-        """安全创建交易所实例"""
-        exchange_class = getattr(ccxt_async, exchange_name)
-        
-        config = {
-            'enableRateLimit': True,
-            'timeout': 30000,
-            'rateLimit': 2000,
-        }
-        
-        if exchange_name == "binance":
-            config.update({
-                'options': {
-                    'defaultType': 'swap',
-                    'defaultSubType': 'linear',
-                    'adjustedForTimeDifference': True,
-                    'warnOnFetchOHLCVLimitArgument': False,
-                    'recvWindow': 60000,
-                    'cacheMarkets': True,
-                    'cacheTime': 1800,
-                }
-            })
-        elif exchange_name == "okx":
-            config.update({
-                'options': {
-                    'defaultType': 'swap',
-                    'adjustedForTimeDifference': True,
-                    'fetchMarketDataRateLimit': 3000,
-                }
-            })
-        
-        return exchange_class(config)
-    
-    async def _fetch_markets_safe(self, exchange, exchange_name: str):
-        """安全获取市场数据"""
-        try:
-            if exchange_name == "okx":
-                markets = await exchange.fetch_markets(params={'instType': 'SWAP'})
-                markets_dict = {}
-                for market in markets:
-                    symbol = market.get('symbol', '').upper()
-                    if symbol:
-                        markets_dict[symbol] = market
-                return markets_dict
-            else:
-                markets = await exchange.load_markets()
-                return {k.upper(): v for k, v in markets.items()}
-                
-        except ccxt_async.NetworkError as e:
-            logger.error(f"[{exchange_name}] 网络错误: {e}")
-            return None
-        except ccxt_async.ExchangeError as e:
-            logger.error(f"[{exchange_name}] 交易所错误: {e}")
-            return None
-        except asyncio.TimeoutError as e:
-            logger.error(f"[{exchange_name}] 超时错误: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"[{exchange_name}] 获取市场数据异常: {e}")
-            return None
-    
-    def _filter_and_format_symbols(self, exchange_name: str, markets: dict) -> List[str]:
-        """统一的合约筛选与格式化逻辑"""
-        all_usdt_symbols = []
-        logger.info(f"🤔[{exchange_name}] 分析市场中...")
-        
-        for symbol, market in markets.items():
-            try:
-                symbol_upper = symbol.upper()
-                
-                if exchange_name == "binance":
-                    is_perpetual = market.get('swap', False) or market.get('linear', False) or market.get('future', False)
-                    is_active = market.get('active', False)
-                    is_usdt = '/USDT' in symbol_upper
-                    
-                    if is_perpetual and is_active and is_usdt:
-                        clean_symbol = symbol_upper.replace(':USDT', '')
-                        
-                        if '/USDT' in clean_symbol:
-                            base_part = clean_symbol.split('/USDT')[0]
-                            
-                            if '/' in base_part:
-                                base_part = base_part.split('/')[-1]
-                            
-                            final_symbol = f"{base_part}USDT"
-                            
-                            if final_symbol.endswith('USDTUSDT'):
-                                final_symbol = final_symbol[:-4]
-                            
-                            if final_symbol and len(final_symbol) >= 4:
-                                all_usdt_symbols.append(final_symbol)
-                        
-                elif exchange_name == "okx":
-                    market_type = market.get('type', '').upper()
-                    quote = market.get('quote', '').upper()
-                    contract_type = market.get('contractType', '').upper()
-                    
-                    is_swap = market_type == 'SWAP' or market.get('swap', False) or 'SWAP' in symbol_upper
-                    is_usdt_quote = quote == 'USDT' or '-USDT-' in symbol_upper
-                    is_perpetual_contract = 'PERPETUAL' in contract_type or contract_type == '' or 'SWAP' in contract_type
-                    
-                    if is_swap and is_usdt_quote and is_perpetual_contract:
-                        if '-USDT-SWAP' in symbol_upper:
-                            clean_symbol = symbol.upper()
-                        elif '/USDT:USDT' in symbol_upper:
-                            clean_symbol = symbol.replace('/USDT:USDT', '-USDT-SWAP').upper()
-                        else:
-                            inst_id = market.get('info', {}).get('instId', '')
-                            if inst_id and '-USDT-SWAP' in inst_id.upper():
-                                clean_symbol = inst_id.upper()
-                            else:
-                                continue
-                        
-                        all_usdt_symbols.append(clean_symbol)
-                
-            except Exception as e:
-                logger.debug(f"🤔[{exchange_name}] 处理市场 {symbol} 时跳过: {e}")
-                continue
-        
-        # 去重排序
-        symbols = sorted(list(set(all_usdt_symbols)))
-        
-        if symbols:
-            logger.info(f"✅ [{exchange_name}] 发现 {len(symbols)} 个USDT永续合约")
-            logger.info(f"🔍[{exchange_name}] 前10个合约示例: {symbols[:10]}")
-            
-            thousand_symbols = [s for s in symbols if s.startswith('1000')]
-            if thousand_symbols:
-                logger.info(f"🔍[{exchange_name}] 包含 {len(thousand_symbols)} 个1000开头合约: {thousand_symbols[:5]}...")
-        else:
-            logger.warning(f"⚠️[{exchange_name}] 未找到USDT永续合约")
-        
-        return symbols
     
     def _get_static_symbols(self, exchange_name: str) -> List[str]:
         """备用方案：获取静态合约列表"""
