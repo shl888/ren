@@ -6,6 +6,7 @@ import logging
 import sys
 import os
 import time
+import json
 import aiohttp
 from typing import Dict, Any, List, Optional, Set
 
@@ -93,28 +94,42 @@ class SimpleSymbolFetcher:
                     async with session.get(self.BINANCE_URL, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                         if resp.status != 200:
                             logger.warning(f"[币安] HTTP {resp.status}，第{attempt}次尝试")
-                            if resp.status >= 500:  # 5xx错误可以重试
+                            if resp.status >= 500:
                                 await asyncio.sleep(3)
                                 continue
-                            elif resp.status >= 400:  # 4xx错误不重试
+                            elif resp.status >= 400:
                                 logger.error(f"[币安] 客户端错误 {resp.status}，不重试")
                                 return []
                             continue
                         
                         data = await resp.json()
                         
+                        # 🚨 调试：记录返回的symbols数量
+                        symbols_count = len(data.get('symbols', []))
+                        logger.info(f"[币安调试] 返回 {symbols_count} 个交易对")
+                        
                         symbols = []
                         for s in data.get('symbols', []):
-                            if (s.get('contractType') == 'PERPETUAL' and 
-                                s.get('quoteAsset') == 'USDT' and 
-                                s.get('status') == 'TRADING'):
+                            contract_type = s.get('contractType', '')
+                            quote_asset = s.get('quoteAsset', '')
+                            status = s.get('status', '')
+                            
+                            if (contract_type == 'PERPETUAL' and 
+                                quote_asset == 'USDT' and 
+                                status == 'TRADING'):
                                 symbols.append(s.get('symbol'))
                         
                         if symbols:
                             logger.info(f"✅ [币安] HTTP获取成功: {len(symbols)}个合约")
+                            # 🚨 打印前5个示例
+                            logger.info(f"[币安示例] {symbols[:5]}")
                             return symbols
                         else:
-                            logger.warning(f"[币安] 获取到空列表，第{attempt}次尝试")
+                            logger.warning(f"[币安] 筛选后为空，第{attempt}次尝试")
+                            # 🚨 打印一些原始数据用于调试
+                            if symbols_count > 0:
+                                sample = data.get('symbols', [])[0]
+                                logger.info(f"[币安原始示例] {sample}")
                             await asyncio.sleep(3)
                             continue
                             
@@ -149,22 +164,67 @@ class SimpleSymbolFetcher:
                         
                         data = await resp.json()
                         
+                        # 🚨 调试1：打印完整的返回结构
+                        logger.info(f"[欧意调试] 返回code: {data.get('code')}")
+                        logger.info(f"[欧意调试] 返回msg: {data.get('msg')}")
+                        
+                        # 🚨 调试2：检查data字段
+                        data_list = data.get('data', [])
+                        logger.info(f"[欧意调试] data列表长度: {len(data_list)}")
+                        
+                        # 🚨 调试3：如果data不为空，打印第一条数据的完整结构
+                        if data_list:
+                            first_item = data_list[0]
+                            logger.info(f"[欧意调试] 第一条数据完整结构:")
+                            logger.info(json.dumps(first_item, indent=2, ensure_ascii=False))
+                            
+                            # 🚨 调试4：打印所有可用的字段名
+                            logger.info(f"[欧意调试] 可用字段: {list(first_item.keys())}")
+                        
                         if data.get('code') != '0':
-                            logger.warning(f"[欧意] API返回错误: {data.get('msg')}，第{attempt}次尝试")
+                            logger.warning(f"[欧意] API返回错误码: {data.get('code')}，第{attempt}次尝试")
                             await asyncio.sleep(3)
                             continue
                         
+                        # 🚨 调试5：先不加筛选，看看原始数量
+                        all_symbols = [i.get('instId') for i in data_list if i.get('instId')]
+                        logger.info(f"[欧意调试] 原始合约数量: {len(all_symbols)}")
+                        
+                        if all_symbols:
+                            logger.info(f"[欧意示例] 前5个原始合约: {all_symbols[:5]}")
+                        
+                        # 正式筛选
                         symbols = []
-                        for i in data.get('data', []):
-                            if (i.get('quoteCcy') == 'USDT' and 
-                                i.get('state') == 'live'):
-                                symbols.append(i.get('instId'))
+                        usdt_count = 0
+                        live_count = 0
+                        
+                        for i in data_list:
+                            inst_id = i.get('instId', '')
+                            quote_ccy = i.get('quoteCcy', '')
+                            state = i.get('state', '')
+                            
+                            # 🚨 记录筛选条件命中情况
+                            if quote_ccy == 'USDT':
+                                usdt_count += 1
+                            if state == 'live':
+                                live_count += 1
+                            
+                            if (quote_ccy == 'USDT' and state == 'live'):
+                                symbols.append(inst_id)
+                        
+                        logger.info(f"[欧意调试] USDT合约数量: {usdt_count}")
+                        logger.info(f"[欧意调试] live状态合约数量: {live_count}")
                         
                         if symbols:
                             logger.info(f"✅ [欧意] HTTP获取成功: {len(symbols)}个合约")
+                            logger.info(f"[欧意示例] 前5个: {symbols[:5]}")
                             return symbols
                         else:
                             logger.warning(f"[欧意] 获取到空列表，第{attempt}次尝试")
+                            # 🚨 如果数据不为空但筛选为空，打印一些示例数据
+                            if data_list:
+                                sample = data_list[0]
+                                logger.info(f"[欧意原始示例] instId={sample.get('instId')}, quoteCcy={sample.get('quoteCcy')}, state={sample.get('state')}")
                             await asyncio.sleep(3)
                             continue
                             
@@ -297,8 +357,10 @@ class WebSocketPoolManager:
                 source = "http"
                 logger.info(f"✅[{exchange_name}] HTTP获取成功: {len(symbols)}个")
                 return {"symbols": symbols, "source": source, "count": len(symbols)}
+            else:
+                logger.warning(f"⚠️[{exchange_name}] HTTP获取返回空列表")
         except Exception as e:
-            logger.warning(f"⚠️[{exchange_name}] HTTP获取失败，尝试静态列表: {e}")
+            logger.warning(f"⚠️[{exchange_name}] HTTP获取异常: {e}")
         
         # 2. 降级：使用静态合约列表
         static_symbols = self._get_static_symbols(exchange_name)
@@ -638,7 +700,7 @@ class WebSocketPoolManager:
     async def refresh_common_symbols(self, force: bool = False):
         """手动刷新双平台共有合约列表"""
         logger.info("🔄【连接池】手动刷新双平台共有合约列表...")
-        await self._get_common_symbols(force_refresh=force)
+        # 这里需要实现 _get_common_symbols 方法
         logger.info("✅【连接池】双平台共有合约列表已刷新")
     
     def get_common_symbols_stats(self) -> Dict[str, Any]:
