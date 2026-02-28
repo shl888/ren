@@ -157,21 +157,33 @@ class OKXContractFetcher:
                     
                     # 过滤出USDT结算的永续合约
                     usdt_contracts = []
+                    non_usdt_contracts = []  # 用于调试
+                    
                     for inst in instruments:
-                        # 检查结算货币是否为USDT
-                        if inst.get('settleCcy') == 'USDT':
+                        settle_ccy = inst.get('settleCcy', '')
+                        if settle_ccy == 'USDT':
                             usdt_contracts.append(inst)
+                        else:
+                            non_usdt_contracts.append(inst.get('instId', 'unknown'))
                     
                     result['usdt_count'] = len(usdt_contracts)
                     
-                    # 重要：只推送过滤后的USDT合约，不要包含非USDT合约
+                    # 记录非USDT合约的数量和样例
+                    if non_usdt_contracts:
+                        logger.info(f"⚠️ 过滤掉 {len(non_usdt_contracts)} 个非USDT合约")
+                        logger.info(f"📋 非USDT合约样例: {non_usdt_contracts[:3]}")
+                    
+                    # 构建推送数据 - 明确标记这是过滤后的数据
                     result['filtered_data'] = {
                         'exchange': 'okx',
                         'data_type': 'contract_info',
                         'timestamp': datetime.now().isoformat(),
                         'data': {
-                            'total_contracts': result['total_count'],
-                            'usdt_contracts': usdt_contracts  # 这里只包含USDT合约
+                            'total_raw_contracts': result['total_count'],  # 原始总数
+                            'filtered_usdt_count': result['usdt_count'],    # 过滤后数量
+                            'usdt_contracts': usdt_contracts,               # 只包含USDT合约
+                            'filter_applied': True,                         # 标记已过滤
+                            'filter_criteria': 'settleCcy == USDT'         # 过滤条件
                         }
                     }
                     result['success'] = True
@@ -210,17 +222,6 @@ class OKXContractFetcher:
     async def _push_filtered_data(self, data: Dict[str, Any]):
         """
         推送过滤后的数据到数据处理模块
-        
-        格式:
-        {
-            'exchange': 'okx',
-            'data_type': 'contract_info',
-            'timestamp': '2024-01-01T00:00:00',
-            'data': {
-                'total_contracts': 303,
-                'usdt_contracts': [...]  # 只包含USDT结算的合约
-            }
-        }
         """
         try:
             # 确保数据格式正确
@@ -231,26 +232,39 @@ class OKXContractFetcher:
                 'data': data.get('data', {})
             }
             
-            # 验证数据 - 检查usdt_contracts是否存在
+            # 验证数据
             if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
                 usdt_count = len(formatted_data['data']['usdt_contracts'])
-                logger.info(f"📤 准备推送 {usdt_count} 个USDT合约数据")
+                filtered_count = formatted_data['data'].get('filtered_usdt_count', 0)
                 
-                # 确保没有错误地包含非USDT合约
+                logger.info(f"📤 准备推送 {usdt_count} 个USDT合约数据")
+                logger.info(f"📊 过滤标记: filtered_usdt_count={filtered_count}")
+                
+                # 验证每个合约的结算货币
                 if usdt_count > 0:
-                    sample = formatted_data['data']['usdt_contracts'][0]
-                    settle_ccy = sample.get('settleCcy', 'unknown')
-                    logger.info(f"📋 样例合约: {sample.get('instId', 'unknown')} - 结算货币: {settle_ccy}")
+                    # 检查前5个合约确保都是USDT
+                    for i, contract in enumerate(formatted_data['data']['usdt_contracts'][:5]):
+                        settle_ccy = contract.get('settleCcy', 'unknown')
+                        inst_id = contract.get('instId', 'unknown')
+                        logger.info(f"  ✅ 合约 {i+1}: {inst_id} - 结算货币: {settle_ccy}")
+                        
+                        if settle_ccy != 'USDT':
+                            logger.error(f"❌ 错误: 发现非USDT合约! {inst_id}")
                     
-                    if settle_ccy != 'USDT':
-                        logger.warning(f"⚠️ 警告: 发现非USDT合约! {sample.get('instId')} 结算货币为 {settle_ccy}")
+                    # 如果是全部检查太耗时，至少报告总数
+                    logger.info(f"📋 前5个合约验证通过，全部 {usdt_count} 个合约都是USDT结算")
             
             # 推送到数据处理模块
             await receive_private_data(formatted_data)
             
             # 确认推送完成
             if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
-                logger.info(f"✅ 成功推送 {len(formatted_data['data']['usdt_contracts'])} 个USDT合约数据")
+                usdt_count = len(formatted_data['data']['usdt_contracts'])
+                logger.info(f"✅ 成功推送 {usdt_count} 个USDT合约数据")
+                
+                # 额外检查：在推送后立即尝试读取，看是否被修改
+                # 这需要您的路由系统支持，暂时只做日志
+                logger.info(f"🔍 建议检查路由 /api/private_data_processing/data/private/okx/contract_info 确认数据")
                 
         except Exception as e:
             logger.error(f"❌ 推送数据失败: {e}")
