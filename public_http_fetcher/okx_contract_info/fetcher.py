@@ -1,6 +1,6 @@
 """
-OKX合约面值获取器 - 完整版
-获取OKX所有永续合约，过滤出USDT结算的合约，推送原始数据
+OKX合约面值获取器 - 获取模块
+职责：只负责从OKX API获取数据，过滤USDT合约，返回原始数据
 """
 import asyncio
 import logging
@@ -8,189 +8,136 @@ import aiohttp
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-# 导入私人数据处理模块
-from private_data_processing.manager import receive_private_data
-
 logger = logging.getLogger(__name__)
 
 
 class OKXContractFetcher:
-    """OKX合约面值获取器（获取后立即过滤USDT合约）"""
+    """OKX合约面值获取器（只获取+过滤，不推送）"""
     
-    # OKX API地址
     API_URL = "https://www.okx.com/api/v5/public/instruments"
     
     def __init__(self):
-        self.is_fetched = False          # 是否已成功获取
-        self.last_attempt_time = None    # 最后成功时间
-        self.fetched_count = 0            # 成功获取的USDT合约数
+        self.is_fetched = False
+        self.last_attempt_time = None
+        self.fetched_count = 0
+        self.last_raw_data = None
         
-        # 重试策略（秒）
         self.retry_delays = {
-            'network_error': 5,    # 网络错误
-            'timeout': 10,          # 超时
-            'api_error': 30,        # API返回错误
-            'rate_limit': 60,       # 频率限制
-            'default': 15            # 默认
+            'network_error': 5,
+            'timeout': 10,
+            'api_error': 30,
+            'rate_limit': 60,
+            'default': 15
         }
         
-        logger.info("✅ [OKX合约] 获取器初始化完成")
+        logger.info("✅ [OKX合约获取器] 初始化完成")
     
     async def startup_fetch(self):
-        """
-        启动后延迟60秒获取一次
-        供 launcher.py 调用
-        """
-        logger.info("⏳ [OKX合约] 等待60秒后开始获取...")
+        """启动后延迟60秒获取一次"""
+        logger.info("⏳ [OKX合约获取器] 等待60秒后开始获取...")
         await asyncio.sleep(60)
         
         if self.is_fetched:
-            logger.info("✅ [OKX合约] 已成功获取过，跳过本次启动获取")
-            return
+            logger.info("✅ [OKX合约获取器] 已成功获取过，跳过本次启动获取")
+            return self.last_raw_data
         
-        logger.info("🚀 [OKX合约] 开始执行启动获取任务")
-        await self.fetch_once()
+        logger.info("🚀 [OKX合约获取器] 开始执行启动获取任务")
+        return await self.fetch_once()
     
-    async def fetch_once(self) -> bool:
-        """
-        执行一次获取（最多重试3次）
-        返回是否最终成功
-        """
+    async def fetch_once(self) -> Optional[Dict[str, Any]]:
+        """执行一次获取（最多重试3次）"""
         logger.info("=" * 60)
-        logger.info("📡 [OKX合约] 开始获取合约面值数据")
+        logger.info("📡 [OKX合约获取器] 开始获取合约面值数据")
         logger.info(f"⏱️  时间: {datetime.now().isoformat()}")
         logger.info("=" * 60)
         
-        for attempt in range(3):  # 最多尝试3次
+        for attempt in range(3):
             attempt_num = attempt + 1
             logger.info(f"🔄 第{attempt_num}/3次尝试")
             
             try:
-                # 执行API请求（内部已过滤USDT合约）
                 result = await self._fetch_from_api()
                 
                 if result['success']:
-                    # ✅ 成功：推送过滤后的数据
-                    await self._push_filtered_data(result['filtered_data'])
-                    
                     self.is_fetched = True
                     self.last_attempt_time = datetime.now()
                     self.fetched_count = result['usdt_count']
+                    self.last_raw_data = result['filtered_data']
                     
                     logger.info("=" * 60)
-                    logger.info(f"🎉 [OKX合约] 获取成功！")
+                    logger.info(f"🎉 [OKX合约获取器] 获取成功！")
                     logger.info(f"📊 原始合约总数: {result['total_count']}")
                     logger.info(f"💰 过滤后USDT合约: {result['usdt_count']}")
-                    logger.info(f"📤 已推送过滤后的数据 (仅包含USDT合约)")
                     logger.info("=" * 60)
                     
-                    return True
+                    return result['filtered_data']
                 
-                # ❌ 失败：分析错误类型，决定等待时间
                 error_type = self._analyze_error(result.get('error', ''))
                 wait_time = self.retry_delays.get(error_type, self.retry_delays['default'])
                 
                 logger.warning(f"⚠️ 第{attempt_num}次失败: {result.get('error', '未知错误')}")
-                logger.warning(f"📋 错误类型: {error_type}, {wait_time}秒后重试")
                 
-                if attempt < 2:  # 还有重试机会
+                if attempt < 2:
                     await asyncio.sleep(wait_time)
                 
             except Exception as e:
-                # 意外异常
                 logger.error(f"❌ 第{attempt_num}次尝试异常: {e}")
-                
                 if attempt < 2:
                     await asyncio.sleep(self.retry_delays['default'])
         
-        # 3次都失败
-        logger.error("=" * 60)
-        logger.error("💥 [OKX合约] 3次尝试均失败，不再重试")
-        logger.error("=" * 60)
-        return False
+        logger.error("💥 [OKX合约获取器] 3次尝试均失败")
+        return None
     
     async def _fetch_from_api(self) -> Dict[str, Any]:
-        """
-        调用OKX API获取合约信息
-        返回处理结果（已过滤USDT合约）
-        """
+        """调用OKX API获取合约信息"""
         result = {
             'success': False,
-            'filtered_data': None,    # 过滤后的数据（只含USDT合约）
-            'total_count': 0,          # API返回的总合约数
-            'usdt_count': 0,           # 过滤后的USDT合约数
+            'filtered_data': None,
+            'total_count': 0,
+            'usdt_count': 0,
             'error': None
         }
         
         try:
-            params = {
-                "instType": "SWAP"  # 永续合约
-            }
-            
-            logger.info(f"📡 请求URL: {self.API_URL}")
-            logger.info(f"📡 参数: {params}")
+            params = {"instType": "SWAP"}
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    self.API_URL, 
-                    params=params,
-                    timeout=30
-                ) as response:
-                    
-                    logger.info(f"📥 响应状态码: {response.status}")
+                async with session.get(self.API_URL, params=params, timeout=30) as response:
                     
                     if response.status != 200:
                         result['error'] = f"HTTP {response.status}"
                         return result
                     
-                    # 解析JSON
                     data = await response.json()
                     
-                    # 检查OKX返回码
                     if data.get('code') != '0':
                         result['error'] = f"API错误: {data.get('msg', '未知错误')}"
                         return result
                     
-                    # 获取合约列表
                     instruments = data.get('data', [])
                     result['total_count'] = len(instruments)
                     
-                    # 过滤出USDT结算的永续合约
+                    # 过滤USDT合约
                     usdt_contracts = []
-                    non_usdt_contracts = []  # 用于调试
-                    
                     for inst in instruments:
-                        settle_ccy = inst.get('settleCcy', '')
-                        if settle_ccy == 'USDT':
+                        if inst.get('settleCcy') == 'USDT':
                             usdt_contracts.append(inst)
-                        else:
-                            non_usdt_contracts.append(inst.get('instId', 'unknown'))
                     
                     result['usdt_count'] = len(usdt_contracts)
                     
-                    # 记录非USDT合约的数量和样例（仅在调试时显示）
-                    if non_usdt_contracts:
-                        logger.info(f"⚠️ 过滤掉 {len(non_usdt_contracts)} 个非USDT合约")
-                        logger.info(f"📋 非USDT合约样例: {non_usdt_contracts[:3]}")
-                    
-                    # 构建推送数据 - 简化显示，只保留过滤后的数量
+                    # 构建原始数据（保留所有字段）
                     result['filtered_data'] = {
                         'exchange': 'okx',
-                        'data_type': 'contract_info',
+                        'data_type': 'contract_info_raw',
                         'timestamp': datetime.now().isoformat(),
                         'data': {
-                            'total_contracts': result['usdt_count'],  # 统一使用过滤后的数量
-                            'usdt_contracts': usdt_contracts,         # 只包含USDT合约
-                            'filter_note': f'已过滤非USDT合约，实际USDT合约数量: {result["usdt_count"]}'  # 添加说明
+                            'total_raw_contracts': result['total_count'],
+                            'usdt_contracts': usdt_contracts
                         }
                     }
                     result['success'] = True
                     
-                    logger.info(f"✅ 原始合约: {result['total_count']}个, USDT合约: {result['usdt_count']}个")
-                    
-                    # 添加调试日志，确认过滤结果
-                    if usdt_contracts:
-                        logger.info(f"📋 第一个USDT合约: {usdt_contracts[0].get('instId', 'unknown')}")
+                    logger.info(f"✅ 获取到 {result['total_count']} 个原始合约，其中USDT合约 {result['usdt_count']} 个")
                     
         except asyncio.TimeoutError:
             result['error'] = "请求超时"
@@ -198,14 +145,12 @@ class OKXContractFetcher:
             result['error'] = f"网络错误: {str(e)}"
         except Exception as e:
             result['error'] = f"未知错误: {str(e)}"
-            logger.error(f"❌ _fetch_from_api异常: {e}")
         
         return result
     
     def _analyze_error(self, error_msg: str) -> str:
-        """分析错误类型，用于决定重试等待时间"""
+        """分析错误类型"""
         error_msg = error_msg.lower()
-        
         if 'timeout' in error_msg:
             return 'timeout'
         elif 'network' in error_msg or 'connection' in error_msg:
@@ -217,48 +162,6 @@ class OKXContractFetcher:
         else:
             return 'default'
     
-    async def _push_filtered_data(self, data: Dict[str, Any]):
-        """
-        推送过滤后的数据到数据处理模块
-        """
-        try:
-            # 确保数据格式正确
-            formatted_data = {
-                'exchange': data.get('exchange', 'okx'),
-                'data_type': data.get('data_type', 'contract_info'),
-                'timestamp': data.get('timestamp', datetime.now().isoformat()),
-                'data': data.get('data', {})
-            }
-            
-            # 验证数据
-            if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
-                usdt_count = len(formatted_data['data']['usdt_contracts'])
-                total_contracts = formatted_data['data'].get('total_contracts', 0)
-                
-                logger.info(f"📤 准备推送 {usdt_count} 个USDT合约数据")
-                logger.info(f"📊 显示总数: {total_contracts} (应与推送数量一致)")
-                
-                # 验证每个合约的结算货币
-                if usdt_count > 0:
-                    # 检查前3个合约确保都是USDT
-                    for i, contract in enumerate(formatted_data['data']['usdt_contracts'][:3]):
-                        settle_ccy = contract.get('settleCcy', 'unknown')
-                        inst_id = contract.get('instId', 'unknown')
-                        logger.info(f"  ✅ 合约 {i+1}: {inst_id} - 结算货币: {settle_ccy}")
-                        
-                        if settle_ccy != 'USDT':
-                            logger.error(f"❌ 错误: 发现非USDT合约! {inst_id}")
-                    
-                    logger.info(f"📋 前3个合约验证通过")
-            
-            # 推送到数据处理模块
-            await receive_private_data(formatted_data)
-            
-            # 确认推送完成
-            if 'data' in formatted_data and 'usdt_contracts' in formatted_data['data']:
-                usdt_count = len(formatted_data['data']['usdt_contracts'])
-                logger.info(f"✅ 成功推送 {usdt_count} 个USDT合约数据")
-                
-        except Exception as e:
-            logger.error(f"❌ 推送数据失败: {e}")
-            logger.error(f"❌ 问题数据预览: {str(data)[:200]}...")
+    def get_last_raw_data(self) -> Optional[Dict]:
+        """获取最后一次获取的原始数据"""
+        return self.last_raw_data
