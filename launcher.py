@@ -87,7 +87,7 @@ async def main():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
-        stream=sys.stdout  # 适配railway服务器日志显示逻辑
+        stream=sys.stdout  # 这一行是为了适配railway服务器日志显示逻辑
     )
     
     # 启动保活服务
