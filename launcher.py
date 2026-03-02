@@ -16,10 +16,6 @@ from dotenv import load_dotenv
 load_dotenv()  # 从 .env 文件加载环境变量
 # =======================================================
 
-# ✅ 新增：智能日志配置（自动适配Railway/Render）
-from logging_config import setup_logging
-setup_logging()  # 在原有日志基础上增加适配
-
 # 设置路径
 CURRENT_FILE = os.path.abspath(__file__)
 PROJECT_ROOT = os.path.dirname(CURRENT_FILE)
@@ -87,11 +83,11 @@ async def delayed_ws_init(ws_admin):
 
 async def main():
     """主启动函数"""
-    # 原有的日志配置保留不动
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
+        stream=sys.stdout  # 适配railway服务器日志显示逻辑
     )
     
     # 启动保活服务
