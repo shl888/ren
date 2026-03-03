@@ -43,7 +43,6 @@ class PrivateDataScheduler:
         from .pipeline.step4_funding import Step4Funding
         
         # 创建所有步骤实例
-        # Step1需要知道往哪输出（调度器的队列）
         self.step1 = Step1Extract(self.step1_output_queue)
         self.step2 = Step2Fusion()
         self.step3 = Step3Calc()
@@ -52,7 +51,7 @@ class PrivateDataScheduler:
         self.running = True
         logger.info("🚀【调度器】已启动 - step1, step2, step3, step4 已就绪")
         
-        # 启动流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑
+        # 启动流水线工作线程
         asyncio.create_task(self._pipeline_worker())
 
     async def stop(self):
@@ -62,37 +61,65 @@ class PrivateDataScheduler:
     def feed_step1(self, stored_item: Dict[str, Any]):
         """
         Manager直接调用这个，往Step1嘴里塞数据
-        不管Step1是否启动，只管塞
         """
+        # ===== 调试日志1：确认feed_step1被调用 =====
+        logger.info(f"🎯【调度器】feed_step1被调用！数据类型: {stored_item.get('data_type')}, 交易所: {stored_item.get('exchange')}")
+        
         if self.step1:
-            # 异步塞数据，不阻塞Manager
-            asyncio.create_task(self.step1.receive(stored_item))
-            logger.debug(f"📥【调度器】数据已塞给Step1: {stored_item.get('data_type')}")
+            try:
+                # ===== 调试日志2：确认创建任务 =====
+                asyncio.create_task(self.step1.receive(stored_item))
+                logger.info(f"📥【调度器】已创建任务塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
+            except Exception as e:
+                logger.error(f"❌【调度器】创建任务失败: {e}")
         else:
-            logger.warning("⚠️【调度器】Step1未初始化，数据丢弃")
+            logger.error(f"❌【调度器】Step1未初始化！无法处理数据: {stored_item.get('data_type')}")
 
     async def _pipeline_worker(self):
         """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑"""
         logger.info("🏭【流水线工作线程】已启动")
         
+        empty_count = 0  # 计数器，记录空队列次数
+        
         while self.running:
             try:
-                # 从Step1输出队列取数据（阻塞等待）
+                # ===== 调试日志3：检查队列状态（每10秒打印一次）=====
+                queue_size = self.step1_output_queue.qsize()
+                if queue_size > 0:
+                    logger.info(f"📊【调度器】队列有 {queue_size} 条数据待处理")
+                    empty_count = 0
+                else:
+                    empty_count += 1
+                    if empty_count % 10 == 0:  # 每10秒（10次超时）打印一次
+                        logger.info(f"⏳【调度器】队列持续为空，已等待 {empty_count} 秒")
+                
+                # 从Step1输出队列取数据
                 extracted = await asyncio.wait_for(self.step1_output_queue.get(), timeout=1.0)
                 
+                # ===== 调试日志4：确认取到数据 =====
+                logger.info(f"✅【调度器】从队列取到数据！事件类型: {extracted.get('event_type')}, 交易所: {extracted.get('交易所')}")
+                
                 # ===== 步骤2：融合更新 =====
+                logger.info(f"🔜【调度器】开始Step2融合...")
                 container = self.step2.process(extracted)
                 if not container:
+                    logger.warning(f"⚠️【调度器】Step2返回空，跳过")
                     self.step1_output_queue.task_done()
                     continue
+                logger.info(f"✅【调度器】Step2完成，容器交易所: {container.get('交易所')}")
 
                 # ===== 步骤3：计算衍生字段 =====
+                logger.info(f"🔜【调度器】开始Step3计算...")
                 self.step3.process(container)
+                logger.info(f"✅【调度器】Step3完成")
 
                 # ===== 步骤4：资金费处理 =====
+                logger.info(f"🔜【调度器】开始Step4资金费...")
                 self.step4.process(container)
+                logger.info(f"✅【调度器】Step4完成")
 
                 # ===== 推送大脑 =====
+                logger.info(f"🔜【调度器】准备推给大脑...")
                 await self._push_to_brain(container)
                 
                 self.step1_output_queue.task_done()
@@ -101,11 +128,14 @@ class PrivateDataScheduler:
                 continue
             except Exception as e:
                 logger.error(f"❌【流水线工作线程】错误: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
 
     async def _push_to_brain(self, container: Dict[str, Any]):
         """推送成品数据到大脑"""
         if not self.brain:
-            logger.debug("⚠️【调度器】大脑未设置，跳过推送")
+            # ===== 调试日志5：确认大脑未设置 =====
+            logger.error(f"❌【调度器】大脑未设置！数据无法推送: {container.get('交易所')}")
             return
 
         try:
@@ -115,7 +145,7 @@ class PrivateDataScheduler:
                 "data": container,
                 "timestamp": datetime.now().isoformat()
             })
-            logger.debug(f"✅【调度器】已推送 {container.get('交易所')} 数据到大脑")
+            logger.info(f"✅【调度器】已推送 {container.get('交易所')} 数据到大脑")
         except Exception as e:
             logger.error(f"❌【调度器】推送大脑失败: {e}")
 

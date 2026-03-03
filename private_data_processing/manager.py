@@ -123,12 +123,16 @@ class PrivateDataProcessor:
         格式：{'exchange': 'binance', 'data_type': 'account_update', 'data': {...}, 'timestamp': '...'}
         """
         try:
-            # ===== 确保调度器已启动（延迟启动的情况）=====
-            await self._ensure_scheduler_started()
-            
+            # ===== 调试日志1：确认收到数据 =====
             exchange = private_data.get('exchange', 'unknown')
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
+            data_type = private_data.get('data_type', 'unknown')
+            event_type = raw_data.get('e', 'unknown') if isinstance(raw_data, dict) else 'unknown'
+            logger.info(f"🎯【Manager】收到数据！exchange={exchange}, data_type={data_type}, event={event_type}")
+            
+            # ===== 确保调度器已启动（延迟启动的情况）=====
+            await self._ensure_scheduler_started()
             
             # 初始化存储格式数据（用于后续喂给Step1）
             stored_item_base = {
@@ -230,8 +234,10 @@ class PrivateDataProcessor:
                     'data_type': 'order_update',
                     'classified': {classified_key: classified[classified_key]}
                 }
+                # ===== 调试日志2：确认调用feed_step1 =====
+                logger.info(f"📤【Manager】币安订单处理完成，准备feed_step1: {classified_key}")
                 self.scheduler.feed_step1(stored_item)
-                logger.debug(f"📤 [币安订单] 数据已喂给Step1: {classified_key}")
+                logger.info(f"✅【Manager】币安订单已调用feed_step1")
                 
                 return
             
@@ -350,8 +356,10 @@ class PrivateDataProcessor:
                         'data_type': 'order_update',
                         'classified': {classified_key: classified[classified_key]}
                     }
+                    # ===== 调试日志3：确认调用feed_step1 =====
+                    logger.info(f"📤【Manager】OKX订单处理完成，准备feed_step1: {classified_key}")
                     self.scheduler.feed_step1(stored_item)
-                    logger.debug(f"📤 [OKX订单] 数据已喂给Step1: {classified_key}")
+                    logger.info(f"✅【Manager】OKX订单已调用feed_step1")
                     
                     return
                     
@@ -385,8 +393,10 @@ class PrivateDataProcessor:
                         **stored_item_base,
                         'data_type': 'position_update'
                     }
+                    # ===== 调试日志4：确认调用feed_step1 =====
+                    logger.info(f"📤【Manager】OKX持仓处理完成，准备feed_step1")
                     self.scheduler.feed_step1(stored_item)
-                    logger.debug(f"📤 [OKX持仓] 数据已喂给Step1")
+                    logger.info(f"✅【Manager】OKX持仓已调用feed_step1")
                     
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
@@ -438,11 +448,13 @@ class PrivateDataProcessor:
                 **stored_item_base,
                 'data_type': final_data_type
             }
+            # ===== 调试日志5：确认调用feed_step1 =====
+            logger.info(f"📤【Manager】其他数据类型处理完成，准备feed_step1: {final_data_type}")
             self.scheduler.feed_step1(stored_item)
-            logger.debug(f"📤 [私人数据处理] 数据已喂给Step1: {final_data_type}")
+            logger.info(f"✅【Manager】其他数据已调用feed_step1")
             
         except Exception as e:
-            logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
+            logger.error(f"❌【Manager】接收数据失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
     
