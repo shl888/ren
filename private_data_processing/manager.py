@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 from .binance_classifier import classify_binance_order, is_closing_event as is_binance_closing
 from .okx_classifier import classify_okx_order, is_closing_event as is_okx_closing
+from .scheduler import get_scheduler
 
 
 class PrivateDataProcessor:
@@ -28,6 +29,30 @@ class PrivateDataProcessor:
             self.memory_store = {'private_data': {}}
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
+            
+            # ===== 初始化并启动调度器 =====
+            self.scheduler = get_scheduler()
+            self._start_scheduler()
+    
+    def _start_scheduler(self):
+        """启动调度器（在模块初始化时立即启动）"""
+        try:
+            # 尝试获取当前事件循环
+            loop = asyncio.get_running_loop()
+            # 如果有事件循环，创建任务启动
+            asyncio.create_task(self.scheduler.start())
+            logger.info("🚀 [私人数据处理] 调度器已异步启动")
+        except RuntimeError:
+            # 没有事件循环，延后启动
+            logger.warning("⚠️ [私人数据处理] 无事件循环，调度器将在首次数据到达时启动")
+            self._scheduler_delayed_start = True
+    
+    async def _ensure_scheduler_started(self):
+        """确保调度器已启动（用于延迟启动的情况）"""
+        if hasattr(self, '_scheduler_delayed_start') and self._scheduler_delayed_start:
+            await self.scheduler.start()
+            self._scheduler_delayed_start = False
+            logger.info("🚀 [私人数据处理] 调度器延迟启动完成")
     
     async def _binance_delayed_delete(self, keys: List[str], symbol: str):
         """30秒后删除该symbol所有当前存在的key（币安使用）"""
@@ -98,9 +123,20 @@ class PrivateDataProcessor:
         格式：{'exchange': 'binance', 'data_type': 'account_update', 'data': {...}, 'timestamp': '...'}
         """
         try:
+            # ===== 确保调度器已启动（延迟启动的情况）=====
+            await self._ensure_scheduler_started()
+            
             exchange = private_data.get('exchange', 'unknown')
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
+            
+            # 初始化存储格式数据（用于后续喂给Step1）
+            stored_item_base = {
+                'exchange': exchange,
+                'data': raw_data,
+                'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                'received_at': private_data.get('received_at', datetime.now().isoformat())
+            }
             
             # ========== 币安订单更新处理 ==========
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
@@ -187,6 +223,15 @@ class PrivateDataProcessor:
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                     asyncio.create_task(self._binance_delayed_delete(keys_to_delayed_delete, symbol))
                     logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在30秒后清理")
+                
+                # ===== 保存后，构造数据喂给Step1 =====
+                stored_item = {
+                    **stored_item_base,
+                    'data_type': 'order_update',
+                    'classified': {classified_key: classified[classified_key]}
+                }
+                self.scheduler.feed_step1(stored_item)
+                logger.debug(f"📤 [币安订单] 数据已喂给Step1: {classified_key}")
                 
                 return
             
@@ -299,6 +344,15 @@ class PrivateDataProcessor:
                         asyncio.create_task(self._okx_delayed_delete(symbol))
                         logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在30秒后清理所有相关数据（订单+持仓）")
                     
+                    # ===== 保存后，构造数据喂给Step1 =====
+                    stored_item = {
+                        **stored_item_base,
+                        'data_type': 'order_update',
+                        'classified': {classified_key: classified[classified_key]}
+                    }
+                    self.scheduler.feed_step1(stored_item)
+                    logger.debug(f"📤 [OKX订单] 数据已喂给Step1: {classified_key}")
+                    
                     return
                     
                 except Exception as e:
@@ -325,6 +379,14 @@ class PrivateDataProcessor:
                     }
                     
                     logger.debug(f"✅ [OKX持仓] 已保存: {storage_key}")
+                    
+                    # ===== 保存后，构造数据喂给Step1 =====
+                    stored_item = {
+                        **stored_item_base,
+                        'data_type': 'position_update'
+                    }
+                    self.scheduler.feed_step1(stored_item)
+                    logger.debug(f"📤 [OKX持仓] 数据已喂给Step1")
                     
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
@@ -370,6 +432,14 @@ class PrivateDataProcessor:
             }
             
             logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
+            
+            # ===== 保存后，构造数据喂给Step1 =====
+            stored_item = {
+                **stored_item_base,
+                'data_type': final_data_type
+            }
+            self.scheduler.feed_step1(stored_item)
+            logger.debug(f"📤 [私人数据处理] 数据已喂给Step1: {final_data_type}")
             
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
