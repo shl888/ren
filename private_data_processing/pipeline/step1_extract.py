@@ -1,6 +1,6 @@
 """
-第一步：字段提取
-按你写的9种数据类型提取：
+第一步：从已存储的原始数据中提取字段
+只提取你指定的9种数据类型：
 1. http_account
 2. account_update(ORDER)
 3. account_update(FUNDING_FEE)
@@ -10,57 +10,82 @@
 7. order_update(_06_触发止损(全部成交))
 8. order_update(_08_触发止盈(全部成交))
 9. order_update(_10_主动平仓(全部成交))
+
+提取完成后，自动将结果交给调度器处理后续步骤
 """
 import logging
-from typing import Dict, Any, Optional
+import asyncio
+from typing import Dict, Any, List, Optional
+
+from ..scheduler import get_scheduler
 
 logger = logging.getLogger(__name__)
 
 
 class Step1Extract:
     """第一步：字段提取"""
-    
-    def extract(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+
+    # 你指定的6种订单事件类型（带全部成交的4种 + 2种设置）
+    VALID_ORDER_EVENTS = {
+        '_02_开仓(全部成交)',
+        '_03_设置止损',
+        '_04_设置止盈',
+        '_06_触发止损(全部成交)',
+        '_08_触发止盈(全部成交)',
+        '_10_主动平仓(全部成交)'
+    }
+
+    def extract(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        提取字段
-        
-        Args:
-            raw_data: 已经分类好的原始数据
-            
-        Returns:
-            提取到的字段字典
+        从已存储的数据项中提取字段，返回列表（可能多条）
+        提取完成后自动交给调度器处理
         """
-        exchange = raw_data.get('exchange', '')
-        data_type = raw_data.get('data_type', '')
-        
-        # 只处理币安
+        exchange = stored_item.get('exchange', '').lower()
+        data_type = stored_item.get('data_type', '')
+
         if exchange != 'binance':
-            return None
-        
-        # ===== 1. http_account =====
+            return []
+
+        results = []
+
+        # 1. http_account
         if data_type == 'http_account':
-            return self._extract_http(raw_data)
-        
-        # ===== 2. account_update =====
-        if data_type == 'account_update':
-            return self._extract_account(raw_data)
-        
-        # ===== 3. order_update =====
-        if data_type == 'order_update':
-            return self._extract_order(raw_data)
-        
-        return None
-    
-    def _extract_http(self, raw_data: Dict) -> Dict[str, Any]:
-        """提取 http_account 数据"""
-        data = raw_data.get('data', {})
+            result = self._extract_http(stored_item)
+            if result:
+                results.append(result)
+
+        # 2. account_update
+        elif data_type == 'account_update':
+            result = self._extract_account(stored_item)
+            if result:
+                results.append(result)
+
+        # 3. order_update
+        elif data_type == 'order_update':
+            results = self._extract_orders(stored_item)
+
+        # 提取完成后，自动交给调度器
+        if results:
+            scheduler = get_scheduler()
+            # 创建异步任务，不阻塞当前调用
+            asyncio.create_task(scheduler.process_extracted(results))
+            logger.debug(f"✅ 已将 {len(results)} 条提取结果交给调度器")
+
+        return results
+
+    # ------------------------------------------------------------------
+    # http_account 提取
+    # ------------------------------------------------------------------
+    def _extract_http(self, item: Dict) -> Optional[Dict[str, Any]]:
+        """提取 http_account 数据，返回单个字典"""
+        data = item.get('data', {})
         result = {
             "交易所": "binance",
             "data_type": "http_account",
             "event_type": "http_account"
         }
-        
-        # 找 USDT
+
+        # 从 assets 中找 USDT
         assets = data.get('assets', [])
         for asset in assets:
             if asset.get('asset') == 'USDT':
@@ -68,8 +93,8 @@ class Step1Extract:
                     result["账户资产额"] = asset['marginBalance']
                 result["资产币种"] = "USDT"
                 break
-        
-        # positions
+
+        # positions 数据（可能没有）
         positions = data.get('positions', [])
         if positions:
             pos = positions[0]
@@ -79,20 +104,23 @@ class Step1Extract:
                 result["标记价仓位价值"] = pos['notional']
             if pos.get('unrealizedProfit') is not None:
                 result["标记价浮盈"] = pos['unrealizedProfit']
-        
+
         return result
-    
-    def _extract_account(self, raw_data: Dict) -> Optional[Dict[str, Any]]:
-        """提取 account_update 数据"""
-        data = raw_data.get('data', {})
+
+    # ------------------------------------------------------------------
+    # account_update 提取
+    # ------------------------------------------------------------------
+    def _extract_account(self, item: Dict) -> Optional[Dict[str, Any]]:
+        """提取 account_update 数据，返回单个字典"""
+        data = item.get('data', {})
         result = {
             "交易所": "binance",
             "data_type": "account_update"
         }
-        
+
         m_type = data.get('a', {}).get('m', '')
-        
-        # ORDER
+
+        # ORDER 类型
         if m_type == 'ORDER':
             p_data = data.get('a', {}).get('P', [])
             if p_data:
@@ -102,8 +130,8 @@ class Step1Extract:
                 if p_data[0].get('ma') is not None:
                     result["保证金币种"] = p_data[0]['ma']
                 return result
-        
-        # FUNDING_FEE
+
+        # FUNDING_FEE 类型
         elif m_type == 'FUNDING_FEE':
             b_data = data.get('a', {}).get('B', [])
             if b_data:
@@ -113,112 +141,91 @@ class Step1Extract:
                 if data.get('T') is not None:
                     result["本次资金费结算时间"] = data['T']
                 return result
-        
+
         return None
-    
-    def _extract_order(self, raw_data: Dict) -> Optional[Dict[str, Any]]:
-        """提取 order_update 数据"""
-        classified = raw_data.get('classified', {})
+
+    # ------------------------------------------------------------------
+    # order_update 提取（多条）
+    # ------------------------------------------------------------------
+    def _extract_orders(self, item: Dict) -> List[Dict[str, Any]]:
+        """
+        提取 order_update 数据，返回列表
+        遍历 classified 中所有事件，只提取你指定的6种订单事件
+        """
+        classified = item.get('classified', {})
         if not classified:
-            return None
-        
-        # 遍历所有事件类型
+            return []
+
+        results = []
         for event_key, event_list in classified.items():
-            if not event_list:
+            # event_key 格式如 "TAKEUSDT_02_开仓(全部成交)"
+            # 提取后面的部分，例如 "02_开仓(全部成交)"
+            parts = event_key.split('_', 1)
+            if len(parts) < 2:
                 continue
-            
-            event = event_list[0]
-            data = event.get('data', {})
-            o_data = data.get('o', {})
-            
-            result = {
-                "交易所": "binance",
-                "data_type": "order_update",
-                "event_type": event_key
-            }
-            
-            # ===== 4. _02_开仓(全部成交) =====
-            if '_02_开仓(全部成交)' in event_key:
-                if o_data.get('s') is not None:
-                    result["开仓合约名"] = o_data['s']
-                if o_data.get('ps') is not None:
-                    result["开仓方向"] = o_data['ps']
-                if o_data.get('ot') is not None:
-                    result["开仓执行方式"] = o_data['ot']
-                if o_data.get('ap') is not None:
-                    result["开仓价"] = o_data['ap']
-                if o_data.get('z') is not None:
-                    result["持仓币数"] = o_data['z']
-                if o_data.get('n') is not None:
-                    result["开仓手续费"] = o_data['n']
-                if o_data.get('N') is not None:
-                    result["开仓手续费币种"] = o_data['N']
-                if o_data.get('T') is not None:
-                    result["开仓时间"] = o_data['T']
-                return result
-            
-            # ===== 5. _03_设置止损 =====
-            elif '_03_设置止损' in event_key:
-                if o_data.get('wt') is not None:
-                    result["止损触发方式"] = o_data['wt']
-                if o_data.get('sp') is not None:
-                    result["止损触发价"] = o_data['sp']
-                return result
-            
-            # ===== 6. _04_设置止盈 =====
-            elif '_04_设置止盈' in event_key:
-                if o_data.get('wt') is not None:
-                    result["止盈触发方式"] = o_data['wt']
-                if o_data.get('sp') is not None:
-                    result["止盈触发价"] = o_data['sp']
-                return result
-            
-            # ===== 7. _06_触发止损(全部成交) =====
-            elif '_06_触发止损(全部成交)' in event_key:
-                if o_data.get('ot') is not None:
-                    result["平仓执行方式"] = o_data['ot']
-                if o_data.get('ap') is not None:
-                    result["平仓价"] = o_data['ap']
-                if o_data.get('n') is not None:
-                    result["平仓手续费"] = o_data['n']
-                if o_data.get('N') is not None:
-                    result["平仓手续费币种"] = o_data['N']
-                if o_data.get('rp') is not None:
-                    result["平仓收益"] = o_data['rp']
-                if o_data.get('T') is not None:
-                    result["平仓时间"] = o_data['T']
-                return result
-            
-            # ===== 8. _08_触发止盈(全部成交) =====
-            elif '_08_触发止盈(全部成交)' in event_key:
-                if o_data.get('ot') is not None:
-                    result["平仓执行方式"] = o_data['ot']
-                if o_data.get('ap') is not None:
-                    result["平仓价"] = o_data['ap']
-                if o_data.get('n') is not None:
-                    result["平仓手续费"] = o_data['n']
-                if o_data.get('N') is not None:
-                    result["平仓手续费币种"] = o_data['N']
-                if o_data.get('rp') is not None:
-                    result["平仓收益"] = o_data['rp']
-                if o_data.get('T') is not None:
-                    result["平仓时间"] = o_data['T']
-                return result
-            
-            # ===== 9. _10_主动平仓(全部成交) =====
-            elif '_10_主动平仓(全部成交)' in event_key:
-                if o_data.get('ot') is not None:
-                    result["平仓执行方式"] = o_data['ot']
-                if o_data.get('ap') is not None:
-                    result["平仓价"] = o_data['ap']
-                if o_data.get('n') is not None:
-                    result["平仓手续费"] = o_data['n']
-                if o_data.get('N') is not None:
-                    result["平仓手续费币种"] = o_data['N']
-                if o_data.get('rp') is not None:
-                    result["平仓收益"] = o_data['rp']
-                if o_data.get('T') is not None:
-                    result["平仓时间"] = o_data['T']
-                return result
-        
-        return None
+            type_part = parts[1]  # 例如 "02_开仓(全部成交)"
+
+            # 只提取你指定的6种订单事件
+            if type_part not in self.VALID_ORDER_EVENTS:
+                continue
+
+            # 遍历该类型下的所有事件
+            for event in event_list:
+                data = event.get('data', {})
+                o_data = data.get('o', {})
+
+                result = {
+                    "交易所": "binance",
+                    "data_type": "order_update",
+                    "event_type": event_key  # 保留完整key，包含合约名
+                }
+
+                # 根据事件类型提取字段
+                if '开仓' in type_part:  # _02_开仓(全部成交)
+                    if o_data.get('s') is not None:
+                        result["开仓合约名"] = o_data['s']
+                    if o_data.get('ps') is not None:
+                        result["开仓方向"] = o_data['ps']
+                    if o_data.get('ot') is not None:
+                        result["开仓执行方式"] = o_data['ot']
+                    if o_data.get('ap') is not None:
+                        result["开仓价"] = o_data['ap']
+                    if o_data.get('z') is not None:
+                        result["持仓币数"] = o_data['z']
+                    if o_data.get('n') is not None:
+                        result["开仓手续费"] = o_data['n']
+                    if o_data.get('N') is not None:
+                        result["开仓手续费币种"] = o_data['N']
+                    if o_data.get('T') is not None:
+                        result["开仓时间"] = o_data['T']
+
+                elif '设置止损' in type_part:  # _03_设置止损
+                    if o_data.get('wt') is not None:
+                        result["止损触发方式"] = o_data['wt']
+                    if o_data.get('sp') is not None:
+                        result["止损触发价"] = o_data['sp']
+
+                elif '设置止盈' in type_part:  # _04_设置止盈
+                    if o_data.get('wt') is not None:
+                        result["止盈触发方式"] = o_data['wt']
+                    if o_data.get('sp') is not None:
+                        result["止盈触发价"] = o_data['sp']
+
+                elif any(x in type_part for x in ['触发止损', '触发止盈', '主动平仓']):
+                    # _06_触发止损(全部成交)、_08_触发止盈(全部成交)、_10_主动平仓(全部成交)
+                    if o_data.get('ot') is not None:
+                        result["平仓执行方式"] = o_data['ot']
+                    if o_data.get('ap') is not None:
+                        result["平仓价"] = o_data['ap']
+                    if o_data.get('n') is not None:
+                        result["平仓手续费"] = o_data['n']
+                    if o_data.get('N') is not None:
+                        result["平仓手续费币种"] = o_data['N']
+                    if o_data.get('rp') is not None:
+                        result["平仓收益"] = o_data['rp']
+                    if o_data.get('T') is not None:
+                        result["平仓时间"] = o_data['T']
+
+                results.append(result)
+
+        return results
