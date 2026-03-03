@@ -26,15 +26,18 @@ class PrivateDataProcessor:
     def __init__(self):
         if not self._initialized:
             self.memory_store = {'private_data': {}}
-            # 注意：这里不创建 step1，step1 由调度器创建
-            self.step1 = None  # 等着调度器注入
+            # ===== 新增1：添加 step1 属性 =====
+            self.step1 = None
+            # =================================
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
     
+    # ===== 新增2：添加 set_step1 方法 =====
     def set_step1(self, step1_instance):
         """调度器把 step1 实例给 manager"""
         self.step1 = step1_instance
         logger.info("🔗 [私人数据处理] 已获取 step1 实例")
+    # =====================================
     
     async def _binance_delayed_delete(self, keys: List[str], symbol: str):
         """30秒后删除该symbol所有当前存在的key（币安使用）"""
@@ -108,7 +111,7 @@ class PrivateDataProcessor:
             exchange = private_data.get('exchange', 'unknown')
             raw_data = private_data.get('data', {})
             source = private_data.get('source', '')
-            storage_key = None  # 初始化
+            storage_key = None  # 新增：初始化storage_key
             
             # ========== 币安订单更新处理 ==========
             if exchange == 'binance' and raw_data.get('e') == 'ORDER_TRADE_UPDATE':
@@ -196,10 +199,11 @@ class PrivateDataProcessor:
                     asyncio.create_task(self._binance_delayed_delete(keys_to_delayed_delete, symbol))
                     logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在30秒后清理")
                 
-                storage_key = 'binance_order_update'
+                storage_key = 'binance_order_update'  # 新增：设置storage_key
+                # 注意：这里不能return，要继续往下走喂数据
             
             # ========== OKX订单更新处理（细分版本）==========
-            elif exchange == 'okx' and private_data.get('data_type') == 'order_update':
+            if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
                 logger.info(f"📥 [OKX订单] 收到订单更新")
                 
@@ -307,16 +311,17 @@ class PrivateDataProcessor:
                         asyncio.create_task(self._okx_delayed_delete(symbol))
                         logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在30秒后清理所有相关数据（订单+持仓）")
                     
-                    storage_key = 'okx_order_update'
+                    storage_key = 'okx_order_update'  # 新增：设置storage_key
+                    # 注意：这里不能return，要继续往下走喂数据
                     
                 except Exception as e:
                     logger.error(f"❌ [OKX订单] 处理失败: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
-                    return  # 这里return没问题，因为已经出错了
+                    return
             
             # ========== OKX持仓更新处理 ==========
-            elif exchange == 'okx' and private_data.get('data_type') == 'position_update':
+            if exchange == 'okx' and private_data.get('data_type') == 'position_update':
                 
                 logger.debug(f"📥 [OKX持仓] 收到持仓更新")
                 
@@ -337,53 +342,53 @@ class PrivateDataProcessor:
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
                 
-                # 【关键】这里绝对不能return，要往下走喂数据
+                # 注意：这里不能return，要继续往下走喂数据
             
             # ========== 其他数据类型 ==========
+            if source == 'http_fetcher':
+                final_data_type = private_data.get('data_type', 'unknown')
             else:
-                if source == 'http_fetcher':
-                    final_data_type = private_data.get('data_type', 'unknown')
-                else:
-                    event_type = raw_data.get('e', 'unknown')
+                event_type = raw_data.get('e', 'unknown')
+                
+                if exchange == 'binance':
+                    if event_type == 'TRADE_LITE':
+                        logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件")
+                        return
                     
-                    if exchange == 'binance':
-                        if event_type == 'TRADE_LITE':
-                            logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件")
-                            return
-                        
-                        binance_mapping = {
-                            'ACCOUNT_UPDATE': 'account_update',
-                            'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
-                            'MARGIN_CALL': 'risk_event',
-                            'listenKeyExpired': 'system_event',
-                            'balanceUpdate': 'balance_update',
-                            'outboundAccountPosition': 'account_update',
-                            'executionReport': 'order_update'
-                        }
-                        
-                        if event_type in binance_mapping:
-                            final_data_type = binance_mapping[event_type]
-                        else:
-                            final_data_type = event_type.lower()
+                    binance_mapping = {
+                        'ACCOUNT_UPDATE': 'account_update',
+                        'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
+                        'MARGIN_CALL': 'risk_event',
+                        'listenKeyExpired': 'system_event',
+                        'balanceUpdate': 'balance_update',
+                        'outboundAccountPosition': 'account_update',
+                        'executionReport': 'order_update'
+                    }
+                    
+                    if event_type in binance_mapping:
+                        final_data_type = binance_mapping[event_type]
                     else:
-                        final_data_type = private_data.get('data_type', 'unknown')
-                
-                # 存储其他数据
-                storage_key = f"{exchange}_{final_data_type}"
-                self.memory_store['private_data'][storage_key] = {
-                    'exchange': exchange,
-                    'data_type': final_data_type,
-                    'data': raw_data,
-                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                    'received_at': private_data.get('received_at', datetime.now().isoformat())
-                }
-                
-                logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
+                        final_data_type = event_type.lower()
+                else:
+                    final_data_type = private_data.get('data_type', 'unknown')
             
-            # ===== 最后：统一喂给 step1 =====
+            # 存储其他数据
+            storage_key = f"{exchange}_{final_data_type}"
+            self.memory_store['private_data'][storage_key] = {
+                'exchange': exchange,
+                'data_type': final_data_type,
+                'data': raw_data,
+                'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                'received_at': private_data.get('received_at', datetime.now().isoformat())
+            }
+            
+            logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
+            
+            # ===== 新增3：最后统一喂给 step1 =====
             if self.step1 and storage_key and storage_key in self.memory_store['private_data']:
                 extracted_list = self.step1.process_one(self.memory_store['private_data'][storage_key])
                 logger.debug(f"📤 已喂给 Step1 {len(extracted_list)} 条提取结果")
+            # ===================================
             
         except Exception as e:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
