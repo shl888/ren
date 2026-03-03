@@ -15,13 +15,11 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional
 
-from ..scheduler import get_scheduler
-
 logger = logging.getLogger(__name__)
 
 
 class Step1Extract:
-    """第一步：字段提取"""
+    """第一步：字段提取 - 纯工具类，只负责提取，不调度"""
 
     # 你指定的6种订单事件类型（带全部成交的4种 + 2种设置）
     VALID_ORDER_EVENTS = {
@@ -33,10 +31,38 @@ class Step1Extract:
         '_10_主动平仓(全部成交)'
     }
 
-    def process_one(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def __init__(self, output_queue: asyncio.Queue):
         """
-        处理单条数据 - 供 manager 直接调用
-        manager 不管 step1 有没有启动，直接调这个方法喂数据
+        初始化
+        Args:
+            output_queue: 调度器的队列，提取完成后推到这里
+        """
+        self.output_queue = output_queue
+        logger.info("✅【Step1】字段提取器已创建")
+
+    async def receive(self, stored_item: Dict[str, Any]):
+        """
+        接收Manager塞进来的原始数据
+        实时提取，实时推给调度器队列
+        """
+        try:
+            results = self.process(stored_item)
+            
+            # 有提取结果，推给调度器队列
+            if results:
+                for result in results:
+                    await self.output_queue.put(result)
+                    logger.debug(f"✅【Step1】提取完成，推入队列: {result.get('event_type')}")
+                    
+        except Exception as e:
+            logger.error(f"❌【Step1】处理失败: {e}")
+
+    def process(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        处理单条数据 - 纯提取逻辑
+        
+        Returns:
+            提取结果列表，可能为空
         """
         exchange = stored_item.get('exchange', '').lower()
         data_type = stored_item.get('data_type', '')
@@ -61,16 +87,6 @@ class Step1Extract:
         # 3. order_update
         elif data_type == 'order_update':
             results = self._extract_orders(stored_item)
-
-        # 提取完成后，交给调度器（不管调度器有没有启动）
-        if results:
-            try:
-                scheduler = get_scheduler()
-                # 创建异步任务，不阻塞当前调用
-                asyncio.create_task(scheduler.process_extracted(results))
-                logger.debug(f"✅ 已将 {len(results)} 条提取结果交给调度器")
-            except Exception as e:
-                logger.error(f"❌ 交给调度器失败: {e}")
 
         return results
 
