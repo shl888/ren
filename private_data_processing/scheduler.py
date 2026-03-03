@@ -62,3 +62,19 @@ class PrivateDataScheduler:
                 
         except Exception as e:
             logger.error(f"❌【调度器】处理失败: {e}")
+
+
+# ========== 单例模式 ==========
+_scheduler_instance = None
+
+def get_scheduler(brain: Optional[Any] = None) -> PrivateDataScheduler:
+    """获取调度器单例"""
+    global _scheduler_instance
+    if _scheduler_instance is None:
+        _scheduler_instance = PrivateDataScheduler(brain)
+        logger.info("✅【调度器】全局实例已创建")
+    elif brain is not None and _scheduler_instance.brain is None:
+        # 如果之前没有brain，现在设置
+        _scheduler_instance.set_brain(brain)
+    
+    return _scheduler_instance
