@@ -10,8 +10,6 @@
 7. order_update(_06_触发止损(全部成交))
 8. order_update(_08_触发止盈(全部成交))
 9. order_update(_10_主动平仓(全部成交))
-
-提取完成后，自动将结果交给调度器处理后续步骤
 """
 import logging
 import asyncio
@@ -35,10 +33,10 @@ class Step1Extract:
         '_10_主动平仓(全部成交)'
     }
 
-    def extract(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def process_one(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        从已存储的数据项中提取字段，返回列表（可能多条）
-        提取完成后自动交给调度器处理
+        处理单条数据 - 供 manager 直接调用
+        manager 不管 step1 有没有启动，直接调这个方法喂数据
         """
         exchange = stored_item.get('exchange', '').lower()
         data_type = stored_item.get('data_type', '')
@@ -64,12 +62,15 @@ class Step1Extract:
         elif data_type == 'order_update':
             results = self._extract_orders(stored_item)
 
-        # 提取完成后，自动交给调度器
+        # 提取完成后，交给调度器（不管调度器有没有启动）
         if results:
-            scheduler = get_scheduler()
-            # 创建异步任务，不阻塞当前调用
-            asyncio.create_task(scheduler.process_extracted(results))
-            logger.debug(f"✅ 已将 {len(results)} 条提取结果交给调度器")
+            try:
+                scheduler = get_scheduler()
+                # 创建异步任务，不阻塞当前调用
+                asyncio.create_task(scheduler.process_extracted(results))
+                logger.debug(f"✅ 已将 {len(results)} 条提取结果交给调度器")
+            except Exception as e:
+                logger.error(f"❌ 交给调度器失败: {e}")
 
         return results
 
