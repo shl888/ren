@@ -313,7 +313,7 @@ class PrivateDataProcessor:
                     logger.error(f"❌ [OKX订单] 处理失败: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
-                    return
+                    return  # 这里return没问题，因为已经出错了
             
             # ========== OKX持仓更新处理 ==========
             elif exchange == 'okx' and private_data.get('data_type') == 'position_update':
@@ -337,7 +337,7 @@ class PrivateDataProcessor:
                 except Exception as e:
                     logger.error(f"❌ [OKX持仓] 处理失败: {e}")
                 
-                # 不要return，继续往下走喂数据
+                # 【关键】这里绝对不能return，要往下走喂数据
             
             # ========== 其他数据类型 ==========
             else:
