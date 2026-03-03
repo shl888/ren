@@ -375,6 +375,12 @@ class PrivateDataProcessor:
             logger.error(f"❌ [私人数据处理] 接收数据失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
+        
+        # ===== ✅✅✅ 最后统一喂给步骤1！ =====
+        from .pipeline.step1_extract import Step1Extract
+        step1 = Step1Extract()
+        extracted_list = step1.extract(self.memory_store['private_data'][storage_key])
+        # ===================================
     
     async def get_all_data(self) -> Dict[str, Any]:
         """获取所有私人数据概览"""
