@@ -135,6 +135,12 @@ class PrivateDataProcessor:
         格式：{'exchange': 'binance', 'data_type': 'account_update', 'data': {...}, 'timestamp': '...'}
         """
         try:
+            # ===== 确保调度器已启动（延迟启动的情况）=====
+            await self._ensure_scheduler_started()
+            
+            # ===== 【新增】等待调度器就绪 =====
+            await self.scheduler.wait_until_ready()
+            
             # ===== 调试日志1：确认收到数据 =====
             exchange = private_data.get('exchange', 'unknown')
             raw_data = private_data.get('data', {})
@@ -142,9 +148,6 @@ class PrivateDataProcessor:
             data_type = private_data.get('data_type', 'unknown')
             event_type = raw_data.get('e', 'unknown') if isinstance(raw_data, dict) else 'unknown'
             logger.info(f"🎯【Manager】收到数据！exchange={exchange}, data_type={data_type}, event={event_type}")
-            
-            # ===== 确保调度器已启动（延迟启动的情况）=====
-            await self._ensure_scheduler_started()
             
             # 初始化存储格式数据（用于后续喂给Step1）
             stored_item_base = {

@@ -31,12 +31,16 @@ class PrivateDataScheduler:
         # Step1输出队列：Step1提取后推到这里，调度器从这里取
         self.step1_output_queue = asyncio.Queue()
         
+        # ===== 添加就绪事件 =====
+        self._ready = asyncio.Event()
+        
         logger.info("✅【调度器】实例已创建")
 
     async def start(self):
         """启动调度器 - 启动所有步骤和工作流"""
         if self.running:
             logger.warning("⚠️【调度器】已经启动，跳过")
+            self._ready.set()
             return
             
         # 导入所有步骤
@@ -53,6 +57,9 @@ class PrivateDataScheduler:
         
         self.running = True
         logger.info("🚀【调度器】已启动 - step1, step2, step3, step4 已就绪")
+        
+        # ===== 标记就绪 =====
+        self._ready.set()
         
         # 启动流水线工作线程
         asyncio.create_task(self._pipeline_worker())
@@ -132,6 +139,11 @@ class PrivateDataScheduler:
             logger.info(f"✅【调度器】已推送 {container.get('交易所')} 数据到大脑")
         except Exception as e:
             logger.error(f"❌【调度器】推送大脑失败: {e}")
+    
+    # ===== 新增：等待就绪的方法 =====
+    async def wait_until_ready(self):
+        """等待调度器完全就绪"""
+        await self._ready.wait()
 
 
 # ========== 单例模式 ==========
