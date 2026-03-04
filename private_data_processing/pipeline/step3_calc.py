@@ -40,6 +40,33 @@ class Step3Calc:
         Args:
             container: step2返回的成品数据副本
         """
+        # ===== 统一正负逻辑（先处理） =====
+        exchange = container.get("交易所")
+        
+        # 开仓手续费统一为负值（支出）
+        if container.get("开仓手续费") is not None:
+            try:
+                fee = float(container["开仓手续费"])
+                container["开仓手续费"] = self._round_4(-abs(fee))
+            except (ValueError, TypeError):
+                pass
+        
+        # 平仓手续费统一为负值（支出）
+        if container.get("平仓手续费") is not None:
+            try:
+                fee = float(container["平仓手续费"])
+                container["平仓手续费"] = self._round_4(-abs(fee))
+            except (ValueError, TypeError):
+                pass
+        
+        # 标记价仓位价值统一为绝对值
+        if container.get("标记价仓位价值") is not None:
+            try:
+                mark_value = float(container["标记价仓位价值"])
+                container["标记价仓位价值"] = self._round_4(abs(mark_value))
+            except (ValueError, TypeError):
+                pass
+        
         # ===== 1. 开仓价仓位价值 =====
         if container.get("开仓价") is not None and container.get("持仓币数") is not None:
             try:
@@ -54,8 +81,8 @@ class Step3Calc:
                 mark_value = float(container["标记价仓位价值"])
                 mark_margin = float(container["标记价保证金"])
                 if mark_margin > 0:
-                    # 取绝对值
-                    container["杠杆"] = self._round_int(abs(mark_value / mark_margin))
+                    # 标记价仓位价值已经是绝对值，直接计算
+                    container["杠杆"] = self._round_int(mark_value / mark_margin)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
@@ -69,19 +96,18 @@ class Step3Calc:
                 open_price = float(container["开仓价"])
                 amount = float(container["持仓币数"])
                 mark_margin = float(container["标记价保证金"])
-                mark_value = float(container["标记价仓位价值"])
+                mark_value = float(container["标记价仓位价值"])  # 已经是绝对值
                 
-                if mark_value > 0:
-                    # 开仓保证金
-                    open_margin = (open_price * amount * mark_margin) / mark_value
-                    container["开仓保证金"] = self._round_4(open_margin)
-                    
-                    # 标记价浮盈百分比
-                    if container.get("标记价浮盈") is not None:
-                        unrealized = float(container["标记价浮盈"])
-                        if mark_margin > 0:
-                            percent = (unrealized * mark_value * 100) / (open_price * amount * mark_margin)
-                            container["标记价浮盈百分比"] = self._round_4(percent)
+                # 开仓保证金（分子分母都用绝对值，但分母已经是绝对值）
+                open_margin = abs(open_price * amount * mark_margin) / mark_value
+                container["开仓保证金"] = self._round_4(open_margin)
+                
+                # 标记价浮盈百分比（标记价仓位价值已经是绝对值）
+                if container.get("标记价浮盈") is not None:
+                    unrealized = float(container["标记价浮盈"])
+                    if mark_margin != 0:
+                        percent = (unrealized * mark_value * 100) / (open_price * amount * mark_margin)
+                        container["标记价浮盈百分比"] = self._round_4(percent)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
@@ -115,14 +141,14 @@ class Step3Calc:
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
-        # ===== 6. 平仓价涨跌幅 =====
+        # ===== 6. 平仓价涨跌盈亏幅 =====
         if container.get("平仓价") is not None and container.get("开仓价") is not None:
             try:
                 close_price = float(container["平仓价"])
                 open_price = float(container["开仓价"])
                 if open_price != 0:
                     value = (close_price - open_price) / open_price
-                    container["平仓价涨跌幅"] = self._round_4(value)
+                    container["平仓价涨跌盈亏幅"] = self._round_4(value)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
@@ -146,9 +172,10 @@ class Step3Calc:
                 open_price = float(container["开仓价"])
                 amount = float(container["持仓币数"])
                 mark_margin = float(container["标记价保证金"])
-                mark_value = float(container["标记价仓位价值"])
+                mark_value = float(container["标记价仓位价值"])  # 已经是绝对值
                 
-                if mark_value > 0 and mark_margin > 0:
+                if mark_margin != 0:
+                    # 平仓收益率（标记价仓位价值已经是绝对值）
                     value = (pnl * mark_value * 100) / (open_price * amount * mark_margin)
                     container["平仓收益率"] = self._round_4(value)
             except (ValueError, TypeError, ZeroDivisionError):
