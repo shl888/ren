@@ -459,17 +459,51 @@ class PrivateDataProcessor:
             logger.error(traceback.format_exc())
     
     async def get_all_data(self) -> Dict[str, Any]:
-        """获取所有私人数据概览"""
+        """获取所有私人数据概览（修复订单更新时间显示问题）"""
         try:
             formatted_data = {}
             for key, data in self.memory_store['private_data'].items():
-                formatted_data[key] = {
-                    "exchange": data.get('exchange'),
-                    "data_type": data.get('data_type'),
-                    "received_at": data.get('received_at'),
-                    "timestamp": data.get('timestamp'),
-                    "data_keys": list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else type(data.get('data')).__name__
-                }
+                # ===== 修复：订单类型从classified里取最新时间 =====
+                if key in ['binance_order_update', 'okx_order_update']:
+                    classified = data.get('classified', {})
+                    summary = {}
+                    latest_timestamp = None
+                    latest_received_at = None
+                    
+                    for k, v in classified.items():
+                        summary[k] = len(v)
+                        # 取该分类下最新一条的时间
+                        if v and isinstance(v, list) and len(v) > 0:
+                            # 最后一条是最新的
+                            latest_item = v[-1]
+                            item_ts = latest_item.get('timestamp')
+                            item_ra = latest_item.get('received_at')
+                            
+                            # 比较并更新最新时间
+                            if latest_timestamp is None or (item_ts and item_ts > latest_timestamp):
+                                latest_timestamp = item_ts
+                                latest_received_at = item_ra
+                    
+                    formatted_data[key] = {
+                        "exchange": data.get('exchange'),
+                        "data_type": data.get('data_type'),
+                        "received_at": latest_received_at,  # 从classified里取最新时间
+                        "timestamp": latest_timestamp,      # 从classified里取最新时间
+                        "data_keys": list(classified.keys()) if classified else "No classified data",  # 显示有哪些分类
+                        "note": "订单数据的时间取自classified中的最新记录"
+                    }
+                else:
+                    # 其他类型：返回数据键名（data_keys），不返回完整数据
+                    raw_data = data.get('data', {})
+                    
+                    formatted_data[key] = {
+                        "exchange": data.get('exchange'),
+                        "data_type": data.get('data_type'),
+                        "timestamp": data.get('timestamp'),
+                        "received_at": data.get('received_at'),
+                        "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else str(type(raw_data)),
+                        "note": f"{data.get('data_type')}数据大纲，详情请访问 /private/{data.get('exchange')}/{data.get('data_type')}"
+                    }
             
             return {
                 "timestamp": datetime.now().isoformat(),
