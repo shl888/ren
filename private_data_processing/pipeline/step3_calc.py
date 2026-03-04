@@ -48,13 +48,14 @@ class Step3Calc:
             except (ValueError, TypeError):
                 pass
         
-        # ===== 2. 杠杆 =====
+        # ===== 2. 杠杆（取绝对值） =====
         if container.get("标记价仓位价值") is not None and container.get("标记价保证金") is not None:
             try:
                 mark_value = float(container["标记价仓位价值"])
                 mark_margin = float(container["标记价保证金"])
                 if mark_margin > 0:
-                    container["杠杆"] = self._round_int(mark_value / mark_margin)
+                    # 取绝对值
+                    container["杠杆"] = self._round_int(abs(mark_value / mark_margin))
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
@@ -85,23 +86,31 @@ class Step3Calc:
                 pass
         
         # ===== 4. 止损幅度 =====
+        # 计算逻辑：先取绝对值，再乘以-100
         if container.get("止损触发价") is not None and container.get("开仓价") is not None:
             try:
                 stop_price = float(container["止损触发价"])
                 open_price = float(container["开仓价"])
                 if open_price != 0:
-                    value = abs((stop_price - open_price) / open_price)
+                    # 先计算绝对值
+                    abs_value = abs((stop_price - open_price) / open_price)
+                    # 再乘以 -100
+                    value = abs_value * -100
                     container["止损幅度"] = self._round_4(value)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
         # ===== 5. 止盈幅度 =====
+        # 计算逻辑：先取绝对值，再乘以100
         if container.get("止盈触发价") is not None and container.get("开仓价") is not None:
             try:
                 take_price = float(container["止盈触发价"])
                 open_price = float(container["开仓价"])
                 if open_price != 0:
-                    value = abs((take_price - open_price) / open_price)
+                    # 先计算绝对值
+                    abs_value = abs((take_price - open_price) / open_price)
+                    # 再乘以 100
+                    value = abs_value * 100
                     container["止盈幅度"] = self._round_4(value)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
@@ -144,4 +153,3 @@ class Step3Calc:
                     container["平仓收益率"] = self._round_4(value)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
-              
