@@ -488,19 +488,32 @@ class PrivateDataProcessor:
             for key, data in self.memory_store['private_data'].items():
                 if key.startswith(f"{exchange.lower()}_"):
                     
-                    # ===== 统一处理：所有类型都返回大纲 =====
+                    # ===== 修复：订单类型从classified里取最新时间 =====
                     if key in ['binance_order_update', 'okx_order_update']:
-                        # 订单类型：返回分类统计
                         classified = data.get('classified', {})
                         summary = {}
+                        latest_timestamp = None
+                        latest_received_at = None
+                        
                         for k, v in classified.items():
                             summary[k] = len(v)
+                            # 取该分类下最新一条的时间
+                            if v and isinstance(v, list) and len(v) > 0:
+                                # 最后一条是最新的
+                                latest_item = v[-1]
+                                item_ts = latest_item.get('timestamp')
+                                item_ra = latest_item.get('received_at')
+                                
+                                # 比较并更新最新时间
+                                if latest_timestamp is None or (item_ts and item_ts > latest_timestamp):
+                                    latest_timestamp = item_ts
+                                    latest_received_at = item_ra
                         
                         exchange_data[key] = {
                             "exchange": data.get('exchange'),
                             "data_type": data.get('data_type'),
-                            "timestamp": data.get('timestamp'),
-                            "received_at": data.get('received_at'),
+                            "timestamp": latest_timestamp,  # 从classified里取
+                            "received_at": latest_received_at,  # 从classified里取
                             "summary": summary,
                             "note": "各类别事件数量统计，详情请查询具体data_type"
                         }
