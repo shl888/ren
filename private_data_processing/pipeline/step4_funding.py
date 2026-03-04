@@ -32,6 +32,37 @@ class Step4Funding:
         except (ValueError, TypeError):
             return None
     
+    def _should_reset_funding(self, cached: Dict, new_data: Dict) -> bool:
+        """
+        判断是否需要重置资金费数据
+        条件：
+        1. 缓存中有结算时间（说明曾经有过持仓）
+        2. 新数据中标记价仓位价值为空（说明当前无持仓）
+        """
+        if cached is None:
+            return False
+        
+        # 缓存中有结算时间吗？
+        cache_time = cached.get("本次资金费结算时间")
+        if cache_time is None:
+            return False
+        
+        # 新数据中标记价仓位价值为空吗？
+        position_value = new_data.get("标记价仓位价值")
+        if position_value is None:
+            return True
+        
+        return False
+    
+    def _reset_funding_fields(self, cache_entry: Dict):
+        """重置资金费相关字段"""
+        cache_entry["本次资金费"] = 0
+        cache_entry["累计资金费"] = 0
+        cache_entry["资金费结算次数"] = 0
+        cache_entry["平均资金费率"] = None
+        cache_entry["本次资金费结算时间"] = None
+        logger.debug(f"💰 资金费数据已重置（无持仓）")
+    
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """
         处理资金费数据
@@ -46,6 +77,15 @@ class Step4Funding:
         # 获取缓存的container
         cached = self.cache[exchange]
         
+        # ===== 新增：检查是否需要重置资金费 =====
+        if cached is not None and self._should_reset_funding(cached, container):
+            logger.info(f"💰【{exchange}】检测到平仓，重置资金费数据")
+            self._reset_funding_fields(cached)
+            # 重置后，用重置后的缓存覆盖container
+            for key, value in cached.items():
+                container[key] = value  # 直接覆盖，不检查value是否为None
+            return container
+        
         # 获取本次的结算时间
         new_time = container.get("本次资金费结算时间")
         
@@ -55,8 +95,7 @@ class Step4Funding:
             self.cache[exchange] = container.copy()
             # 用缓存覆盖container
             for key, value in self.cache[exchange].items():
-                if value is not None:
-                    container[key] = value
+                container[key] = value  # 直接覆盖，不检查value是否为None
             return container
         
         # 获取缓存的结算时间
@@ -96,8 +135,7 @@ class Step4Funding:
         
         # ===== 用更新后的缓存覆盖传入的container =====
         for key, value in self.cache[exchange].items():
-            if value is not None:
-                container[key] = value
+            container[key] = value  # 直接覆盖，不检查value是否为None
         
         return container
     
@@ -137,12 +175,12 @@ class Step4Funding:
             pass
     
     def _update_other_fields(self, cached: Dict, new_data: Dict):
-        """更新非资金费字段"""
+        """更新非资金费字段 - 直接覆盖，空值也覆盖"""
         funding_fields = [
             "本次资金费", "累计资金费", "资金费结算次数",
             "平均资金费率", "本次资金费结算时间"
         ]
         
         for key, value in new_data.items():
-            if key not in funding_fields and value is not None:
+            if key not in funding_fields:  # 去掉 value is not None 的判断
                 cached[key] = value
