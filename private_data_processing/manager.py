@@ -117,21 +117,15 @@ class PrivateDataProcessor:
             import traceback
             logger.error(traceback.format_exc())
     
+    # ===== 新增：将完整存储区喂给Step1 =====
     async def _feed_full_storage_to_step1(self):
         """将整个存储区喂给Step1"""
         try:
-            # 构造包含完整存储区的数据
             full_storage_item = {
-                'source': 'private_data_processor',
-                'timestamp': datetime.now().isoformat(),
-                'received_at': datetime.now().isoformat(),
-                'full_storage': self.memory_store['private_data'].copy()  # 整个存储区的副本
+                'full_storage': self.memory_store['private_data'].copy()
             }
-            
-            # 喂给Step1
             self.scheduler.feed_step1(full_storage_item)
             logger.info(f"📤【Manager】已将完整存储区喂给Step1，包含 {len(self.memory_store['private_data'])} 个数据项")
-            
         except Exception as e:
             logger.error(f"❌【Manager】喂给Step1完整存储区失败: {e}")
     
@@ -193,7 +187,7 @@ class PrivateDataProcessor:
                     if stop_loss_key in classified:
                         del classified[stop_loss_key]
                         logger.info(f"🗑️ [币安订单] {symbol} 取消止损，已删除设置止损记录")
-                    # 仍然触发完整存储区更新
+                    # 触发完整存储区更新
                     await self._feed_full_storage_to_step1()
                     return
                 
@@ -202,7 +196,7 @@ class PrivateDataProcessor:
                     if take_profit_key in classified:
                         del classified[take_profit_key]
                         logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
-                    # 仍然触发完整存储区更新
+                    # 触发完整存储区更新
                     await self._feed_full_storage_to_step1()
                     return
                 
@@ -210,7 +204,7 @@ class PrivateDataProcessor:
                 if category in ['13_止损过期(被触发)', '14_止损过期(被取消)', 
                                 '15_止盈过期(被触发)', '16_止盈过期(被取消)']:
                     logger.debug(f"⏭️ [币安订单] 过期事件不缓存: {category}")
-                    # 仍然触发完整存储区更新（可能清除了其他数据）
+                    # 触发完整存储区更新
                     await self._feed_full_storage_to_step1()
                     return
                 
