@@ -8,12 +8,20 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# ===== 导入大脑接收函数（如果可用）=====
+try:
+    from smart_brain import receive_private_data as brain_receive_data
+    logger.info("✅【调度器】大脑模块已导入")
+except ImportError:
+    brain_receive_data = None
+    logger.warning("⚠️【调度器】大脑模块未安装，数据将无处可推")
+
 
 class PrivateDataScheduler:
     """私人数据调度器 - 真正的调度中心"""
 
-    def __init__(self, brain: Optional[Any] = None):
-        self.brain = brain
+    def __init__(self):
+        # 不再依赖外部传入brain，直接调用全局函数
         self.step1 = None
         self.step2 = None
         self.step3 = None
@@ -24,11 +32,6 @@ class PrivateDataScheduler:
         self.step1_output_queue = asyncio.Queue()
         
         logger.info("✅【调度器】实例已创建")
-
-    def set_brain(self, brain: Any):
-        """设置大脑模块"""
-        self.brain = brain
-        logger.info("🧠【调度器】大脑已设置")
 
     async def start(self):
         """启动调度器 - 启动所有步骤和工作流"""
@@ -62,12 +65,10 @@ class PrivateDataScheduler:
         """
         Manager直接调用这个，往Step1嘴里塞数据
         """
-        # ===== 调试日志1：确认feed_step1被调用 =====
         logger.info(f"🎯【调度器】feed_step1被调用！数据类型: {stored_item.get('data_type')}, 交易所: {stored_item.get('exchange')}")
         
         if self.step1:
             try:
-                # ===== 调试日志2：确认创建任务 =====
                 asyncio.create_task(self.step1.receive(stored_item))
                 logger.info(f"📥【调度器】已创建任务塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
             except Exception as e:
@@ -79,47 +80,30 @@ class PrivateDataScheduler:
         """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑"""
         logger.info("🏭【流水线工作线程】已启动")
         
-        empty_count = 0  # 计数器，记录空队列次数
-        
         while self.running:
             try:
-                # ===== 调试日志3：检查队列状态（每10秒打印一次）=====
-                queue_size = self.step1_output_queue.qsize()
-                if queue_size > 0:
-                    logger.info(f"📊【调度器】队列有 {queue_size} 条数据待处理")
-                    empty_count = 0
-                else:
-                    empty_count += 1
-                    if empty_count % 10 == 0:  # 每10秒（10次超时）打印一次
-                        logger.info(f"⏳【调度器】队列持续为空，已等待 {empty_count} 秒")
-                
                 # 从Step1输出队列取数据
                 extracted = await asyncio.wait_for(self.step1_output_queue.get(), timeout=1.0)
                 
-                # ===== 调试日志4：确认取到数据 =====
                 logger.info(f"✅【调度器】从队列取到数据！事件类型: {extracted.get('event_type')}, 交易所: {extracted.get('交易所')}")
                 
                 # ===== 步骤2：融合更新 =====
-                logger.info(f"🔜【调度器】开始Step2融合...")
                 container = self.step2.process(extracted)
                 if not container:
                     logger.warning(f"⚠️【调度器】Step2返回空，跳过")
                     self.step1_output_queue.task_done()
                     continue
-                logger.info(f"✅【调度器】Step2完成，容器交易所: {container.get('交易所')}")
+                logger.info(f"✅【调度器】Step2完成")
 
                 # ===== 步骤3：计算衍生字段 =====
-                logger.info(f"🔜【调度器】开始Step3计算...")
                 self.step3.process(container)
                 logger.info(f"✅【调度器】Step3完成")
 
                 # ===== 步骤4：资金费处理 =====
-                logger.info(f"🔜【调度器】开始Step4资金费...")
                 self.step4.process(container)
                 logger.info(f"✅【调度器】Step4完成")
 
                 # ===== 推送大脑 =====
-                logger.info(f"🔜【调度器】准备推给大脑...")
                 await self._push_to_brain(container)
                 
                 self.step1_output_queue.task_done()
@@ -132,14 +116,14 @@ class PrivateDataScheduler:
                 logger.error(traceback.format_exc())
 
     async def _push_to_brain(self, container: Dict[str, Any]):
-        """推送成品数据到大脑"""
-        if not self.brain:
-            # ===== 调试日志5：确认大脑未设置 =====
-            logger.error(f"❌【调度器】大脑未设置！数据无法推送: {container.get('交易所')}")
+        """推送成品数据到大脑（使用全局函数，不依赖brain实例）"""
+        if brain_receive_data is None:
+            logger.warning(f"⚠️【调度器】大脑未安装，数据丢弃: {container.get('交易所')}")
+            # 后续这里可以改成推送到其他目的地
             return
 
         try:
-            await self.brain.receive_private_data({
+            await brain_receive_data({
                 "exchange": container.get("交易所", "unknown"),
                 "data_type": "user_summary",
                 "data": container,
@@ -154,11 +138,11 @@ class PrivateDataScheduler:
 _scheduler_instance: Optional[PrivateDataScheduler] = None
 
 
-def get_scheduler(brain: Optional[Any] = None) -> PrivateDataScheduler:
-    """获取调度器单例"""
+def get_scheduler() -> PrivateDataScheduler:
+    """获取调度器单例（不再接受brain参数）"""
     global _scheduler_instance
     if _scheduler_instance is None:
-        _scheduler_instance = PrivateDataScheduler(brain)
+        _scheduler_instance = PrivateDataScheduler()
         logger.info("🔥【调度器】单例已创建")
     
     return _scheduler_instance
