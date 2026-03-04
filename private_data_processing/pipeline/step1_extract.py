@@ -312,8 +312,8 @@ class Step1Extract:
                         result["平仓手续费"] = o_data['n']
                     if o_data.get('N') is not None:
                         result["平仓手续费币种"] = o_data['N']
-                    if o_data.get('rp') is not None:
-                        result["平仓收益"] = o_data['rp']
+#                    if o_data.get('rp') is not None:
+#                        result["平仓收益"] = o_data['rp']
                     if o_data.get('T') is not None:
                         result["平仓时间"] = o_data['T']
 
