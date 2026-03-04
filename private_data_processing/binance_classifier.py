@@ -23,6 +23,7 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         o = data['data']['o']
         
         s = o.get('S', '')        # 方向 BUY/SELL
+        ps = o.get('ps', '')      # 持仓方向 LONG/SHORT
         ot = o.get('ot', '')      # 原始订单类型
         o_type = o.get('o', '')   # 当前订单类型
         x_status = o.get('X', '') # 订单状态
@@ -31,7 +32,8 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
         er = o.get('er', '0')     # 错误码
         
         # ===== 开仓 =====
-        if s == 'BUY' and ot == 'MARKET':
+        # 开多: BUY + LONG 或 开空: SELL + SHORT
+        if ((s == 'BUY' and ps == 'LONG') or (s == 'SELL' and ps == 'SHORT')) and ot == 'MARKET':
             if x_status == 'PARTIALLY_FILLED':
                 return '01_开仓(部分成交)'
             if x_status == 'FILLED':
@@ -45,21 +47,28 @@ def classify_binance_order(data: Dict[str, Any]) -> str:
             return '04_设置止盈'
         
         # ===== 触发止损 =====
+        # 触发止损平多: SELL + LONG 或 触发止损平空: BUY + SHORT
         if o_type == 'MARKET' and ot == 'STOP_MARKET' and sp != '0':
-            if x_status == 'PARTIALLY_FILLED':
-                return '05_触发止损(部分成交)'
-            if x_status == 'FILLED':
-                return '06_触发止损(全部成交)'
+            # 确保这是平仓动作（方向与持仓相反）
+            if (s == 'SELL' and ps == 'LONG') or (s == 'BUY' and ps == 'SHORT'):
+                if x_status == 'PARTIALLY_FILLED':
+                    return '05_触发止损(部分成交)'
+                if x_status == 'FILLED':
+                    return '06_触发止损(全部成交)'
         
         # ===== 触发止盈 =====
+        # 触发止盈平多: SELL + LONG 或 触发止盈平空: BUY + SHORT
         if o_type == 'MARKET' and ot == 'TAKE_PROFIT_MARKET' and sp != '0':
-            if x_status == 'PARTIALLY_FILLED':
-                return '07_触发止盈(部分成交)'
-            if x_status == 'FILLED':
-                return '08_触发止盈(全部成交)'
+            # 确保这是平仓动作（方向与持仓相反）
+            if (s == 'SELL' and ps == 'LONG') or (s == 'BUY' and ps == 'SHORT'):
+                if x_status == 'PARTIALLY_FILLED':
+                    return '07_触发止盈(部分成交)'
+                if x_status == 'FILLED':
+                    return '08_触发止盈(全部成交)'
         
         # ===== 主动平仓 =====
-        if s == 'SELL' and ot == 'MARKET' and sp == '0' and cp is False:
+        # 平多: SELL + LONG 或 平空: BUY + SHORT
+        if ((s == 'SELL' and ps == 'LONG') or (s == 'BUY' and ps == 'SHORT')) and ot == 'MARKET' and sp == '0' and cp is False:
             if x_status == 'PARTIALLY_FILLED':
                 return '09_主动平仓(部分成交)'
             if x_status == 'FILLED':
