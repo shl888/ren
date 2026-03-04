@@ -244,17 +244,20 @@ class Step1Extract:
 
         results = []
         for event_key, event_list in classified.items():
+            # 提取事件类型（去掉合约名前缀）
             parts = event_key.split('_', 1)
             if len(parts) < 2:
                 continue
-            type_part = parts[1]
-
-            # 只处理白名单中的事件
-            if type_part not in self.VALID_ORDER_EVENTS:
-                logger.debug(f"⏭️【Step1】跳过非白名单事件: {type_part}")
+            
+            # 添加下划线前缀，匹配 VALID_ORDER_EVENTS 的格式
+            event_type = f"_{parts[1]}"  # 变成 "_02_开仓(全部成交)"
+            
+            # 检查是否在白名单中
+            if event_type not in self.VALID_ORDER_EVENTS:
+                logger.debug(f"⏭️【Step1】跳过非白名单事件: {event_type}")
                 continue
 
-            logger.info(f"✅【Step1】处理白名单事件: {type_part}")
+            logger.info(f"✅【Step1】处理白名单事件: {event_type}")
 
             for event in event_list:
                 data = event.get('data', {})
@@ -267,7 +270,7 @@ class Step1Extract:
                 }
 
                 # 开仓事件
-                if '开仓' in type_part:
+                if '开仓' in parts[1]:
                     if o_data.get('s') is not None:
                         result["开仓合约名"] = o_data['s']
                     if o_data.get('ps') is not None:
@@ -286,21 +289,21 @@ class Step1Extract:
                         result["开仓时间"] = o_data['T']
 
                 # 设置止损
-                elif '设置止损' in type_part:
+                elif '设置止损' in parts[1]:
                     if o_data.get('wt') is not None:
                         result["止损触发方式"] = o_data['wt']
                     if o_data.get('sp') is not None:
                         result["止损触发价"] = o_data['sp']
 
                 # 设置止盈
-                elif '设置止盈' in type_part:
+                elif '设置止盈' in parts[1]:
                     if o_data.get('wt') is not None:
                         result["止盈触发方式"] = o_data['wt']
                     if o_data.get('sp') is not None:
                         result["止盈触发价"] = o_data['sp']
 
                 # 平仓事件（触发止损、触发止盈、主动平仓）
-                elif any(x in type_part for x in ['触发止损', '触发止盈', '主动平仓']):
+                elif any(x in parts[1] for x in ['触发止损', '触发止盈', '主动平仓']):
                     if o_data.get('ot') is not None:
                         result["平仓执行方式"] = o_data['ot']
                     if o_data.get('ap') is not None:
