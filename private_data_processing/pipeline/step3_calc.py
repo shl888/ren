@@ -55,11 +55,11 @@ class Step3Calc:
             except (ValueError, TypeError):
                 pass
         
-        # ===== 标记价仓位价值转绝对值 =====
+        # ===== 标记价仓位价值转绝对值（直接覆盖原字段）=====
         if container.get("标记价仓位价值") is not None:
             try:
                 mark_value = float(container["标记价仓位价值"])
-                container["标记价仓位价值_abs"] = self._round_4(abs(mark_value))
+                container["标记价仓位价值"] = self._round_4(abs(mark_value))
             except (ValueError, TypeError):
                 pass
         
