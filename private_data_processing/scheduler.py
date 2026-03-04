@@ -67,34 +67,14 @@ class PrivateDataScheduler:
         """
         logger.info(f"🎯【调度器】feed_step1被调用！数据类型: {stored_item.get('data_type')}, 交易所: {stored_item.get('exchange')}")
         
-        # 如果Step1还没初始化，等待一下
-        if self.step1 is None:
-            logger.warning(f"⚠️【调度器】Step1未初始化，尝试等待...")
-            
-            # 创建一个等待任务
-            async def wait_for_step1():
-                start_time = asyncio.get_event_loop().time()
-                while self.step1 is None and (asyncio.get_event_loop().time() - start_time) < 5:  # 最多等待5秒
-                    await asyncio.sleep(0.1)
-                
-                if self.step1:
-                    try:
-                        await self.step1.receive(stored_item)
-                        logger.info(f"📥【调度器】等待后成功塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
-                    except Exception as e:
-                        logger.error(f"❌【调度器】创建任务失败: {e}")
-                else:
-                    logger.error(f"❌【调度器】Step1等待超时仍未初始化！无法处理数据: {stored_item.get('data_type')}")
-            
-            asyncio.create_task(wait_for_step1())
-            return
-        
-        # Step1已就绪，直接处理
-        try:
-            asyncio.create_task(self.step1.receive(stored_item))
-            logger.info(f"📥【调度器】已创建任务塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
-        except Exception as e:
-            logger.error(f"❌【调度器】创建任务失败: {e}")
+        if self.step1:
+            try:
+                asyncio.create_task(self.step1.receive(stored_item))
+                logger.info(f"📥【调度器】已创建任务塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
+            except Exception as e:
+                logger.error(f"❌【调度器】创建任务失败: {e}")
+        else:
+            logger.error(f"❌【调度器】Step1未初始化！无法处理数据: {stored_item.get('data_type')}")
 
     async def _pipeline_worker(self):
         """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑"""
