@@ -5,6 +5,7 @@
 2. 收到数据直接更新对应容器
 3. 返回副本给调度器
 4. 平仓时清空交易字段
+5. 收到平仓字段后开始60秒倒计时，到时重置容器
 """
 import time
 import logging
@@ -80,6 +81,20 @@ class Step2Fusion:
         self.containers["binance"]["交易所"] = "binance"
         self.containers["okx"]["交易所"] = "okx"
         
+        # 重置计时器状态
+        self.reset_timers = {
+            "binance": {
+                "active": False,  # 是否正在计时
+                "start_time": None,  # 开始计时的时间戳
+                "countdown": 60  # 倒计时秒数
+            },
+            "okx": {
+                "active": False,
+                "start_time": None,
+                "countdown": 60
+            }
+        }
+        
         logger.info("✅【step2】容器缓存已创建: binance, okx")
     
     def process(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -96,13 +111,41 @@ class Step2Fusion:
         if not exchange or exchange not in self.containers:
             return None
         
-        # 获取原始容器
+        # 获取原始容器和计时器状态
         container = self.containers[exchange]
+        timer = self.reset_timers[exchange]
+        
+        # 检查是否有平仓相关字段
+        close_fields = ["平仓执行方式", "平仓价", "平仓收益", "平仓时间"]
+        has_close_field = any(
+            extracted_data.get(field) is not None 
+            for field in close_fields
+        )
+        
+        # 如果有平仓字段，启动倒计时
+        if has_close_field and not timer["active"]:
+            timer["active"] = True
+            timer["start_time"] = time.time()
+            logger.info(f"⏰【{exchange}】检测到平仓字段，启动60秒重置倒计时")
         
         # 检查平仓事件
         event_type = extracted_data.get('event_type', '')
         if event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]:
             self._clear_trade_data(container)
+            # 平仓事件也会触发倒计时
+            if not timer["active"]:
+                timer["active"] = True
+                timer["start_time"] = time.time()
+                logger.info(f"⏰【{exchange}】检测到平仓事件，启动60秒重置倒计时")
+        
+        # 检查是否需要重置容器
+        if timer["active"]:
+            elapsed = time.time() - timer["start_time"]
+            if elapsed >= timer["countdown"]:
+                self._reset_container(container)
+                timer["active"] = False
+                timer["start_time"] = None
+                logger.info(f"🔄【{exchange}】60秒倒计时结束，容器已完全重置")
         
         # 覆盖式更新原始容器
         for key, value in extracted_data.items():
@@ -138,9 +181,25 @@ class Step2Fusion:
         
         logger.info(f"🧹【{container['交易所']}】平仓清空交易数据")
     
+    def _reset_container(self, container: Dict):
+        """
+        完全重置容器到初始模板状态
+        不保留任何字段值，就像新建的容器一样
+        """
+        exchange = container["交易所"]
+        
+        # 创建全新的模板副本
+        new_container = TRADE_TEMPLATE.copy()
+        new_container["交易所"] = exchange
+        
+        # 完全替换原容器的内容
+        container.clear()
+        container.update(new_container)
+        
+        logger.info(f"✨【{exchange}】容器已完全重置为初始状态")
+    
     def get_container(self, exchange: str) -> Optional[Dict]:
         """获取指定交易所的容器副本（调试用）"""
         if exchange in self.containers:
             return self.containers[exchange].copy()
         return None
-        
