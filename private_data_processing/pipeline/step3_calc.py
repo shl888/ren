@@ -137,7 +137,7 @@ class Step3Calc:
         if close_price is not None and open_price is not None:
             try:
                 if open_price != 0:
-                    container["平仓价涨跌盈亏幅"] = self._round_4((close_price - open_price)) * 100 / open_price)
+                    container["平仓价涨跌盈亏幅"] = self._round_4((close_price - open_price) * 100 / open_price)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
