@@ -40,7 +40,7 @@ class Step3Calc:
         Args:
             container: step2返回的成品数据副本
         """
-        # ===== 统一手续费正负逻辑（独立计算，不影响其他）=====
+        # ===== 统一手续费正负逻辑 =====
         if container.get("开仓手续费") is not None:
             try:
                 fee = float(container["开仓手续费"])
@@ -55,7 +55,7 @@ class Step3Calc:
             except (ValueError, TypeError):
                 pass
         
-        # ===== 新增：标记价仓位价值换算为绝对值=====
+        # ===== 标记价仓位价值转绝对值 =====
         if container.get("标记价仓位价值") is not None:
             try:
                 mark_value = float(container["标记价仓位价值"])
@@ -71,7 +71,7 @@ class Step3Calc:
             except (ValueError, TypeError):
                 pass
         
-        # ===== 2. 杠杆（取绝对值）- 使用原始标记价仓位价值 =====
+        # ===== 2. 杠杆（取绝对值） =====
         if container.get("标记价仓位价值") is not None and container.get("标记价保证金") is not None:
             try:
                 mark_value = float(container["标记价仓位价值"])
@@ -163,18 +163,20 @@ class Step3Calc:
                 mark_value = float(container["标记价仓位价值"])
                 direction = container["开仓方向"]
                 
-                # 同时计算平仓收益和平仓收益率
+                # 严格按照公式计算平仓收益和平仓收益率
                 if direction == "LONG":
-                    # 做多
+                    # 做多：平仓收益 = (平仓价 - 开仓价) * 持仓币数
                     pnl = (close_price - open_price) * amount
+                    # 做多：平仓收益率 = (平仓价 - 开仓价) * 持仓币数 * 标记价保证金 / |标记价仓位价值|
                     if mark_margin != 0 and abs(mark_value) > 0:
                         rate = (close_price - open_price) * amount * mark_margin / abs(mark_value)
                     else:
                         rate = None
                         
                 elif direction == "SHORT":
-                    # 做空
+                    # 做空：平仓收益 = (开仓价 - 平仓价) * 持仓币数
                     pnl = (open_price - close_price) * amount
+                    # 做空：平仓收益率 = (开仓价 - 平仓价) * 持仓币数 * 标记价保证金 / |标记价仓位价值|
                     if mark_margin != 0 and abs(mark_value) > 0:
                         rate = (open_price - close_price) * amount * mark_margin / abs(mark_value)
                     else:
@@ -190,4 +192,4 @@ class Step3Calc:
                     container["平仓收益率"] = self._round_4(rate)
                     
             except (ValueError, TypeError, ZeroDivisionError):
-                pass我
+                pass
