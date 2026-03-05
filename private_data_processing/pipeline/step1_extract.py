@@ -568,6 +568,17 @@ class Step1Extract:
             
             result = {"交易所": "okx", "data_type": "position_update"}
             
+            # ===== 新增：标记价和最新价 =====
+            mark_px = pos_data.get('markPx')
+            if mark_px is not None and mark_px != '':
+                result["标记价"] = mark_px
+                logger.info(f"🔍【Step1-欧易持仓】提取到标记价: {mark_px}")
+            
+            last = pos_data.get('last')
+            if last is not None and last != '':
+                result["最新价"] = last
+                logger.info(f"🔍【Step1-欧易持仓】提取到最新价: {last}")
+            
             # 持仓字段 - 有值才加
             imr = pos_data.get('imr')
             if imr is not None and imr != '':
