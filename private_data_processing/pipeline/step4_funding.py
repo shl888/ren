@@ -3,12 +3,15 @@
 逻辑：
 1. 收到container
 2. 检查缓存
-3. 按4种场景更新缓存
+3. 按对应交易所的逻辑更新缓存
 4. 用更新后的缓存覆盖container
 5. 返回container（给调度器）
 """
 import logging
-from typing import Dict, Any
+import asyncio
+import time
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +20,25 @@ class Step4Funding:
     """第四步：资金费处理"""
     
     def __init__(self):
-        # 缓存整个container
+        # 缓存整个container（每个交易所独立）
         self.cache = {
             "binance": None,
             "okx": None
         }
-        logger.info("✅【step4】资金费缓存已创建")
+        
+        # 清理倒计时任务（每个交易所独立）
+        self.reset_tasks = {
+            "binance": None,
+            "okx": None
+        }
+        
+        # 清理倒计时秒数（统一20秒）
+        self.reset_countdown = 20
+        
+        logger.info("✅【step4】资金费缓存已创建: binance, okx")
     
     def _round_4(self, value):
+        """四舍五入保留4位小数"""
         if value is None:
             return None
         try:
@@ -32,59 +46,54 @@ class Step4Funding:
         except (ValueError, TypeError):
             return None
     
-    def _should_reset_funding(self, cached: Dict, new_data: Dict) -> bool:
+    def _get_beijing_time(self, timestamp_ms: Optional[int] = None) -> str:
         """
-        判断是否需要重置资金费数据
-        条件：
-        1. 缓存中有结算时间（说明曾经有过持仓）
-        2. 新数据中标记价仓位价值为空（说明当前无持仓）
+        获取北京时间（通用）
+        Args:
+            timestamp_ms: 毫秒级时间戳，None表示当前时间
+        Returns:
+            格式化字符串: "2026.03.16 08:00:03"
         """
-        if cached is None:
-            return False
-        
-        # 缓存中有结算时间吗？
-        cache_time = cached.get("本次资金费结算时间")
-        if cache_time is None:
-            return False
-        
-        # 新数据中标记价仓位价值为空吗？
-        position_value = new_data.get("标记价仓位价值")
-        if position_value is None:
-            return True
-        
-        return False
-    
-    def _reset_funding_fields(self, cache_entry: Dict):
-        """重置资金费相关字段"""
-        cache_entry["本次资金费"] = 0
-        cache_entry["累计资金费"] = 0
-        cache_entry["资金费结算次数"] = 0
-        cache_entry["平均资金费率"] = None
-        cache_entry["本次资金费结算时间"] = None
-        logger.debug(f"💰 资金费数据已重置（无持仓）")
+        try:
+            if timestamp_ms is not None:
+                # 毫秒转秒
+                dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            else:
+                dt = datetime.now(timezone.utc)
+            
+            # 转换为北京时间 (UTC+8)
+            beijing_tz = timezone(timedelta(hours=8))
+            beijing_time = dt.astimezone(beijing_tz)
+            
+            # 格式化输出
+            return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
+        except Exception as e:
+            logger.error(f"❌【step4】时间转换失败: {e}")
+            # 返回当前时间的简单格式
+            return datetime.now().strftime("%Y.%m.%d %H:%M:%S")
     
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """
         处理资金费数据
-        1. 先更新缓存
-        2. 用缓存覆盖container
-        3. 返回container
+        根据交易所选择不同的处理逻辑
         """
         exchange = container.get("交易所")
-        if not exchange or exchange not in self.cache:
+        
+        if exchange == "binance":
+            return self._process_binance(container)
+        elif exchange == "okx":
+            return self._process_okx(container)
+        else:
+            logger.warning(f"⚠️【step4】未知交易所: {exchange}")
             return container
+    
+    # ========== 币安房间（原有逻辑，只保留平仓时间触发清理）==========
+    def _process_binance(self, container: Dict[str, Any]) -> Dict[str, Any]:
+        """币安资金费处理逻辑"""
+        exchange = "binance"
         
         # 获取缓存的container
         cached = self.cache[exchange]
-        
-        # ===== 新增：检查是否需要重置资金费 =====
-        if cached is not None and self._should_reset_funding(cached, container):
-            logger.info(f"💰【{exchange}】检测到平仓，重置资金费数据")
-            self._reset_funding_fields(cached)
-            # 重置后，用重置后的缓存覆盖container
-            for key, value in cached.items():
-                container[key] = value  # 直接覆盖，不检查value是否为None
-            return container
         
         # 获取本次的结算时间
         new_time = container.get("本次资金费结算时间")
@@ -93,9 +102,13 @@ class Step4Funding:
         if cached is None:
             logger.debug(f"💰【{exchange}】首次收到数据，直接缓存")
             self.cache[exchange] = container.copy()
+            # 转换结算时间为北京时间
+            if self.cache[exchange].get("本次资金费结算时间"):
+                ts = self.cache[exchange]["本次资金费结算时间"]
+                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(ts)
             # 用缓存覆盖container
             for key, value in self.cache[exchange].items():
-                container[key] = value  # 直接覆盖，不检查value是否为None
+                container[key] = value
             return container
         
         # 获取缓存的结算时间
@@ -113,8 +126,10 @@ class Step4Funding:
                 logger.debug(f"💰【{exchange}】场景1b：首次结算，时间={new_time}")
                 # 先缓存新数据
                 self.cache[exchange] = container.copy()
+                # 转换结算时间为北京时间
+                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(new_time)
                 # 更新5个资金费字段（累加）
-                self._update_funding_fields(self.cache[exchange], cached, is_first=True)
+                self._update_funding_fields_binance(self.cache[exchange], cached, is_first=True)
         
         # ===== 场景2：缓存时间有值 =====
         else:
@@ -123,27 +138,32 @@ class Step4Funding:
                 logger.debug(f"💰【{exchange}】场景2c：同次结算，资金费字段保持")
                 # 其他字段覆盖缓存
                 self._update_other_fields(cached, container)
-                self.cache[exchange] = cached  # 确保缓存更新
+                self.cache[exchange] = cached
             
             # 场景2d：时间不同（新结算）
             elif new_time is not None:
                 logger.debug(f"💰【{exchange}】场景2d：新结算，时间={new_time}")
                 # 先缓存新数据
                 self.cache[exchange] = container.copy()
+                # 转换结算时间为北京时间
+                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(new_time)
                 # 更新5个资金费字段（累加）
-                self._update_funding_fields(self.cache[exchange], cached, is_first=False)
+                self._update_funding_fields_binance(self.cache[exchange], cached, is_first=False)
+        
+        # ===== 检查平仓并启动倒计时（20秒）=====
+        if container.get("平仓时间") is not None:
+            self._schedule_reset(exchange)
         
         # ===== 用更新后的缓存覆盖传入的container =====
         for key, value in self.cache[exchange].items():
-            container[key] = value  # 直接覆盖，不检查value是否为None
+            container[key] = value
         
         return container
     
-    def _update_funding_fields(self, new_cache: Dict, old_cache: Dict, is_first: bool):
-        """更新5个资金费字段"""
+    def _update_funding_fields_binance(self, new_cache: Dict, old_cache: Dict, is_first: bool):
+        """币安：更新5个资金费字段"""
         new_fee = new_cache.get("本次资金费")
         
-        # 旧累计
         if is_first:
             old_total = 0
         else:
@@ -154,14 +174,12 @@ class Step4Funding:
             new_total = old_total + new_fee_float
             new_cache["累计资金费"] = self._round_4(new_total)
             
-            # 结算次数
             if is_first:
                 new_cache["资金费结算次数"] = 1
             else:
                 old_count = int(old_cache.get("资金费结算次数") or 0)
                 new_cache["资金费结算次数"] = old_count + 1
             
-            # 平均资金费率
             position_value = new_cache.get("开仓价仓位价值")
             if position_value is not None:
                 try:
@@ -174,6 +192,114 @@ class Step4Funding:
         except (ValueError, TypeError):
             pass
     
+    # ========== 欧易房间（全新逻辑）==========
+    def _process_okx(self, container: Dict[str, Any]) -> Dict[str, Any]:
+        """欧易资金费处理逻辑"""
+        exchange = "okx"
+        
+        # 获取缓存的container
+        cached = self.cache[exchange]
+        
+        # ===== 第一次收到数据 =====
+        if cached is None:
+            logger.debug(f"💰【{exchange}】首次收到数据，初始化缓存")
+            self.cache[exchange] = container.copy()
+            # 初始化资金费字段
+            self.cache[exchange]["本次资金费"] = 0
+            self.cache[exchange]["累计资金费"] = 0
+            self.cache[exchange]["资金费结算次数"] = 0
+            self.cache[exchange]["平均资金费率"] = None
+            self.cache[exchange]["本次资金费结算时间"] = None
+            # 用缓存覆盖container
+            for key, value in self.cache[exchange].items():
+                container[key] = value
+            return container
+        
+        # ===== 获取新旧累计资金费 =====
+        old_total = cached.get("累计资金费", 0)
+        new_total = container.get("累计资金费")
+        
+        # 如果 new_total 为空，直接返回缓存
+        if new_total is None:
+            for key, value in cached.items():
+                container[key] = value
+            return container
+        
+        # ===== 判断是否有新结算 =====
+        try:
+            old_total_float = float(old_total or 0)
+            new_total_float = float(new_total)
+        except (ValueError, TypeError):
+            return container
+        
+        # 没有新结算：直接返回缓存
+        if abs(new_total_float - old_total_float) < 0.000001:  # 浮点数比较
+            logger.debug(f"💰【{exchange}】累计资金费无变化，保持缓存")
+            for key, value in cached.items():
+                container[key] = value
+            return container
+        
+        # ===== 有新结算：更新5个字段 =====
+        logger.info(f"💰【{exchange}】检测到资金费结算: 旧={old_total_float}, 新={new_total_float}")
+        
+        # 1. 本次资金费 = 新累计 - 旧累计
+        this_fee = new_total_float - old_total_float
+        cached["本次资金费"] = self._round_4(this_fee)
+        
+        # 2. 累计资金费 = 新累计
+        cached["累计资金费"] = new_total_float
+        
+        # 3. 结算次数 +1
+        old_count = int(cached.get("资金费结算次数") or 0)
+        cached["资金费结算次数"] = old_count + 1
+        
+        # 4. 结算时间 = 当前北京时间
+        cached["本次资金费结算时间"] = self._get_beijing_time()
+        
+        # 5. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
+        position_value = cached.get("开仓价仓位价值")
+        if position_value is not None:
+            try:
+                pv = float(position_value)
+                if pv > 0:
+                    avg_rate = (cached["累计资金费"] * 100) / pv
+                    cached["平均资金费率"] = self._round_4(avg_rate)
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass
+        
+        # ===== 其他字段直接覆盖 =====
+        funding_fields = [
+            "本次资金费", "累计资金费", "资金费结算次数",
+            "平均资金费率", "本次资金费结算时间"
+        ]
+        for key, value in container.items():
+            if key not in funding_fields:
+                cached[key] = value
+        
+        # ===== 检查平仓并启动倒计时（20秒）=====
+        if cached.get("平仓时间") is not None:
+            self._schedule_reset(exchange)
+        
+        # 更新缓存
+        self.cache[exchange] = cached
+        
+        # ===== 用更新后的缓存覆盖传入的container =====
+        for key, value in cached.items():
+            container[key] = value
+        
+        return container
+    
+    # ========== 通用工具函数 ==========
+    
+    def _reset_funding_fields(self, cache_entry: Dict):
+        """重置资金费相关字段"""
+        cache_entry["本次资金费"] = 0
+        cache_entry["累计资金费"] = 0
+        cache_entry["资金费结算次数"] = 0
+        cache_entry["平均资金费率"] = None
+        cache_entry["本次资金费结算时间"] = None
+        logger.debug(f"💰 资金费数据已重置")
+    
     def _update_other_fields(self, cached: Dict, new_data: Dict):
         """更新非资金费字段 - 直接覆盖，空值也覆盖"""
         funding_fields = [
@@ -182,5 +308,47 @@ class Step4Funding:
         ]
         
         for key, value in new_data.items():
-            if key not in funding_fields:  # 去掉 value is not None 的判断
+            if key not in funding_fields:
                 cached[key] = value
+    
+    def _schedule_reset(self, exchange: str):
+        """安排清理倒计时"""
+        # 取消已有的倒计时任务
+        if self.reset_tasks[exchange] is not None:
+            self.reset_tasks[exchange].cancel()
+        
+        # 创建新的倒计时任务
+        self.reset_tasks[exchange] = asyncio.create_task(
+            self._delayed_reset(exchange)
+        )
+        logger.info(f"⏰【{exchange}】平仓清理倒计时已启动: {self.reset_countdown}秒")
+    
+    async def _delayed_reset(self, exchange: str):
+        """延迟重置容器"""
+        try:
+            await asyncio.sleep(self.reset_countdown)
+            
+            if self.cache[exchange] is not None:
+                # 完全重置容器
+                self._reset_container(self.cache[exchange])
+                logger.info(f"✨【{exchange}】平仓清理完成，容器已重置")
+            
+            self.reset_tasks[exchange] = None
+            
+        except asyncio.CancelledError:
+            logger.debug(f"⏰【{exchange}】清理倒计时被取消")
+            raise
+    
+    def _reset_container(self, container: Dict):
+        """完全重置容器到初始状态"""
+        # 清空所有字段
+        for key in list(container.keys()):
+            if key in ["本次资金费", "累计资金费", "资金费结算次数"]:
+                container[key] = 0
+            else:
+                container[key] = None
+        
+        # 保留交易所字段
+        exchange = container.get("交易所")
+        if exchange:
+            container["交易所"] = exchange

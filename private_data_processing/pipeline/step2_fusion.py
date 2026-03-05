@@ -73,7 +73,7 @@ class Step2Fusion:
     """第二步：融合更新"""
     
     def __init__(self):
-        # 预先创建容器缓存
+        # 预先创建容器缓存（币安和欧易完全隔离）
         self.containers = {
             "binance": TRADE_TEMPLATE.copy(),
             "okx": TRADE_TEMPLATE.copy(),
@@ -81,7 +81,7 @@ class Step2Fusion:
         self.containers["binance"]["交易所"] = "binance"
         self.containers["okx"]["交易所"] = "okx"
         
-        # 重置计时器状态
+        # 重置计时器状态（各自独立）
         self.reset_timers = {
             "binance": {
                 "active": False,  # 是否正在计时
@@ -111,7 +111,7 @@ class Step2Fusion:
         if not exchange or exchange not in self.containers:
             return None
         
-        # 获取原始容器和计时器状态
+        # 获取对应交易所的容器和计时器（完全隔离）
         container = self.containers[exchange]
         timer = self.reset_timers[exchange]
         
@@ -128,7 +128,7 @@ class Step2Fusion:
             timer["start_time"] = time.time()
             logger.info(f"⏰【{exchange}】检测到平仓字段，启动60秒重置倒计时")
         
-        # 检查平仓事件
+        # 检查平仓事件（币安专用，但放在这里不影响欧易）
         event_type = extracted_data.get('event_type', '')
         if event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]:
             self._clear_trade_data(container)
@@ -147,7 +147,7 @@ class Step2Fusion:
                 timer["start_time"] = None
                 logger.info(f"🔄【{exchange}】60秒倒计时结束，容器已完全重置")
         
-        # 覆盖式更新原始容器
+        # 覆盖式更新原始容器（只更新存在的字段）
         for key, value in extracted_data.items():
             if key in container and value is not None:
                 container[key] = value
