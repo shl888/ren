@@ -20,24 +20,17 @@ class Step1Extract:
         '_08_触发止盈(全部成交)',
         '_10_主动平仓(全部成交)'
     }
-    
-    # ===== 步骤1要处理的所有数据类型 =====
-    VALID_DATA_TYPES = {
-        'http_account',           # HTTP获取的账户数据
-        'account_update',         # WebSocket账户更新（包含ORDER和FUNDING_FEE）
-        'order_update'            # WebSocket订单更新（只取VALID_ORDER_EVENTS）
-    }
 
     def __init__(self, output_queue: asyncio.Queue):
         self.output_queue = output_queue
         logger.info("✅【Step1】字段提取器已创建")
-        logger.info(f"📋【Step1】有效数据类型: {self.VALID_DATA_TYPES}")
         logger.info(f"📋【Step1】有效订单事件: {self.VALID_ORDER_EVENTS}")
 
     async def receive(self, full_storage_item: Dict[str, Any]):
         """
         接收Manager塞进来的完整存储区数据
         格式: {'full_storage': {...}}
+        用key精确路由到对应的处理函数
         """
         logger.info(f"🎯【Step1】收到完整存储区数据")
         
@@ -50,40 +43,64 @@ class Step1Extract:
                 
             logger.info(f"📦【Step1】存储区包含 {len(full_storage)} 个数据项")
             
-            # 遍历存储区中的所有数据，提取每个数据的字段
+            # 遍历存储区中的所有数据，用key精确路由
             all_results = []
             for key, data_item in full_storage.items():
-                data_type = data_item.get('data_type')
                 
-                # 只处理有效的数据类型
-                if data_type not in self.VALID_DATA_TYPES:
-                    logger.debug(f"⏭️【Step1】跳过无效数据类型: {data_type}")
-                    continue
+                # ===== 币安订单数据 =====
+                if key == 'binance_order_update':
+                    logger.info(f"🔍【Step1】处理币安订单数据")
+                    
+                    pseudo_item = {
+                        'exchange': 'binance',
+                        'data_type': 'order_update',
+                        'classified': data_item.get('classified', {})
+                    }
+                    
+                    results = self._extract_orders(pseudo_item)
+                    if results:
+                        all_results.extend(results)
+                        logger.info(f"✅【Step1】从 {key} 提取了 {len(results)} 条订单结果")
                 
-                logger.info(f"🔍【Step1】处理存储项: {key}, data_type={data_type}")
+                # ===== 币安HTTP账户数据 =====
+                elif key == 'binance_http_account':
+                    logger.info(f"🔍【Step1】处理币安HTTP账户数据")
+                    
+                    pseudo_item = {
+                        'exchange': 'binance',
+                        'data_type': 'http_account',
+                        'data': data_item.get('data', {})
+                    }
+                    
+                    result = self._extract_http(pseudo_item)
+                    if result:
+                        all_results.append(result)
+                        logger.info(f"✅【Step1】从 {key} 提取了HTTP账户数据")
                 
-                # 构造一个伪stored_item给process处理
-                pseudo_item = {
-                    'exchange': data_item.get('exchange'),
-                    'data_type': data_type,
-                    'data': data_item.get('data', {}),
-                }
+                # ===== 币安WebSocket账户更新 =====
+                elif key == 'binance_account_update':
+                    logger.info(f"🔍【Step1】处理币安WebSocket账户更新")
+                    
+                    pseudo_item = {
+                        'exchange': 'binance',
+                        'data_type': 'account_update',
+                        'data': data_item.get('data', {})
+                    }
+                    
+                    result = self._extract_account(pseudo_item)
+                    if result:
+                        all_results.append(result)
+                        logger.info(f"✅【Step1】从 {key} 提取了账户更新数据")
                 
-                # 如果是订单数据，添加classified
-                if data_type == 'order_update':
-                    pseudo_item['classified'] = data_item.get('classified', {})
-                
-                # 调用process方法处理这个数据项
-                results = self.process(pseudo_item)
-                if results:
-                    all_results.extend(results)
-                    logger.info(f"✅【Step1】从 {key} 提取了 {len(results)} 条结果")
+                # ===== 其他key：暂不处理 =====
+                else:
+                    logger.debug(f"⏭️【Step1】跳过未处理的key: {key}")
             
             # 将所有结果推入队列
             if all_results:
                 for i, result in enumerate(all_results):
                     await self.output_queue.put(result)
-                    logger.info(f"📤【Step1】第{i+1}条结果已推入队列: {result.get('event_type')}，队列大小: {self.output_queue.qsize()}")
+                    logger.info(f"📤【Step1】第{i+1}条结果已推入队列: {result.get('event_type', 'unknown')}，队列大小: {self.output_queue.qsize()}")
             else:
                 logger.warning(f"⚠️【Step1】完整存储区未提取到任何结果")
                     
@@ -91,60 +108,6 @@ class Step1Extract:
             logger.error(f"❌【Step1】处理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
-    def process(self, stored_item: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """
-        处理单条数据 - 纯提取逻辑
-        只处理三种数据类型：
-        1. http_account     - HTTP获取的账户数据
-        2. account_update   - WebSocket账户更新（含ORDER和FUNDING_FEE）
-        3. order_update     - WebSocket订单更新（只取VALID_ORDER_EVENTS）
-        """
-        exchange = stored_item.get('exchange', '').lower()
-        data_type = stored_item.get('data_type', '')
-
-        logger.info(f"🔍【Step1】process开始: exchange={exchange}, data_type={data_type}")
-
-        # 只处理币安数据
-        if exchange != 'binance':
-            logger.warning(f"⚠️【Step1】非币安数据，跳过: {exchange}")
-            return []
-
-        results = []
-
-        # ===== 1. http_account：HTTP获取的账户数据 =====
-        if data_type == 'http_account':
-            logger.info(f"🔍【Step1】处理http_account...")
-            result = self._extract_http(stored_item)
-            if result:
-                results.append(result)
-                logger.info(f"✅【Step1】http_account提取成功: {list(result.keys())}")
-            else:
-                logger.warning(f"⚠️【Step1】http_account提取为空")
-
-        # ===== 2. account_update：WebSocket账户更新 =====
-        # 包含两种子类型：ORDER事件（保证金模式）、FUNDING_FEE事件（资金费）
-        elif data_type == 'account_update':
-            logger.info(f"🔍【Step1】处理account_update...")
-            result = self._extract_account(stored_item)
-            if result:
-                results.append(result)
-                logger.info(f"✅【Step1】account_update提取成功: {result.get('event_type')}")
-            else:
-                logger.warning(f"⚠️【Step1】account_update提取为空")
-
-        # ===== 3. order_update：WebSocket订单更新 =====
-        # 只提取VALID_ORDER_EVENTS中定义的事件（全部成交类）
-        elif data_type == 'order_update':
-            logger.info(f"🔍【Step1】处理order_update...")
-            results = self._extract_orders(stored_item)
-            logger.info(f"✅【Step1】order_update提取完成，共{len(results)}条")
-
-        # ===== 其他数据类型：不处理 =====
-        else:
-            logger.debug(f"⏭️【Step1】跳过非处理类型: {data_type}")
-
-        return results
 
     def _extract_http(self, item: Dict) -> Optional[Dict[str, Any]]:
         """
@@ -265,7 +228,7 @@ class Step1Extract:
 
                 result = {
                     "交易所": "binance",
-                    "data_type": "order_update",
+                    "data_type": "order_update",  # 加上data_type字段，保持格式一致
                     "event_type": event_key
                 }
 
