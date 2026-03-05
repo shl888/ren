@@ -134,10 +134,20 @@ class Step3Calc:
                 pass
         
         # ===== 6. 平仓价涨跌盈亏幅 =====
-        if close_price is not None and open_price is not None:
+        if close_price is not None and open_price is not None and direction is not None:
             try:
                 if open_price != 0:
-                    container["平仓价涨跌盈亏幅"] = self._round_4((close_price - open_price) * 100 / open_price)
+                    if direction == "LONG":
+                        # 做多：(平仓价 - 开仓价) * 100 / 开仓价
+                        pnl_percent = (close_price - open_price) * 100 / open_price
+                    elif direction == "SHORT":
+                        # 做空：(开仓价 - 平仓价) * 100 / 开仓价
+                        pnl_percent = (open_price - close_price) * 100 / open_price
+                    else:
+                        pnl_percent = None
+                    
+                    if pnl_percent is not None:
+                        container["平仓价涨跌盈亏幅"] = self._round_4(pnl_percent)
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
         
