@@ -289,8 +289,8 @@ class Step1Extract:
         """标准化欧易合约名：BTC-USDT-SWAP -> BTCUSDT"""
         if not symbol:
             return symbol
-        without_swap = symbol.replace('-SWAP', '')
-        return without_swap.replace('-USDT', '')
+        # 先去掉 -SWAP，再去掉所有 -
+        return symbol.replace('-SWAP', '').replace('-', '')
 
     def _extract_okx_contract(self, item: Dict):
         """提取欧易合约面值数据 - 只缓存，不输出"""
@@ -435,13 +435,25 @@ class Step1Extract:
             
             pos_side = order_data.get('posSide')
             if pos_side:
-                result["开仓方向"] = pos_side
-                logger.info(f"🔍【Step1-欧易开仓】提取到开仓方向: {pos_side}")
+                # 统一开仓方向为大写
+                if pos_side == "long":
+                    result["开仓方向"] = "LONG"
+                elif pos_side == "short":
+                    result["开仓方向"] = "SHORT"
+                else:
+                    result["开仓方向"] = pos_side
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓方向: {result['开仓方向']}")
             
             ord_type = order_data.get('ordType')
             if ord_type:
-                result["开仓执行方式"] = ord_type
-                logger.info(f"🔍【Step1-欧易开仓】提取到开仓执行方式: {ord_type}")
+                # 统一开仓执行方式为大写
+                if ord_type == "market":
+                    result["开仓执行方式"] = "MARKET"
+                elif ord_type == "limit":
+                    result["开仓执行方式"] = "LIMIT"
+                else:
+                    result["开仓执行方式"] = ord_type
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓执行方式: {result['开仓执行方式']}")
             
             avg_px = order_data.get('avgPx')
             if avg_px is not None and avg_px != '':
@@ -502,8 +514,14 @@ class Step1Extract:
             
             ord_type = order_data.get('ordType')
             if ord_type:
-                result["平仓执行方式"] = ord_type
-                logger.info(f"🔍【Step1-欧易平仓】提取到平仓执行方式: {ord_type}")
+                # 统一平仓执行方式为大写
+                if ord_type == "market":
+                    result["平仓执行方式"] = "MARKET"
+                elif ord_type == "limit":
+                    result["平仓执行方式"] = "LIMIT"
+                else:
+                    result["平仓执行方式"] = ord_type
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓执行方式: {result['平仓执行方式']}")
             
             avg_px = order_data.get('avgPx')
             if avg_px is not None and avg_px != '':
