@@ -177,6 +177,7 @@ class PrivateDataProcessor:
                 # 初始化存储
                 if 'binance_order_update' not in self.memory_store['private_data']:
                     self.memory_store['private_data']['binance_order_update'] = {
+                                                  'key': 'binance_order_update',  # ✅ 加上 key
                         'exchange': 'binance',
                         'data_type': 'order_update',
                         'classified': {}
@@ -310,7 +311,7 @@ class PrivateDataProcessor:
                     
                     # 初始化存储
                     if 'okx_order_update' not in self.memory_store['private_data']:
-                        self.memory_store['private_data']['okx_order_update'] = {
+                        self.memory_store['private_data']['okx_order_update'] = {                            'key': 'okx_order_update',  # ✅ 加上 key
                             'exchange': 'okx',
                             'data_type': 'order_update',
                             'classified': {}
