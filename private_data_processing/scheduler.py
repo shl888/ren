@@ -92,7 +92,13 @@ class PrivateDataScheduler:
                 # 从Step1输出队列取数据
                 extracted = await asyncio.wait_for(self.step1_output_queue.get(), timeout=1.0)
                 
-                logger.info(f"✅【调度器】从队列取到数据！事件类型: {extracted.get('event_type')}, 交易所: {extracted.get('交易所')}")
+                # ===== 优化：获取事件类型（兼容币安和欧易）=====
+                event_type = extracted.get('event_type')
+                if not event_type:
+                    # 如果没有event_type，就用data_type
+                    event_type = extracted.get('data_type', 'unknown')
+                
+                logger.info(f"✅【调度器】从队列取到数据！类型: {event_type}, 交易所: {extracted.get('交易所')}")
                 
                 # ===== 步骤2：融合更新 =====
                 container = self.step2.process(extracted)
