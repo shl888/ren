@@ -108,12 +108,23 @@ class Step2Fusion:
             更新后的成品数据副本，None表示无效
         """
         exchange = extracted_data.get('交易所')
+        data_type = extracted_data.get('data_type', 'unknown')
+        
+        # ===== 调试日志 =====
+        logger.info(f"🔍【step2】收到数据: 交易所={exchange}, 类型={data_type}")
+        logger.info(f"🔍【step2】数据内容: {extracted_data}")
+        
         if not exchange or exchange not in self.containers:
+            logger.warning(f"⚠️【step2】未知交易所: {exchange}")
             return None
         
         # 获取对应交易所的容器和计时器（完全隔离）
         container = self.containers[exchange]
         timer = self.reset_timers[exchange]
+        
+        # ===== 调试：更新前容器内容 =====
+        if exchange == 'okx':
+            logger.info(f"🔍【step2-okx】更新前容器: {container}")
         
         # 检查是否有平仓相关字段
         close_fields = ["平仓执行方式", "平仓价", "平仓收益", "平仓时间"]
@@ -147,10 +158,21 @@ class Step2Fusion:
                 timer["start_time"] = None
                 logger.info(f"🔄【{exchange}】60秒倒计时结束，容器已完全重置")
         
-        # 覆盖式更新原始容器（只更新存在的字段）
+        # ===== 覆盖式更新原始容器 =====
+        update_count = 0
         for key, value in extracted_data.items():
-            if key in container and value is not None:
+            if key in container:  # 只检查字段是否存在，不检查值是否为None
+                old_value = container.get(key)
                 container[key] = value
+                update_count += 1
+                if exchange == 'okx':
+                    logger.info(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
+        
+        logger.info(f"📊【step2-{exchange}】更新了 {update_count} 个字段")
+        
+        # ===== 调试：更新后容器内容 =====
+        if exchange == 'okx':
+            logger.info(f"📦【step2-okx】更新后容器: {container}")
         
         # 返回副本给调度器
         return container.copy()

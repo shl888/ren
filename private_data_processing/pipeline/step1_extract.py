@@ -100,6 +100,8 @@ class Step1Extract:
                     if result:
                         all_results.append(result)
                         logger.info(f"✅【Step1】从 {key} 提取了账户数据")
+                    else:
+                        logger.warning(f"⚠️【Step1】从 {key} 提取账户数据失败")
                 
                 elif key == 'okx_order_update':
                     logger.info(f"🔍【Step1】处理欧易订单数据")
@@ -112,6 +114,8 @@ class Step1Extract:
                                 r['合约面值'] = self.okx_contract_cache.get(symbol)
                         all_results.extend(results)
                         logger.info(f"✅【Step1】从 {key} 提取了 {len(results)} 条订单结果")
+                    else:
+                        logger.warning(f"⚠️【Step1】从 {key} 提取订单数据失败")
                 
                 elif key == 'okx_position_update':
                     logger.info(f"🔍【Step1】处理欧易持仓数据")
@@ -119,6 +123,8 @@ class Step1Extract:
                     if result:
                         all_results.append(result)
                         logger.info(f"✅【Step1】从 {key} 提取了持仓数据")
+                    else:
+                        logger.warning(f"⚠️【Step1】从 {key} 提取持仓数据失败")
                 
                 # ===== 其他key：暂不处理 =====
                 else:
@@ -129,6 +135,7 @@ class Step1Extract:
                 for i, result in enumerate(all_results):
                     await self.output_queue.put(result)
                     logger.info(f"📤【Step1】第{i+1}条结果已推入队列: {result.get('event_type', result.get('data_type', 'unknown'))}，队列大小: {self.output_queue.qsize()}")
+                    logger.info(f"📤【Step1】第{i+1}条结果内容: {result}")  # 新增：输出具体内容
             else:
                 logger.warning(f"⚠️【Step1】完整存储区未提取到任何结果")
                     
@@ -277,7 +284,7 @@ class Step1Extract:
         logger.info(f"📊【Step1】币安订单提取完成，共 {len(results)} 条")
         return results
 
-    # ========== 欧易提取函数（新增，带保护）==========
+    # ========== 欧易提取函数（新增调试日志）==========
     def _normalize_okx_symbol(self, symbol: str) -> str:
         """标准化欧易合约名：BTC-USDT-SWAP -> BTCUSDT"""
         if not symbol:
@@ -305,7 +312,7 @@ class Step1Extract:
             
             self.okx_contract_loaded = True
             logger.info(f"📦【Step1】缓存了 {len(self.okx_contract_cache)} 个欧易合约面值")
-            logger.debug(f"📦【Step1】缓存示例: {dict(list(self.okx_contract_cache.items())[:3])}")
+            logger.info(f"📦【Step1】缓存内容: {self.okx_contract_cache}")  # 新增：输出缓存内容
         except Exception as e:
             logger.error(f"❌【Step1】提取欧易合约面值失败: {e}")
 
@@ -313,20 +320,25 @@ class Step1Extract:
         """提取欧易账户数据"""
         try:
             data = item.get('data', {})
+            logger.info(f"🔍【Step1-欧易账户】原始数据: {data}")  # 新增
             
             # 保护：检查路径是否存在
             if not data.get('data'):
+                logger.warning(f"⚠️【Step1-欧易账户】data.data 不存在")
                 return None
             
             first_level = data['data']
             if not isinstance(first_level, list) or len(first_level) == 0:
+                logger.warning(f"⚠️【Step1-欧易账户】data.data 不是数组或为空")
                 return None
             
             details_list = first_level[0].get('details', [])
             if not isinstance(details_list, list) or len(details_list) == 0:
+                logger.warning(f"⚠️【Step1-欧易账户】details 不存在或为空")
                 return None
             
             details = details_list[0]
+            logger.info(f"🔍【Step1-欧易账户】details内容: {details}")  # 新增
             
             result = {"交易所": "okx", "data_type": "account_update"}
             
@@ -334,11 +346,14 @@ class Step1Extract:
             eq = details.get('eq')
             if eq is not None and eq != '':
                 result["账户资产额"] = eq
+                logger.info(f"🔍【Step1-欧易账户】提取到账户资产额: {eq}")  # 新增
             
             ccy = details.get('ccy')
             if ccy:
                 result["资产币种"] = ccy
+                logger.info(f"🔍【Step1-欧易账户】提取到资产币种: {ccy}")  # 新增
             
+            logger.info(f"📤【Step1-欧易账户】提取结果: {result}")  # 新增
             return result if len(result) > 2 else None
             
         except Exception as e:
@@ -349,23 +364,39 @@ class Step1Extract:
         """提取欧易订单数据"""
         try:
             classified = item.get('classified', {})
+            logger.info(f"🔍【Step1-欧易订单】classified内容: {classified}")  # 新增
+            
             if not classified:
+                logger.warning(f"⚠️【Step1-欧易订单】classified为空")
                 return []
             
             results = []
             for event_key, event_list in classified.items():
+                logger.info(f"🔍【Step1-欧易订单】处理事件: {event_key}, 数量: {len(event_list)}")  # 新增
+                
                 if '03_开仓(全部成交)' in event_key:
-                    for event in event_list:
+                    for i, event in enumerate(event_list):
+                        logger.info(f"🔍【Step1-欧易订单】处理开仓事件 {i+1}")  # 新增
                         result = self._extract_okx_open_order(event)
                         if result:
                             results.append(result)
+                            logger.info(f"✅【Step1-欧易订单】开仓事件提取成功: {result}")  # 新增
+                        else:
+                            logger.warning(f"⚠️【Step1-欧易订单】开仓事件提取失败")  # 新增
+                            
                 elif '05_平仓(全部成交)' in event_key:
-                    for event in event_list:
+                    for i, event in enumerate(event_list):
+                        logger.info(f"🔍【Step1-欧易订单】处理平仓事件 {i+1}")  # 新增
                         result = self._extract_okx_close_order(event)
                         if result:
                             results.append(result)
+                            logger.info(f"✅【Step1-欧易订单】平仓事件提取成功: {result}")  # 新增
+                        else:
+                            logger.warning(f"⚠️【Step1-欧易订单】平仓事件提取失败")  # 新增
             
+            logger.info(f"📊【Step1-欧易订单】共提取 {len(results)} 条订单")
             return results
+            
         except Exception as e:
             logger.debug(f"⚠️【Step1】提取欧易订单数据异常: {e}")
             return []
@@ -374,16 +405,20 @@ class Step1Extract:
         """提取欧易开仓订单字段"""
         try:
             data = event.get('data', {})
+            logger.info(f"🔍【Step1-欧易开仓】event data: {data}")  # 新增
             
             # 保护：检查路径
             if not data.get('data'):
+                logger.warning(f"⚠️【Step1-欧易开仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
+                logger.warning(f"⚠️【Step1-欧易开仓】data.data 不是数组或为空")
                 return None
             
             order_data = data_list[0]
+            logger.info(f"🔍【Step1-欧易开仓】order_data: {order_data}")  # 新增
             
             result = {"交易所": "okx", "data_type": "order_update"}
             
@@ -391,47 +426,59 @@ class Step1Extract:
             td_mode = order_data.get('tdMode')
             if td_mode:
                 result["保证金模式"] = td_mode
+                logger.info(f"🔍【Step1-欧易开仓】提取到保证金模式: {td_mode}")  # 新增
             
             ccy = order_data.get('ccy')
             if ccy:
                 result["保证金币种"] = ccy
+                logger.info(f"🔍【Step1-欧易开仓】提取到保证金币种: {ccy}")  # 新增
             
             inst_id = order_data.get('instId')
             if inst_id:
                 result["开仓合约名"] = self._normalize_okx_symbol(inst_id)
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓合约名: {result['开仓合约名']}")  # 新增
             
             pos_side = order_data.get('posSide')
             if pos_side:
                 result["开仓方向"] = pos_side
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓方向: {pos_side}")  # 新增
             
             ord_type = order_data.get('ordType')
             if ord_type:
                 result["开仓执行方式"] = ord_type
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓执行方式: {ord_type}")  # 新增
             
             avg_px = order_data.get('avgPx')
             if avg_px is not None and avg_px != '':
                 result["开仓均价"] = avg_px
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓均价: {avg_px}")  # 新增
             
             acc_fill_sz = order_data.get('accFillSz')
             if acc_fill_sz is not None and acc_fill_sz != '':
                 result["持仓张数"] = acc_fill_sz
+                logger.info(f"🔍【Step1-欧易开仓】提取到持仓张数: {acc_fill_sz}")  # 新增
             
             lever = order_data.get('lever')
             if lever is not None and lever != '':
                 result["杠杆"] = lever
+                logger.info(f"🔍【Step1-欧易开仓】提取到杠杆: {lever}")  # 新增
             
             fee = order_data.get('fee')
             if fee is not None and fee != '':
                 result["开仓手续费"] = fee
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓手续费: {fee}")  # 新增
             
             fee_ccy = order_data.get('feeCcy')
             if fee_ccy:
                 result["开仓手续费币种"] = fee_ccy
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓手续费币种: {fee_ccy}")  # 新增
             
             c_time = order_data.get('cTime')
             if c_time is not None and c_time != '':
                 result["开仓时间"] = c_time
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓时间: {c_time}")  # 新增
             
+            logger.info(f"📤【Step1-欧易开仓】提取结果: {result}")  # 新增
             return result if len(result) > 2 else None
             
         except Exception as e:
@@ -442,16 +489,20 @@ class Step1Extract:
         """提取欧易平仓订单字段"""
         try:
             data = event.get('data', {})
+            logger.info(f"🔍【Step1-欧易平仓】event data: {data}")  # 新增
             
             # 保护：检查路径
             if not data.get('data'):
+                logger.warning(f"⚠️【Step1-欧易平仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
+                logger.warning(f"⚠️【Step1-欧易平仓】data.data 不是数组或为空")
                 return None
             
             order_data = data_list[0]
+            logger.info(f"🔍【Step1-欧易平仓】order_data: {order_data}")  # 新增
             
             result = {"交易所": "okx", "data_type": "order_update"}
             
@@ -459,23 +510,29 @@ class Step1Extract:
             ord_type = order_data.get('ordType')
             if ord_type:
                 result["平仓执行方式"] = ord_type
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓执行方式: {ord_type}")  # 新增
             
             avg_px = order_data.get('avgPx')
             if avg_px is not None and avg_px != '':
                 result["平仓价"] = avg_px
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓价: {avg_px}")  # 新增
             
             fee = order_data.get('fee')
             if fee is not None and fee != '':
                 result["平仓手续费"] = fee
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓手续费: {fee}")  # 新增
             
             fee_ccy = order_data.get('feeCcy')
             if fee_ccy:
                 result["平仓手续费币种"] = fee_ccy
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓手续费币种: {fee_ccy}")  # 新增
             
             u_time = order_data.get('uTime')
             if u_time is not None and u_time != '':
                 result["平仓时间"] = u_time
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓时间: {u_time}")  # 新增
             
+            logger.info(f"📤【Step1-欧易平仓】提取结果: {result}")  # 新增
             return result if len(result) > 2 else None
             
         except Exception as e:
@@ -486,20 +543,27 @@ class Step1Extract:
         """提取欧易持仓数据"""
         try:
             data = item.get('data', {})
+            logger.info(f"🔍【Step1-欧易持仓】原始数据: {data}")  # 新增
             
             # 保护：检查路径
             if not data.get('data'):
+                logger.warning(f"⚠️【Step1-欧易持仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
+                logger.warning(f"⚠️【Step1-欧易持仓】data.data 不是数组或为空")
                 return None
             
             pos_data = data_list[0]
+            logger.info(f"🔍【Step1-欧易持仓】pos_data: {pos_data}")  # 新增
             
             # 空仓检查：如果 pos 为 0 或空，不提取
             pos = pos_data.get('pos')
+            logger.info(f"🔍【Step1-欧易持仓】pos值: {pos}")  # 新增
+            
             if pos is None or pos == '' or float(pos) == 0:
+                logger.info(f"⏭️【Step1-欧易持仓】空仓，跳过提取")
                 return None
             
             result = {"交易所": "okx", "data_type": "position_update"}
@@ -508,43 +572,54 @@ class Step1Extract:
             imr = pos_data.get('imr')
             if imr is not None and imr != '':
                 result["标记价保证金"] = imr
+                logger.info(f"🔍【Step1-欧易持仓】提取到标记价保证金: {imr}")  # 新增
             
             upl = pos_data.get('upl')
             if upl is not None and upl != '':
                 result["标记价浮盈"] = upl
+                logger.info(f"🔍【Step1-欧易持仓】提取到标记价浮盈: {upl}")  # 新增
             
             upl_ratio = pos_data.get('uplRatio')
             if upl_ratio is not None and upl_ratio != '':
                 result["标记价浮盈百分比"] = upl_ratio
+                logger.info(f"🔍【Step1-欧易持仓】提取到标记价浮盈百分比: {upl_ratio}")  # 新增
             
             upl_last_px = pos_data.get('uplLastPx')
             if upl_last_px is not None and upl_last_px != '':
                 result["最新价浮盈"] = upl_last_px
+                logger.info(f"🔍【Step1-欧易持仓】提取到最新价浮盈: {upl_last_px}")  # 新增
             
             upl_ratio_last_px = pos_data.get('uplRatioLastPx')
             if upl_ratio_last_px is not None and upl_ratio_last_px != '':
                 result["最新价浮盈百分比"] = upl_ratio_last_px
+                logger.info(f"🔍【Step1-欧易持仓】提取到最新价浮盈百分比: {upl_ratio_last_px}")  # 新增
             
             sl_trigger_px_type = pos_data.get('slTriggerPxType')
             if sl_trigger_px_type:
                 result["止损触发方式"] = sl_trigger_px_type
+                logger.info(f"🔍【Step1-欧易持仓】提取到止损触发方式: {sl_trigger_px_type}")  # 新增
             
             sl_trigger_px = pos_data.get('slTriggerPx')
             if sl_trigger_px is not None and sl_trigger_px != '':
                 result["止损触发价"] = sl_trigger_px
+                logger.info(f"🔍【Step1-欧易持仓】提取到止损触发价: {sl_trigger_px}")  # 新增
             
             tp_trigger_px_type = pos_data.get('tpTriggerPxType')
             if tp_trigger_px_type:
                 result["止盈触发方式"] = tp_trigger_px_type
+                logger.info(f"🔍【Step1-欧易持仓】提取到止盈触发方式: {tp_trigger_px_type}")  # 新增
             
             tp_trigger_px = pos_data.get('tpTriggerPx')
             if tp_trigger_px is not None and tp_trigger_px != '':
                 result["止盈触发价"] = tp_trigger_px
+                logger.info(f"🔍【Step1-欧易持仓】提取到止盈触发价: {tp_trigger_px}")  # 新增
             
             funding_fee = pos_data.get('fundingFee')
             if funding_fee is not None and funding_fee != '':
                 result["累计资金费"] = funding_fee
+                logger.info(f"🔍【Step1-欧易持仓】提取到累计资金费: {funding_fee}")  # 新增
             
+            logger.info(f"📤【Step1-欧易持仓】提取结果: {result}")  # 新增
             return result if len(result) > 2 else None
             
         except Exception as e:
