@@ -48,7 +48,7 @@ class Step4Funding:
     
     def _get_beijing_time(self, timestamp_ms: Optional[int] = None) -> str:
         """
-        获取北京时间（通用）
+        获取北京时间（仅欧易资金费结算使用）
         Args:
             timestamp_ms: 毫秒级时间戳，None表示当前时间
         Returns:
@@ -56,20 +56,16 @@ class Step4Funding:
         """
         try:
             if timestamp_ms is not None:
-                # 毫秒转秒
                 dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
             else:
                 dt = datetime.now(timezone.utc)
             
-            # 转换为北京时间 (UTC+8)
             beijing_tz = timezone(timedelta(hours=8))
             beijing_time = dt.astimezone(beijing_tz)
             
-            # 格式化输出
             return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
         except Exception as e:
             logger.error(f"❌【step4】时间转换失败: {e}")
-            # 返回当前时间的简单格式
             return datetime.now().strftime("%Y.%m.%d %H:%M:%S")
     
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
@@ -87,7 +83,7 @@ class Step4Funding:
             logger.warning(f"⚠️【step4】未知交易所: {exchange}")
             return container
     
-    # ========== 币安房间（原有逻辑，只保留平仓时间触发清理）==========
+    # ========== 币安房间 ==========
     def _process_binance(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """币安资金费处理逻辑"""
         exchange = "binance"
@@ -102,10 +98,7 @@ class Step4Funding:
         if cached is None:
             logger.debug(f"💰【{exchange}】首次收到数据，直接缓存")
             self.cache[exchange] = container.copy()
-            # 转换结算时间为北京时间
-            if self.cache[exchange].get("本次资金费结算时间"):
-                ts = self.cache[exchange]["本次资金费结算时间"]
-                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(ts)
+            # 注意：时间已经在Step1转换好了，这里不再转换
             return container
         
         # 获取缓存的结算时间
@@ -123,8 +116,6 @@ class Step4Funding:
                 logger.debug(f"💰【{exchange}】场景1b：首次结算，时间={new_time}")
                 # 先缓存新数据
                 self.cache[exchange] = container.copy()
-                # 转换结算时间为北京时间
-                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(new_time)
                 # 更新5个资金费字段（累加）
                 self._update_funding_fields_binance(self.cache[exchange], cached, is_first=True)
         
@@ -142,8 +133,6 @@ class Step4Funding:
                 logger.debug(f"💰【{exchange}】场景2d：新结算，时间={new_time}")
                 # 先缓存新数据
                 self.cache[exchange] = container.copy()
-                # 转换结算时间为北京时间
-                self.cache[exchange]["本次资金费结算时间"] = self._get_beijing_time(new_time)
                 # 更新5个资金费字段（累加）
                 self._update_funding_fields_binance(self.cache[exchange], cached, is_first=False)
         
@@ -186,7 +175,7 @@ class Step4Funding:
         except (ValueError, TypeError):
             pass
     
-    # ========== 欧易房间（修正版）==========
+    # ========== 欧易房间 ==========
     def _process_okx(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """欧易资金费处理逻辑"""
         exchange = "okx"
@@ -244,7 +233,7 @@ class Step4Funding:
                     # 2.3 结算次数 +1
                     cached["资金费结算次数"] = int(cached.get("资金费结算次数") or 0) + 1
                     
-                    # 2.4 结算时间 = 当前北京时间
+                    # 2.4 结算时间 = 当前北京时间（欧易资金费结算用当前时间）
                     cached["本次资金费结算时间"] = self._get_beijing_time()
                     
                     # 2.5 平均资金费率 = 累计资金费 / 开仓价仓位价值

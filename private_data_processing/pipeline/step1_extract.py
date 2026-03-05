@@ -3,6 +3,7 @@
 """
 import logging
 import asyncio
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,22 @@ class Step1Extract:
         
         logger.info("✅【Step1】字段提取器已创建")
         logger.info(f"📋【Step1】币安有效订单事件: {self.BINANCE_VALID_ORDER_EVENTS}")
+
+    # ===== 时间戳转换函数 =====
+    def _convert_timestamp(self, timestamp_ms: Optional[Any]) -> Optional[str]:
+        """将毫秒级时间戳转换为北京时间 (2026.03.16 08:00:03)"""
+        if timestamp_ms is None or timestamp_ms == '':
+            return None
+        try:
+            # 转换为毫秒整数
+            ts = int(float(timestamp_ms))
+            dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+            beijing_tz = timezone(timedelta(hours=8))
+            beijing_time = dt.astimezone(beijing_tz)
+            return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
+        except (ValueError, TypeError, OverflowError):
+            logger.debug(f"时间戳转换失败: {timestamp_ms}")
+            return None
 
     async def receive(self, full_storage_item: Dict[str, Any]):
         """
@@ -144,7 +161,7 @@ class Step1Extract:
             import traceback
             logger.error(traceback.format_exc())
 
-    # ========== 币安提取函数（已有，保持不变）==========
+    # ========== 币安提取函数 ==========
     def _extract_binance_http(self, item: Dict) -> Optional[Dict[str, Any]]:
         """提取币安HTTP账户数据"""
         data = item.get('data', {})
@@ -198,10 +215,12 @@ class Step1Extract:
             b_data = data.get('a', {}).get('B', [])
             if b_data:
                 result["event_type"] = "account_funding"
+                # 本次资金费结算时间转换
+                if data.get('T') is not None:
+                    result["本次资金费结算时间"] = self._convert_timestamp(data['T'])
+                # 本次资金费
                 if b_data[0].get('bc') is not None:
                     result["本次资金费"] = b_data[0]['bc']
-                if data.get('T') is not None:
-                    result["本次资金费结算时间"] = data['T']
                 return result
 
         return None
@@ -253,7 +272,7 @@ class Step1Extract:
                     if o_data.get('N') is not None:
                         result["开仓手续费币种"] = o_data['N']
                     if o_data.get('T') is not None:
-                        result["开仓时间"] = o_data['T']
+                        result["开仓时间"] = self._convert_timestamp(o_data['T'])
 
                 elif '设置止损' in parts[1]:
                     if o_data.get('wt') is not None:
@@ -277,7 +296,7 @@ class Step1Extract:
                     if o_data.get('N') is not None:
                         result["平仓手续费币种"] = o_data['N']
                     if o_data.get('T') is not None:
-                        result["平仓时间"] = o_data['T']
+                        result["平仓时间"] = self._convert_timestamp(o_data['T'])
 
                 results.append(result)
 
@@ -482,8 +501,8 @@ class Step1Extract:
             
             c_time = order_data.get('cTime')
             if c_time is not None and c_time != '':
-                result["开仓时间"] = c_time
-                logger.info(f"🔍【Step1-欧易开仓】提取到开仓时间: {c_time}")
+                result["开仓时间"] = self._convert_timestamp(c_time)
+                logger.info(f"🔍【Step1-欧易开仓】提取到开仓时间: {result['开仓时间']}")
             
             logger.info(f"📤【Step1-欧易开仓】提取结果: {result}")
             return result if len(result) > 2 else None
@@ -540,8 +559,8 @@ class Step1Extract:
             
             u_time = order_data.get('uTime')
             if u_time is not None and u_time != '':
-                result["平仓时间"] = u_time
-                logger.info(f"🔍【Step1-欧易平仓】提取到平仓时间: {u_time}")
+                result["平仓时间"] = self._convert_timestamp(u_time)
+                logger.info(f"🔍【Step1-欧易平仓】提取到平仓时间: {result['平仓时间']}")
             
             logger.info(f"📤【Step1-欧易平仓】提取结果: {result}")
             return result if len(result) > 2 else None
@@ -614,7 +633,7 @@ class Step1Extract:
                 result["最新价浮盈百分比"] = upl_ratio_last_px
                 logger.info(f"🔍【Step1-欧易持仓】提取到最新价浮盈百分比: {upl_ratio_last_px}")
             
-            # ===== 修正：从 closeOrderAlgo 数组中提取止损止盈 =====
+            # 从 closeOrderAlgo 数组中提取止损止盈
             close_order_algo = pos_data.get('closeOrderAlgo', [])
             if close_order_algo and len(close_order_algo) > 0:
                 algo = close_order_algo[0]
