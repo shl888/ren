@@ -236,13 +236,13 @@ class Step4Funding:
                     # 2.4 结算时间 = 当前北京时间（欧易资金费结算用当前时间）
                     cached["本次资金费结算时间"] = self._get_beijing_time()
                     
-                    # 2.5 平均资金费率 = 累计资金费 / 开仓价仓位价值
+                    # 2.5 平均资金费率 = （累计资金费 *100）/ 开仓价仓位价值
                     position_value = cached.get("开仓价仓位价值")
                     if position_value is not None:
                         try:
                             pv = float(position_value)
                             if pv > 0:
-                                avg_rate = cached["累计资金费"] / pv
+                                avg_rate = cached["累计资金费"] * 100 / pv
                                 cached["平均资金费率"] = self._round_4(avg_rate)
                         except (ValueError, TypeError, ZeroDivisionError):
                             pass
