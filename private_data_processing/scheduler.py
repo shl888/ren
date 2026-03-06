@@ -95,7 +95,6 @@ class PrivateDataScheduler:
                 # ===== 优化：获取事件类型（兼容币安和欧易）=====
                 event_type = extracted.get('event_type')
                 if not event_type:
-                    # 如果没有event_type，就用data_type
                     event_type = extracted.get('data_type', 'unknown')
                 
                 logger.info(f"✅【调度器】从队列取到数据！类型: {event_type}, 交易所: {extracted.get('交易所')}")
@@ -113,11 +112,11 @@ class PrivateDataScheduler:
                 logger.info(f"✅【调度器】Step3完成")
 
                 # ===== 步骤4：资金费处理 =====
-                self.step4.process(container)
+                final_container = self.step4.process(container)
                 logger.info(f"✅【调度器】Step4完成")
 
                 # ===== 推送大脑 =====
-                await self._push_to_brain(container)
+                await self._push_to_brain(final_container)
                 
                 self.step1_output_queue.task_done()
                 
@@ -132,7 +131,6 @@ class PrivateDataScheduler:
         """推送成品数据到大脑（使用全局函数，不依赖brain实例）"""
         if brain_receive_data is None:
             logger.warning(f"⚠️【调度器】大脑未安装，数据丢弃: {container.get('交易所')}")
-            # 后续这里可以改成推送到其他目的地
             return
 
         try:
