@@ -66,7 +66,7 @@ def setup_routes(app: web.Application):
     # 私人数据处理模块路由
     setup_private_data_processing_routes(app)
     
-    # ===== 新增：数据完成部门路由 =====
+    # ===== 数据完成部门路由 =====
     setup_data_completion_routes(app)
     
     # 获取当前路由总数
@@ -81,7 +81,7 @@ def setup_routes(app: web.Application):
     logger.info(f"   - 监控接口: /api/monitor/* (3个)")
     logger.info(f"   - 资金费率: /api/funding/settlement/* (4个)")
     logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
-    logger.info(f"   - 数据完成部门: /api/completion/* (3个)")  # 新增统计
+    logger.info(f"   - 数据完成部门: /api/completion/* (3个)")
     logger.info("=" * 60)
     logger.info("📌 公开数据路由已在 server.py 中注册: /api/public/data/* (2个)")
     logger.info("=" * 60)
