@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 # ✅ 导入数据完成部门的接收器
-from data_completion.receiver import receive_data
+from data_completion_department.receiver import receive_data
 
 logger = logging.getLogger(__name__)
 
