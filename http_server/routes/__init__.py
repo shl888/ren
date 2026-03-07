@@ -44,6 +44,29 @@ def setup_private_data_processing_routes(app: web.Application):
         logger.error(f"设置私人数据处理路由失败: {e}")
         return False
 
+# ============ 新增：数据完成部门路由 ============
+def setup_data_completion_routes(app: web.Application):
+    """设置数据完成部门路由"""
+    try:
+        from data_completion_department.receiver import get_receiver
+        
+        async def get_completion_status(request):
+            receiver = get_receiver()
+            return web.json_response(await receiver.get_status())
+        
+        # 注册数据完成部门路由
+        app.router.add_get('/api/completion/status', get_completion_status)
+        
+        logger.info("✅ 已注册数据完成部门路由（共1个端点）")
+        return True
+        
+    except ImportError as e:
+        logger.warning(f"无法导入数据完成部门路由: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"设置数据完成部门路由失败: {e}")
+        return False
+
 def setup_routes(app: web.Application):
     """
     主路由设置函数 - 聚合所有模块
@@ -63,6 +86,9 @@ def setup_routes(app: web.Application):
     # 私人数据处理模块路由
     setup_private_data_processing_routes(app)
     
+    # ===== 新增：数据完成部门路由 =====
+    setup_data_completion_routes(app)
+    
     # 获取当前路由总数
     total_routes = len(app.router.routes())
     
@@ -75,6 +101,7 @@ def setup_routes(app: web.Application):
     logger.info(f"   - 监控接口: /api/monitor/* (3个)")
     logger.info(f"   - 资金费率: /api/funding/settlement/* (4个)")
     logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
+    logger.info(f"   - 数据完成部门: /api/completion/status (1个)")  # 新增
     logger.info("=" * 60)
     logger.info("📌 公开数据路由已在 server.py 中注册: /api/public/data/* (2个)")
     logger.info("=" * 60)
