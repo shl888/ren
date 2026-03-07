@@ -13,7 +13,7 @@ def setup_data_completion_routes(app: web.Application):
     """设置数据完成部门路由（和 brain.py 风格一致）"""
     receiver = get_receiver()
     
-    # ===== 根路由：数据大纲 =====
+    # ===== 根路由：/api/completion/data =====
     async def get_data_summary(request):
         """获取所有数据的大纲（按来源分类）"""
         try:
@@ -53,14 +53,14 @@ def setup_data_completion_routes(app: web.Application):
             }, status=500)
     
     # ===== 注册路由 =====
-    # 根路由
-    app.router.add_get('/api/completion', get_data_summary)
+    # 根路由 - 改为 /api/completion/data
+    app.router.add_get('/api/completion/data', get_data_summary)
     
-    # 数据分路由（路径和大脑模块对齐：/data/源名称）
+    # 数据分路由（路径不变）
     app.router.add_get('/api/completion/data/public_market', get_public_market_data)
     app.router.add_get('/api/completion/data/private_user', get_private_user_data)
     
-    logger.info("✅ 数据完成部门路由（重构版）注册完成")
-    logger.info("   - GET /api/completion                 # 数据大纲")
-    logger.info("   - GET /api/completion/data/public_market  # 行情数据")
-    logger.info("   - GET /api/completion/data/private_user   # 私人数据")
+    logger.info("✅ 数据完成部门路由注册完成")
+    logger.info("   - GET /api/completion/data                 # 数据大纲")
+    logger.info("   - GET /api/completion/data/public_market   # 行情数据")
+    logger.info("   - GET /api/completion/data/private_user    # 私人数据")

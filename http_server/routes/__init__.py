@@ -85,7 +85,7 @@ def setup_routes(app: web.Application):
     logger.info(f"   - 监控接口: /api/monitor/* (3个)")
     logger.info(f"   - 资金费率: /api/funding/settlement/* (4个)")
     logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
-    logger.info(f"   - 数据完成部门: /api/completion/* (3个)")
+    logger.info(f"   - 数据完成部门: /api/completion/data/* (3个)")  # ← 只改了这一行
     logger.info("=" * 60)
     logger.info("📌 公开数据路由已在 server.py 中注册: /api/public/data/* (2个)")
     logger.info("=" * 60)
