@@ -18,7 +18,7 @@ from shared_data.step4_calc import Step4Calc
 from shared_data.step5_cross_calc import Step5CrossCalc
 
 # ✅ 导入数据完成部门的接收器
-from data_completion.receiver import receive_data
+from data_completion_department.receiver import receive_data
 
 logger = logging.getLogger(__name__)
 
