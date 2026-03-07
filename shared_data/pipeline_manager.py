@@ -7,7 +7,7 @@ import asyncio
 import time
 from typing import Dict, Any, Optional, Callable
 import logging
-from datetime import datetime  # ⭐ 新增：导入datetime
+from datetime import datetime
 
 # ✅ 导入6个步骤（新增Step0）
 from shared_data.step0_rate_limiter import Step0RateLimiter
@@ -225,7 +225,7 @@ class PipelineManager:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
                 
-                # ⭐⭐⭐ 新增：推送给私人数据处理模块 ⭐⭐⭐
+                # ⭐⭐⭐ 新增：推送给私人数据处理模块（只加目的地，不改数据）⭐⭐⭐
                 try:
                     from private_data_processing.manager import receive_private_data
                     for result in all_results:
@@ -236,7 +236,6 @@ class PipelineManager:
                             'timestamp': datetime.now().isoformat()
                         }
                         await receive_private_data(private_data)
-                    logger.debug(f"📤【数据处理管理员】已推送 {len(all_results)} 条行情数据到私人模块")
                 except Exception as e:
                     logger.error(f"❌【数据处理管理员】推送行情数据到私人模块失败: {e}")
             
