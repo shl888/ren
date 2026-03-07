@@ -67,7 +67,11 @@ def setup_routes(app: web.Application):
     setup_private_data_processing_routes(app)
     
     # ===== 数据完成部门路由 =====
-    setup_data_completion_routes(app)
+    try:
+        setup_data_completion_routes(app)
+        logger.info("✅ 已注册数据完成部门路由")
+    except Exception as e:
+        logger.error(f"❌ 注册数据完成部门路由失败: {e}")
     
     # 获取当前路由总数
     total_routes = len(app.router.routes())
