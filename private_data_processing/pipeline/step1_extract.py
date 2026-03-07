@@ -77,8 +77,7 @@ class Step1Extract:
                         'data_type': 'order_update',
                         'classified': data_item.get('classified', {})
                     }
-                    # 传入整个full_storage，用于补充行情字段
-                    results = self._extract_binance_orders(pseudo_item, full_storage)
+                    results = self._extract_binance_orders(pseudo_item)
                     if results:
                         all_results.extend(results)
                         logger.info(f"✅【Step1】从 {key} 提取了 {len(results)} 条订单结果")
@@ -226,14 +225,8 @@ class Step1Extract:
 
         return None
 
-    def _extract_binance_orders(self, item: Dict, full_storage: Dict = None) -> List[Dict[str, Any]]:
-        """
-        提取币安订单数据
-        
-        Args:
-            item: 包含订单数据的字典
-            full_storage: 完整存储区数据，用于补充行情字段
-        """
+    def _extract_binance_orders(self, item: Dict) -> List[Dict[str, Any]]:
+        """提取币安订单数据"""
         classified = item.get('classified', {})
         if not classified:
             logger.warning(f"⚠️【Step1】币安order_update无classified数据")
@@ -263,7 +256,6 @@ class Step1Extract:
                     "event_type": event_key
                 }
 
-                # ==== 按原有逻辑提取所有字段 ====
                 if '开仓' in parts[1]:
                     if o_data.get('s') is not None:
                         result["开仓合约名"] = o_data['s']
@@ -305,30 +297,6 @@ class Step1Extract:
                         result["平仓手续费币种"] = o_data['N']
                     if o_data.get('T') is not None:
                         result["平仓时间"] = self._convert_timestamp(o_data['T'])
-
-                # ==== 新增：如果提取到了开仓合约名，尝试从存储区补充行情数据 ====
-                if "开仓合约名" in result and full_storage:
-                    symbol = result["开仓合约名"]
-                    
-                    # 从存储区获取行情数据
-                    market_data_item = full_storage.get('public_market_data', {})
-                    market_data = market_data_item.get('data', {})
-                    
-                    # 在行情数据中查找该合约
-                    if symbol in market_data and isinstance(market_data[symbol], dict):
-                        contract_data = market_data[symbol]
-                        
-                        # 提取币安最新价和标记价
-                        binance_trade = contract_data.get('binance_trade_price')
-                        binance_mark = contract_data.get('binance_mark_price')
-                        
-                        if binance_trade is not None:
-                            result["最新价"] = binance_trade
-                        if binance_mark is not None:
-                            result["标记价"] = binance_mark
-                        
-                        if binance_trade or binance_mark:
-                            logger.debug(f"🔍【Step1】为 {symbol} 补充行情数据: 最新价={binance_trade}, 标记价={binance_mark}")
 
                 results.append(result)
 
