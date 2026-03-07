@@ -236,19 +236,19 @@ class PipelineManager:
                         if symbol:
                             contracts_dict[symbol] = result
                     
-                    # ⭐ 计数字段放在根目录
+                    # ⭐ 直接把计数字段加进 contracts_dict
+                    contracts_dict["total_contracts"] = len(contracts_dict)
+                    
+                    # 只推送一次
                     private_data = {
                         'exchange': 'public',
                         'data_type': 'market_data',
-                        'total_contracts': len(contracts_dict),  # 计数字段在这里
-                        'data': contracts_dict,                   # 合约数据在data里
+                        'data': contracts_dict,  # total_contracts 在 data 里面
                         'timestamp': datetime.now().isoformat()
                     }
-                    
-                    # 只推送一次
                     await receive_private_data(private_data)
                     
-                    logger.info(f"📤【数据处理管理员】已推送 {len(contracts_dict)} 个合约的行情数据到私人模块（计数字段在根目录）")
+                    logger.info(f"📤【数据处理管理员】已推送 {len(contracts_dict)-1} 个合约的行情数据到私人模块（计数字段在data内）")
                 except Exception as e:
                     logger.error(f"❌【数据处理管理员】推送行情数据到私人模块失败: {e}")
             
