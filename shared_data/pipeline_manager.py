@@ -17,9 +17,6 @@ from shared_data.step3_align import Step3Align
 from shared_data.step4_calc import Step4Calc
 from shared_data.step5_cross_calc import Step5CrossCalc
 
-# ✅ 导入数据完成部门的接收器
-from data_completion_department.receiver import receive_data
-
 logger = logging.getLogger(__name__)
 
 class PipelineManager:
@@ -228,7 +225,7 @@ class PipelineManager:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
             
-            # ⭐⭐⭐ 推送到数据完成部门的接收器（修改为推送到receiver）⭐⭐⭐
+            # ⭐⭐⭐ 推送到数据完成部门的接收器 - 使用 receive_market_data ⭐⭐⭐
             try:
                 # 组装成字典
                 market_data_dict = {}
@@ -237,22 +234,11 @@ class PipelineManager:
                     if symbol:
                         market_data_dict[symbol] = result.__dict__
                 
-                # 组装行情数据包
-                market_data_package = {
-                    'total_contracts': len(market_data_dict),  # 总数
-                    **market_data_dict                         # 直接展开合约数据
-                }
+                # ⭐ 修改：使用 receive_market_data
+                from data_completion_department import receive_market_data
+                await receive_market_data(market_data_dict)
                 
-                # 推送到数据完成部门的接收器
-                private_data = {
-                    'exchange': 'public',
-                    'data_type': 'market_data',
-                    'data': market_data_package,
-                    'timestamp': datetime.now().isoformat()
-                }
-                await receive_data(private_data)
-                
-                logger.info(f"📤【数据处理管理员】已推送 {market_data_package['total_contracts']} 个合约的行情数据到数据完成部门")
+                logger.info(f"📤【数据处理管理员】已推送 {len(market_data_dict)} 个合约的行情数据到数据完成部门")
             except Exception as e:
                 logger.error(f"❌【数据处理管理员】推送行情数据到数据完成部门失败: {e}")
             
