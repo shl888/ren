@@ -1,10 +1,13 @@
 """
-调度器 - 负责启动步骤1-2-3-4，接收步骤1的输出，执行步骤2-3-4，推送到大脑
+调度器 - 负责启动步骤1-2-3-4，接收步骤1的输出，执行步骤2-3-4，推送到大脑和数据完成部门
 """
 import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
+
+# ✅ 导入数据完成部门的接收器
+from data_completion.receiver import receive_data
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +87,7 @@ class PrivateDataScheduler:
             logger.error(f"❌【调度器】Step1未初始化！无法处理数据: {stored_item.get('data_type')}")
 
     async def _pipeline_worker(self):
-        """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑"""
+        """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑和数据完成部门"""
         logger.info("🏭【流水线工作线程】已启动")
         
         while self.running:
@@ -118,6 +121,9 @@ class PrivateDataScheduler:
                 # ===== 推送大脑 =====
                 await self._push_to_brain(final_container)
                 
+                # ===== 推送数据完成部门 =====
+                await self._push_to_data_completion(final_container, event_type)
+                
                 self.step1_output_queue.task_done()
                 
             except asyncio.TimeoutError:
@@ -143,6 +149,37 @@ class PrivateDataScheduler:
             logger.info(f"✅【调度器】已推送 {container.get('交易所')} 数据到大脑")
         except Exception as e:
             logger.error(f"❌【调度器】推送大脑失败: {e}")
+    
+    # ✅ 新增：推送数据到数据完成部门
+    async def _push_to_data_completion(self, container: Dict[str, Any], event_type: str):
+        """推送数据到数据完成部门的接收器"""
+        try:
+            # 判断数据类型（成品或半成品）
+            exchange = container.get("交易所", "unknown")
+            
+            if exchange == "okx":
+                data_type = "okx_complete"
+            elif exchange == "binance":
+                data_type = "binance_semi"
+            else:
+                data_type = "unknown"
+            
+            # 组装数据包
+            completion_data = {
+                "exchange": exchange,
+                "data_type": data_type,
+                "event_type": event_type,
+                "data": container,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # 推送到数据完成部门
+            await receive_data(completion_data)
+            
+            logger.info(f"✅【调度器】已推送 {exchange} 数据到数据完成部门")
+            
+        except Exception as e:
+            logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
     
     # ===== 新增：等待就绪的方法 =====
     async def wait_until_ready(self):
