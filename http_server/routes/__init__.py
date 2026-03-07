@@ -6,6 +6,7 @@ from aiohttp import web
 import logging
 import sys
 import os
+from datetime import datetime
 
 # 设置导入路径
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -44,20 +45,103 @@ def setup_private_data_processing_routes(app: web.Application):
         logger.error(f"设置私人数据处理路由失败: {e}")
         return False
 
-# ============ 新增：数据完成部门路由 ============
+# ============ 数据完成部门路由 ============
 def setup_data_completion_routes(app: web.Application):
-    """设置数据完成部门路由"""
+    """设置数据完成部门路由 - 根路由返回数据目录"""
     try:
         from data_completion_department.receiver import get_receiver
         
         async def get_completion_status(request):
+            """根路由：返回数据目录，列出所有子数据源"""
             receiver = get_receiver()
-            return web.json_response(await receiver.get_status())
+            store = receiver.memory_store
+            
+            sources_list = []
+            
+            # 1. 私人数据源（如果存在）
+            if store.get('private_data'):
+                private_item = store['private_data']
+                private_content = private_item.get('data', {})
+                
+                # 判断是欧易成品还是币安半成品
+                data_type = "unknown"
+                exchange_name = private_content.get('exchange', 'unknown')
+                
+                if exchange_name == 'okx':
+                    data_type = "okx_complete"
+                    description = "欧易交易所完整成品数据"
+                elif exchange_name == 'binance':
+                    data_type = "binance_semi"
+                    description = "币安交易所半成品数据"
+                else:
+                    description = "私人数据"
+                
+                sources_list.append({
+                    "name": data_type,
+                    "description": description,
+                    "endpoint": "/api/completion/data/private",
+                    "last_update": private_item.get('received_at')
+                })
+            
+            # 2. 行情数据源（如果存在）
+            if store.get('market_data'):
+                market_item = store['market_data']
+                market_content = market_item.get('data', {})
+                
+                # 获取合约数量
+                contract_count = 0
+                if isinstance(market_content, dict):
+                    contract_count = market_content.get('total_contracts', 0)
+                
+                sources_list.append({
+                    "name": "market_data",
+                    "description": "聚合行情数据（用于补全网安）",
+                    "contract_count": contract_count,
+                    "endpoint": "/api/completion/data/market",
+                    "last_update": market_item.get('received_at')
+                })
+            
+            return web.json_response({
+                "timestamp": datetime.now().isoformat(),
+                "source_count": len(sources_list),
+                "sources": sources_list,
+                "note": "数据完成部门状态目录，点击endpoint查看详情"
+            })
         
-        # 注册数据完成部门路由
+        # 私人数据详情路由
+        async def get_private_data(request):
+            """返回私人数据详情"""
+            receiver = get_receiver()
+            private_data = receiver.memory_store.get('private_data')
+            
+            if private_data:
+                return web.json_response(private_data)
+            else:
+                return web.json_response({
+                    "timestamp": datetime.now().isoformat(),
+                    "note": "暂无私人数据"
+                })
+        
+        # 行情数据详情路由
+        async def get_market_data(request):
+            """返回行情数据详情"""
+            receiver = get_receiver()
+            market_data = receiver.memory_store.get('market_data')
+            
+            if market_data:
+                return web.json_response(market_data)
+            else:
+                return web.json_response({
+                    "timestamp": datetime.now().isoformat(),
+                    "note": "暂无行情数据"
+                })
+        
+        # 注册所有路由
         app.router.add_get('/api/completion/status', get_completion_status)
+        app.router.add_get('/api/completion/data/private', get_private_data)
+        app.router.add_get('/api/completion/data/market', get_market_data)
         
-        logger.info("✅ 已注册数据完成部门路由（共1个端点）")
+        logger.info("✅ 已注册数据完成部门路由（根目录 + 2个数据端点）")
         return True
         
     except ImportError as e:
@@ -86,7 +170,7 @@ def setup_routes(app: web.Application):
     # 私人数据处理模块路由
     setup_private_data_processing_routes(app)
     
-    # ===== 新增：数据完成部门路由 =====
+    # 数据完成部门路由
     setup_data_completion_routes(app)
     
     # 获取当前路由总数
@@ -101,7 +185,7 @@ def setup_routes(app: web.Application):
     logger.info(f"   - 监控接口: /api/monitor/* (3个)")
     logger.info(f"   - 资金费率: /api/funding/settlement/* (4个)")
     logger.info(f"   - 私人数据处理: /api/private_data_processing/* (5个)")
-    logger.info(f"   - 数据完成部门: /api/completion/status (1个)")  # 新增
+    logger.info(f"   - 数据完成部门: /api/completion/* (3个)")  # status + 2个数据端点
     logger.info("=" * 60)
     logger.info("📌 公开数据路由已在 server.py 中注册: /api/public/data/* (2个)")
     logger.info("=" * 60)
