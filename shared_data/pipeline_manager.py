@@ -17,6 +17,9 @@ from shared_data.step3_align import Step3Align
 from shared_data.step4_calc import Step4Calc
 from shared_data.step5_cross_calc import Step5CrossCalc
 
+# ✅ 导入数据完成部门的接收器
+from data_completion.receiver import receive_data
+
 logger = logging.getLogger(__name__)
 
 class PipelineManager:
@@ -224,36 +227,34 @@ class PipelineManager:
             if self.brain_callback:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
+            
+            # ⭐⭐⭐ 推送到数据完成部门的接收器（修改为推送到receiver）⭐⭐⭐
+            try:
+                # 组装成字典
+                market_data_dict = {}
+                for result in step5_results:
+                    symbol = result.symbol
+                    if symbol:
+                        market_data_dict[symbol] = result.__dict__
                 
-                # ⭐⭐⭐ 推送给私人数据处理模块（优化版：去掉 contracts 字段）⭐⭐⭐
-                try:
-                    from private_data_processing.manager import receive_private_data
-                    
-                    # 组装成字典
-                    market_data_dict = {}
-                    for result in all_results:
-                        symbol = result.get('symbol')
-                        if symbol:
-                            market_data_dict[symbol] = result
-                    
-                    # ⭐ 直接推送 total_contracts 和合约数据字典，去掉 contracts 字段
-                    market_data_package = {
-                        'total_contracts': len(market_data_dict),  # 总数
-                        **market_data_dict                         # 直接展开合约数据
-                    }
-                    
-                    # 只推送一次
-                    private_data = {
-                        'exchange': 'public',
-                        'data_type': 'market_data',
-                        'data': market_data_package,  # 现在只有 total_contracts 和合约数据
-                        'timestamp': datetime.now().isoformat()
-                    }
-                    await receive_private_data(private_data)
-                    
-                    logger.info(f"📤【数据处理管理员】已推送 {market_data_package['total_contracts']} 个合约的行情数据到私人模块（去掉 contracts 字段）")
-                except Exception as e:
-                    logger.error(f"❌【数据处理管理员】推送行情数据到私人模块失败: {e}")
+                # 组装行情数据包
+                market_data_package = {
+                    'total_contracts': len(market_data_dict),  # 总数
+                    **market_data_dict                         # 直接展开合约数据
+                }
+                
+                # 推送到数据完成部门的接收器
+                private_data = {
+                    'exchange': 'public',
+                    'data_type': 'market_data',
+                    'data': market_data_package,
+                    'timestamp': datetime.now().isoformat()
+                }
+                await receive_data(private_data)
+                
+                logger.info(f"📤【数据处理管理员】已推送 {market_data_package['total_contracts']} 个合约的行情数据到数据完成部门")
+            except Exception as e:
+                logger.error(f"❌【数据处理管理员】推送行情数据到数据完成部门失败: {e}")
             
         except Exception as e:
             logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
@@ -409,6 +410,7 @@ class PipelineManager:
         """接收数据（保持接口兼容）"""
         return True
 
+
 # 使用示例
 async def main():
     # 大脑回调函数（仅市场数据）
@@ -433,6 +435,7 @@ async def main():
     
     # 停止系统
     await manager.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
