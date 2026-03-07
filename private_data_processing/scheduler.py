@@ -6,9 +6,6 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Any, Optional
 
-# ✅ 导入数据完成部门的接收器
-from data_completion_department.receiver import receive_data
-
 logger = logging.getLogger(__name__)
 
 # ===== 导入大脑接收函数（如果可用）=====
@@ -150,7 +147,7 @@ class PrivateDataScheduler:
         except Exception as e:
             logger.error(f"❌【调度器】推送大脑失败: {e}")
     
-    # ✅ 新增：推送数据到数据完成部门
+    # ✅ 修改：推送数据到数据完成部门 - 使用 receive_private_data
     async def _push_to_data_completion(self, container: Dict[str, Any], event_type: str):
         """推送数据到数据完成部门的接收器"""
         try:
@@ -173,8 +170,9 @@ class PrivateDataScheduler:
                 "timestamp": datetime.now().isoformat()
             }
             
-            # 推送到数据完成部门
-            await receive_data(completion_data)
+            # ⭐ 修改：使用 receive_private_data
+            from data_completion_department import receive_private_data
+            await receive_private_data(completion_data)
             
             logger.info(f"✅【调度器】已推送 {exchange} 数据到数据完成部门")
             
