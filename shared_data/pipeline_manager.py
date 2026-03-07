@@ -225,30 +225,30 @@ class PipelineManager:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
                 
-                # ⭐⭐⭐ 新增：推送给私人数据处理模块（只推1次，包含所有合约）⭐⭐⭐
+                # ⭐⭐⭐ 推送给私人数据处理模块（只推1次，包含所有合约）⭐⭐⭐
                 try:
                     from private_data_processing.manager import receive_private_data
                     
-                    # 组装成字典（key为合约名）
+                    # 组装成一条数据（字典形式，key为合约名）
                     market_data_dict = {}
                     for result in all_results:
                         symbol = result.get('symbol')
                         if symbol:
                             market_data_dict[symbol] = result
                     
-                    # ⭐ 加上总数统计字段
-                    market_data_dict['total_contracts'] = len(market_data_dict)
+                    # ⭐ 添加计数字段到根目录
+                    market_data_dict["total_contracts"] = len(market_data_dict)
                     
                     # 只推送一次
                     private_data = {
                         'exchange': 'public',
                         'data_type': 'market_data',
-                        'data': market_data_dict,  # 一条数据包含所有合约 + 总数
+                        'data': market_data_dict,  # 一条数据包含所有合约 + 计数字段
                         'timestamp': datetime.now().isoformat()
                     }
                     await receive_private_data(private_data)
                     
-                    logger.info(f"📤【数据处理管理员】已推送 {len(market_data_dict)-1} 个合约的行情数据到私人模块（含total_contracts字段）")
+                    logger.info(f"📤【数据处理管理员】已推送 {len(market_data_dict)-1} 个合约的行情数据到私人模块（1条数据，含计数字段）")
                 except Exception as e:
                     logger.error(f"❌【数据处理管理员】推送行情数据到私人模块失败: {e}")
             
