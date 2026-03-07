@@ -225,30 +225,33 @@ class PipelineManager:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
                 
-                # ⭐⭐⭐ 推送给私人数据处理模块（只推1次，包含所有合约）⭐⭐⭐
+                # ⭐⭐⭐ 推送给私人数据处理模块（优化版：加上 total_contracts 和 contracts）⭐⭐⭐
                 try:
                     from private_data_processing.manager import receive_private_data
                     
-                    # 组装合约数据（字典形式，key为合约名）
-                    contracts_dict = {}
+                    # 组装成字典
+                    market_data_dict = {}
                     for result in all_results:
                         symbol = result.get('symbol')
                         if symbol:
-                            contracts_dict[symbol] = result
+                            market_data_dict[symbol] = result
                     
-                    # ⭐ 直接把计数字段加进 contracts_dict
-                    contracts_dict["total_contracts"] = len(contracts_dict)
+                    # ⭐ 包装成和面值数据一样的结构
+                    market_data_package = {
+                        'total_contracts': len(market_data_dict),  # 总数
+                        'contracts': market_data_dict               # 字典形式的合约数据
+                    }
                     
                     # 只推送一次
                     private_data = {
                         'exchange': 'public',
                         'data_type': 'market_data',
-                        'data': contracts_dict,  # total_contracts 在 data 里面
+                        'data': market_data_package,  # 现在有 total_contracts 和 contracts
                         'timestamp': datetime.now().isoformat()
                     }
                     await receive_private_data(private_data)
                     
-                    logger.info(f"📤【数据处理管理员】已推送 {len(contracts_dict)-1} 个合约的行情数据到私人模块（计数字段在data内）")
+                    logger.info(f"📤【数据处理管理员】已推送 {market_data_package['total_contracts']} 个合约的行情数据到私人模块（带总数统计）")
                 except Exception as e:
                     logger.error(f"❌【数据处理管理员】推送行情数据到私人模块失败: {e}")
             
