@@ -2,7 +2,7 @@
 第五步：跨平台计算 + 最终数据打包（数据计算专用版）
 功能：1. 计算价格差、费率差（绝对值+百分比） 2. 打包双平台所有字段 3. 倒计时
 原则：只做数据计算，不做业务判断。所有数据都保留，交给后续交易模块处理。
-输出：原始套利数据，每条包含双平台完整信息
+输出：原始套利数据，包含双平台合约完整信息
 """
 
 import logging
@@ -68,7 +68,11 @@ class CrossPlatformData:
     })
     
     def __post_init__(self):
-        """只做标记，不做过滤"""
+        """添加USDT后缀并标记计算时间"""
+        # 在symbol后面添加USDT
+        if self.symbol and not self.symbol.endswith('USDT'):
+            self.symbol = f"{self.symbol}USDT"
+        
         self.metadata["calculated_at"] = datetime.now().isoformat()
 
 class Step5CrossCalc:
@@ -333,7 +337,7 @@ class Step5CrossCalc:
         except Exception as e:
             return None
         
-        # 构建最终数据
+        # 构建最终数据（这里传入原始symbol，__post_init__会自动添加USDT）
         return CrossPlatformData(
             symbol=symbol,
             trade_price_diff=trade_price_diff,
