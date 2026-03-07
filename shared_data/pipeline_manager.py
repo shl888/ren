@@ -225,20 +225,15 @@ class PipelineManager:
                 all_results = [result.__dict__ for result in step5_results]
                 await self.brain_callback(all_results)
             
-            # ⭐⭐⭐ 推送到数据完成部门的接收器 - 使用 receive_market_data ⭐⭐⭐
+            # ⭐⭐⭐ 推送到数据完成部门的接收器 - 直接推列表，和大脑模块完全一致 ⭐⭐⭐
             try:
-                # 组装成字典
-                market_data_dict = {}
-                for result in step5_results:
-                    symbol = result.symbol
-                    if symbol:
-                        market_data_dict[symbol] = result.__dict__
-                
-                # ⭐ 修改：使用 receive_market_data
                 from data_completion_department import receive_market_data
-                await receive_market_data(market_data_dict)
                 
-                logger.info(f"📤【数据处理管理员】已推送 {len(market_data_dict)} 个合约的行情数据到数据完成部门")
+                # 直接转成列表，不组装字典
+                market_data_list = [result.__dict__ for result in step5_results]
+                await receive_market_data(market_data_list)
+                
+                logger.info(f"📤【数据处理管理员】已推送 {len(market_data_list)} 个合约的行情数据到数据完成部门")
             except Exception as e:
                 logger.error(f"❌【数据处理管理员】推送行情数据到数据完成部门失败: {e}")
             
