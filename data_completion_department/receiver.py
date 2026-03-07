@@ -1,6 +1,6 @@
 """
 数据完成部门 - 数据接收器
-只接收、存储数据，不做任何判断
+只接收、存储数据
 """
 from datetime import datetime
 from typing import Dict, Any
@@ -20,7 +20,7 @@ class DataCompletionReceiver:
         if not self._initialized:
             # 内存存储，只保留最新数据
             self.memory_store = {
-                'private_data': None,      # 私人数据（okx+binance）
+                'private_data': None,      # 私人数据（欧易成品/币安半成品）
                 'market_data': None,       # 行情数据
                 'all_received': []         # 接收记录
             }
@@ -29,18 +29,33 @@ class DataCompletionReceiver:
     async def receive_data(self, data: Dict[str, Any]):
         """
         统一数据接收接口
-        什么都不判断，只管存
+        根据数据特征判断存哪
         """
         try:
             received_at = datetime.now().isoformat()
             
-            # 根据数据内容简单判断存哪（但也不严格）
-            if 'total_contracts' in data:
+            # ===== 判断数据类型 =====
+            
+            # 1. 行情数据特征：exchange=public, data_type=market_data
+            if data.get('exchange') == 'public' and data.get('data_type') == 'market_data':
                 self.memory_store['market_data'] = {
                     'data': data,
                     'received_at': received_at
                 }
+                data_type = 'market_data'
+            
+            # 2. 私人数据特征：有交易所字段（okx/binance）
+            elif data.get('exchange') in ['okx', 'binance']:
+                self.memory_store['private_data'] = {
+                    'data': data,
+                    'received_at': received_at
+                }
+                data_type = 'private_data'
+            
+            # 3. 未知数据
             else:
+                data_type = 'unknown'
+                # 也可以存到 private_data 作为后备
                 self.memory_store['private_data'] = {
                     'data': data,
                     'received_at': received_at
@@ -48,7 +63,7 @@ class DataCompletionReceiver:
             
             # 记录最近10条
             self.memory_store['all_received'].append({
-                'type': 'unknown',
+                'type': data_type,
                 'received_at': received_at
             })
             if len(self.memory_store['all_received']) > 10:
