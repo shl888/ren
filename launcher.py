@@ -11,6 +11,11 @@ import signal
 from datetime import datetime
 import threading
 
+# ==================== 强制启动标记 ====================
+print("🚨🚨🚨 LAUNCHER.PY 开始执行", file=sys.stderr)
+sys.stderr.flush()  # 强制刷新，确保输出
+# ====================================================
+
 # ==================== 新增：加载环境变量 ====================
 from dotenv import load_dotenv
 load_dotenv()  # 从 .env 文件加载环境变量
@@ -89,6 +94,9 @@ async def main():
         datefmt='%Y-%m-%d %H:%M:%S',
         stream=sys.stdout  # 这一行是为了适配railway服务器日志显示逻辑
     )
+    
+    # 强制输出启动标记到日志
+    logger.info("🚨🚨🚨 MAIN 函数开始执行")
     
     # 启动保活服务
     start_keep_alive_background()
@@ -244,9 +252,14 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安资产获取任务失败: {e}")
         
+        logger.info("✅ 第14步完成，准备进入第15步")  # ← 确认执行到这里
+        
         # ==================== 15. 启动数据完成模块 ====================
-        logger.info("【📦】启动数据完成模块...")
+        logger.info("【📦】========== 开始启动数据完成模块 ==========")
+        logger.info("【📦】尝试导入数据完成模块...")
+        
         try:
+            # 尝试导入
             from data_completion_department import (
                 get_receiver,
                 DataDetector,
@@ -255,42 +268,52 @@ async def main():
                 BinanceRepairArea,
                 OkxMissingRepair,
             )
+            logger.info("✅ 成功导入数据完成模块")
             
-            # 1. 获取接收器实例（已有，但需要确保它被正确引用）
+            # 1. 获取接收器实例
+            logger.info("【📦】获取接收器实例...")
             data_receiver = get_receiver()
             logger.info("✅ 数据接收器已获取")
             
-            # 2. 创建数据库实例（会自己检测建表）
+            # 2. 创建数据库实例
+            logger.info("【📦】创建数据库实例...")
             database = Database()
             logger.info("✅ 数据库存储区已初始化")
             
-            # 3. 创建调度器（传入大脑实例）
+            # 3. 创建调度器
+            logger.info("【📦】创建调度器...")
             scheduler = Scheduler(brain.data_manager)
             logger.info("✅ 调度区已初始化")
             
             # 4. 创建检测区
+            logger.info("【📦】创建检测区...")
             detector = DataDetector(scheduler)
             logger.info("✅ 检测区已初始化")
             
             # 5. 创建修复区实例
+            logger.info("【📦】创建币安修复区...")
             binance_repair = BinanceRepairArea(scheduler)
-            okx_repair = OkxMissingRepair(scheduler)
-            logger.info("✅ 修复区已初始化")
+            logger.info("✅ 币安修复区已初始化")
             
-            # 6. 建立连接（关键！）
-            # 接收器推送数据给三个地方
+            logger.info("【📦】创建欧易修复区...")
+            okx_repair = OkxMissingRepair(scheduler)
+            logger.info("✅ 欧易修复区已初始化")
+            
+            # 6. 建立连接
+            logger.info("【📦】建立接收器连接...")
             data_receiver.subscribe(detector.handle_store_snapshot)
             data_receiver.subscribe(binance_repair.handle_store_snapshot)
             data_receiver.subscribe(okx_repair.handle_store_snapshot)
             logger.info("✅ 接收器已连接检测区和修复区")
             
             # 7. 调度器连接下游模块
+            logger.info("【📦】调度器连接下游...")
             scheduler.set_database(database)
             scheduler.set_repair_binance(binance_repair)
             scheduler.set_repair_okx(okx_repair)
             logger.info("✅ 调度器已连接数据库和修复区")
             
-            # 8. 保存到brain实例，方便其他地方访问
+            # 8. 保存到brain实例
             brain.data_receiver = data_receiver
             brain.data_detector = detector
             brain.data_scheduler = scheduler
@@ -299,9 +322,11 @@ async def main():
             brain.okx_repair = okx_repair
             
             logger.info("✅ 数据完成模块全部启动完成")
+            logger.info("【📦】========== 数据完成模块启动结束 ==========")
             
         except ImportError as e:
             logger.error(f"❌ 无法导入数据完成模块: {e}")
+            logger.error(f"❌ 当前Python路径: {sys.path}")
             logger.error(traceback.format_exc())
         except Exception as e:
             logger.error(f"❌ 启动数据完成模块失败: {e}")
@@ -341,4 +366,6 @@ async def main():
             await brain.shutdown()
 
 if __name__ == "__main__":
+    print("🚨🚨🚨 进入 __main__", file=sys.stderr)
+    sys.stderr.flush()
     asyncio.run(main())
