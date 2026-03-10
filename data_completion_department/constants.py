@@ -124,27 +124,47 @@ FIELD_EXCHANGE = "交易所"              # 交易所名称
 # ----- 开仓信息 -----
 FIELD_OPEN_CONTRACT = "开仓合约名"      # 开仓合约名，如 BTCUSDT
 FIELD_OPEN_PRICE = "开仓价"             # 开仓价格
+FIELD_OPEN_DIRECTION = "开仓方向"       # 开仓方向：LONG/SHORT  ← 新增！
 FIELD_POSITION_SIZE = "持仓币数"        # 持仓数量（币）
+FIELD_POSITION_CONTRACTS = "持仓张数"   # 持仓数量（张）
+FIELD_CONTRACT_VALUE = "合约面值"       # 每张合约的面值
 FIELD_LEVERAGE = "杠杆"                 # 杠杆倍数
+FIELD_OPEN_POSITION_VALUE = "开仓价仓位价值"  # 开仓价 * 持仓币数
+FIELD_OPEN_MARGIN = "开仓保证金"        # 开仓保证金
 
-# ----- 保证金相关 -----
+# ----- 标记价相关 -----
+FIELD_MARK_PRICE = "标记价"             # 当前标记价格
+FIELD_MARK_POSITION_VALUE = "标记价仓位价值"  # 标记价 * 持仓币数
 FIELD_MARK_MARGIN = "标记价保证金"       # 基于标记价计算的保证金
+FIELD_MARK_PNL = "标记价浮盈"           # 基于标记价的浮动盈亏
+FIELD_MARK_PNL_PERCENT = "标记价浮盈百分比"  # 基于标记价的盈亏百分比
 
-# ----- 平仓信息 -----
-FIELD_CLOSE_TIME = "平仓时间"           # 平仓时间，有值表示已平仓
+# ----- 最新价相关 -----
+FIELD_LATEST_PRICE = "最新价"           # 当前最新成交价
+FIELD_LATEST_POSITION_VALUE = "最新价仓位价值"  # 最新价 * 持仓币数
+FIELD_LATEST_MARGIN = "最新价保证金"    # 基于最新价计算的保证金
+FIELD_LATEST_PNL = "最新价浮盈"         # 基于最新价的浮动盈亏
+FIELD_LATEST_PNL_PERCENT = "最新价浮盈百分比"  # 基于最新价的盈亏百分比
+
+# ----- 涨跌盈亏幅 -----
+FIELD_MARK_PNL_PERCENT = "标记价涨跌盈亏幅"    # 基于标记价的盈亏百分比
+FIELD_LATEST_PNL_PERCENT = "最新价涨跌盈亏幅"  # 基于最新价的盈亏百分比
 
 # ----- 资金费相关 -----
 FIELD_FUNDING_THIS = "本次资金费"        # 最近一次资金费
 FIELD_FUNDING_TOTAL = "累计资金费"       # 累计资金费总和
 FIELD_FUNDING_COUNT = "资金费结算次数"    # 资金费结算次数
 FIELD_FUNDING_TIME = "本次资金费结算时间" # 最近一次结算时间
+FIELD_AVG_FUNDING_RATE = "平均资金费率"  # 平均资金费率
+
+# ----- 平仓信息 -----
+FIELD_CLOSE_TIME = "平仓时间"           # 平仓时间，有值表示已平仓
 
 # ========== 扩展字段（可根据需要添加）==========
 """
 随着项目发展，可能会需要更多字段常量，可以在这里统一添加
 例如：
-    FIELD_OPEN_DIRECTION = "开仓方向"      # LONG/SHORT
-    FIELD_MARK_PRICE = "标记价"             # 当前标记价格
-    FIELD_LATEST_PRICE = "最新价"           # 当前最新成交价
+    FIELD_STOP_LOSS = "止损触发价"
+    FIELD_TAKE_PROFIT = "止盈触发价"
     ...
 """
