@@ -8,12 +8,10 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-
 class PrivateDataScheduler:
     """私人数据调度器 - 真正的调度中心"""
 
     def __init__(self):
-        # 不再依赖外部传入brain，直接调用全局函数
         self.step1 = None
         self.step2 = None
         self.step3 = None
@@ -23,7 +21,7 @@ class PrivateDataScheduler:
         # Step1输出队列：Step1提取后推到这里，调度器从这里取
         self.step1_output_queue = asyncio.Queue()
         
-        # ===== 添加就绪事件 =====
+        # 添加就绪事件
         self._ready = asyncio.Event()
         
         logger.info("✅【调度器】实例已创建")
@@ -50,7 +48,7 @@ class PrivateDataScheduler:
         self.running = True
         logger.info("🚀【调度器】已启动 - step1, step2, step3, step4 已就绪")
         
-        # ===== 标记就绪 =====
+        # 标记就绪
         self._ready.set()
         
         # 启动流水线工作线程
@@ -84,14 +82,14 @@ class PrivateDataScheduler:
                 # 从Step1输出队列取数据
                 extracted = await asyncio.wait_for(self.step1_output_queue.get(), timeout=1.0)
                 
-                # ===== 优化：获取事件类型（兼容币安和欧易）=====
+                # 获取事件类型（兼容币安和欧易）
                 event_type = extracted.get('event_type')
                 if not event_type:
                     event_type = extracted.get('data_type', 'unknown')
                 
                 logger.info(f"✅【调度器】从队列取到数据！类型: {event_type}, 交易所: {extracted.get('交易所')}")
                 
-                # ===== 步骤2：融合更新 =====
+                # 步骤2：融合更新
                 container = self.step2.process(extracted)
                 if not container:
                     logger.warning(f"⚠️【调度器】Step2返回空，跳过")
@@ -99,15 +97,15 @@ class PrivateDataScheduler:
                     continue
                 logger.info(f"✅【调度器】Step2完成")
 
-                # ===== 步骤3：计算衍生字段 =====
+                # 步骤3：计算衍生字段
                 self.step3.process(container)
                 logger.info(f"✅【调度器】Step3完成")
 
-                # ===== 步骤4：资金费处理 =====
+                # 步骤4：资金费处理
                 final_container = self.step4.process(container)
                 logger.info(f"✅【调度器】Step4完成")
 
-                # ===== 只推送数据完成部门，不再推送大脑 =====
+                # 推送数据完成部门
                 await self._push_to_data_completion(final_container, event_type)
                 
                 self.step1_output_queue.task_done()
@@ -119,9 +117,6 @@ class PrivateDataScheduler:
                 import traceback
                 logger.error(traceback.format_exc())
 
-    # ✅ 完全移除 _push_to_brain 方法
-    
-    # ✅ 修改：推送数据到数据完成部门 - 使用 receive_private_data
     async def _push_to_data_completion(self, container: Dict[str, Any], event_type: str):
         """推送数据到数据完成部门的接收器"""
         try:
@@ -144,8 +139,28 @@ class PrivateDataScheduler:
                 "timestamp": datetime.now().isoformat()
             }
             
-            # ⭐ 修改：使用 receive_private_data
             from data_completion_department import receive_private_data
             await receive_private_data(completion_data)
             
-     
+            logger.info(f"✅【调度器】已推送 {exchange} 数据到数据完成部门")
+            
+        except Exception as e:
+            logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
+    
+    async def wait_until_ready(self):
+        """等待调度器完全就绪"""
+        await self._ready.wait()
+
+
+# ========== 单例模式 ==========
+_scheduler_instance: Optional[PrivateDataScheduler] = None
+
+
+def get_scheduler() -> PrivateDataScheduler:
+    """获取调度器单例"""
+    global _scheduler_instance
+    if _scheduler_instance is None:
+        _scheduler_instance = PrivateDataScheduler()
+        logger.info("🔥【调度器】单例已创建")
+    
+    return _scheduler_instance
