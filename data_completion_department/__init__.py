@@ -28,19 +28,16 @@ data_completion_department/
         └── missing_repair.py
 
 【对外暴露接口】
-- receive_private_data()  - 接收私人数据（供外部模块调用）
-- receive_market_data()   - 接收行情数据（供外部模块调用）
-- get_receiver()          - 获取接收器实例（供查询接口使用）
-
-【使用示例】
-    from data_completion_department import receive_private_data
-    
-    # 接收私人数据
-    await receive_private_data({
-        'exchange': 'binance',
-        'data_type': 'position',
-        'data': {...}
-    })
+- receive_private_data()  - 接收私人数据
+- receive_market_data()   - 接收行情数据
+- get_receiver()          - 获取接收器实例
+- DataDetector            - 检测区类
+- Scheduler               - 调度区类
+- Database                - 数据库类
+- BinanceRepairArea       - 币安修复区入口
+- BinanceSemiRepair       - 币安半成品修复
+- BinanceMissingRepair    - 币安持仓缺失修复
+- OkxMissingRepair        - 欧意持仓缺失修复
 ==================================================
 """
 
@@ -48,7 +45,15 @@ from .receiver import receive_private_data, receive_market_data, get_receiver
 from .detector import DataDetector
 from .scheduler import Scheduler
 from .database import Database
-from .repair import BinanceRepairArea, BinanceSemiRepair, BinanceMissingRepair, OkxMissingRepair
+
+# 从 repair 包导入所有修复类
+from .repair import (
+    BinanceRepairArea,
+    BinanceSemiRepair,
+    BinanceMissingRepair,
+    OkxMissingRepair
+)
+
 from .constants import (
     TAG_CLOSED, TAG_EMPTY, TAG_COMPLETE,
     INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED,
@@ -72,10 +77,10 @@ __all__ = [
     'DataDetector',
     'Scheduler',
     'Database',
-    'BinanceRepairArea',      # ← 新增
-    'BinanceSemiRepair',      # ← 新增
-    'BinanceMissingRepair',   # ← 新增
-    'OkxMissingRepair',       # ← 新增
+    'BinanceRepairArea',      # 币安修复区入口
+    'BinanceSemiRepair',      # 币安半成品修复
+    'BinanceMissingRepair',   # 币安持仓缺失修复
+    'OkxMissingRepair',       # 欧意持仓缺失修复
     
     # 标签常量
     'TAG_CLOSED',
