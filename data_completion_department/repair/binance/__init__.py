@@ -24,6 +24,11 @@
 - 两个修复文件共用同一份门外存储区快照
 - 门外标签根据类型分发给对应的修复文件
 - "币安已平仓"标签同时发给两个文件（用于关闭修复流程）
+
+【导出内容】
+- BinanceRepairArea    - 币安修复区入口类
+- BinanceSemiRepair    - 币安半成品修复类
+- BinanceMissingRepair - 币安持仓缺失修复类
 ==================================================
 """
 
@@ -32,7 +37,7 @@ from typing import Dict
 from .semi_repair import BinanceSemiRepair
 from .missing_repair import BinanceMissingRepair
 
-# 导入常量（可选，如果后续要判断标签）
+# 导入常量
 from ...constants import (
     INFO_BINANCE_SEMI,
     INFO_BINANCE_MISSING,
@@ -122,7 +127,7 @@ class BinanceRepairArea:
             
         logger.info(f"📨 币安修复区收到标签: {info}")
         
-        # 使用常量判断（避免手写字符串错误）
+        # 使用常量判断
         if info == INFO_BINANCE_SEMI:
             await self.semi_repair.handle_info(info)
             
@@ -139,4 +144,8 @@ class BinanceRepairArea:
 
 
 # 导出方便外部导入
-__all__ = ['BinanceRepairArea', 'BinanceSemiRepair', 'BinanceMissingRepair']
+__all__ = [
+    'BinanceRepairArea',      # 币安修复区入口
+    'BinanceSemiRepair',      # 币安半成品修复
+    'BinanceMissingRepair'    # 币安持仓缺失修复
+]
