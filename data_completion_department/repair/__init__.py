@@ -6,27 +6,29 @@
 方便外部模块（如调度器）导入。
 
 【导出内容】
+- BinanceRepairArea    - 币安修复区入口（统一接收数据和标签）
 - BinanceSemiRepair    - 币安半成品修复类
 - BinanceMissingRepair - 币安持仓缺失修复类
 - OkxMissingRepair     - 欧意持仓缺失修复类
 
 【使用示例】
     from data_completion_department.repair import (
+        BinanceRepairArea,
         BinanceSemiRepair,
         BinanceMissingRepair,
         OkxMissingRepair
     )
     
-    # 或者直接导入整个修复区
-    from data_completion_department import repair
+    # 创建币安修复区入口
+    binance_repair = BinanceRepairArea(scheduler)
 ==================================================
 """
 
-from .binance.semi_repair import BinanceSemiRepair
-from .binance.missing_repair import BinanceMissingRepair
-from .okx.missing_repair import OkxMissingRepair
+from .binance import BinanceRepairArea, BinanceSemiRepair, BinanceMissingRepair
+from .okx import OkxMissingRepair
 
 __all__ = [
+    'BinanceRepairArea',      # 币安修复区入口（新增！）
     'BinanceSemiRepair',      # 币安半成品修复
     'BinanceMissingRepair',   # 币安持仓缺失修复
     'OkxMissingRepair'        # 欧意持仓缺失修复
