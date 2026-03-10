@@ -1,5 +1,5 @@
 """
-调度器 - 负责启动步骤1-2-3-4，接收步骤1的输出，执行步骤2-3-4，推送到大脑和数据完成部门
+调度器 - 负责启动步骤1-2-3-4，接收步骤1的输出，执行步骤2-3-4，推送到数据完成部门
 """
 import logging
 import asyncio
@@ -7,14 +7,6 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
-
-# ===== 导入大脑接收函数（如果可用）=====
-try:
-    from smart_brain import receive_private_data as brain_receive_data
-    logger.info("✅【调度器】大脑模块已导入")
-except ImportError:
-    brain_receive_data = None
-    logger.warning("⚠️【调度器】大脑模块未安装，数据将无处可推")
 
 
 class PrivateDataScheduler:
@@ -84,7 +76,7 @@ class PrivateDataScheduler:
             logger.error(f"❌【调度器】Step1未初始化！无法处理数据: {stored_item.get('data_type')}")
 
     async def _pipeline_worker(self):
-        """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给大脑和数据完成部门"""
+        """流水线工作线程：从Step1输出队列取数据，走step2-3-4，推给数据完成部门"""
         logger.info("🏭【流水线工作线程】已启动")
         
         while self.running:
@@ -115,10 +107,7 @@ class PrivateDataScheduler:
                 final_container = self.step4.process(container)
                 logger.info(f"✅【调度器】Step4完成")
 
-                # ===== 推送大脑 =====
-                await self._push_to_brain(final_container)
-                
-                # ===== 推送数据完成部门 =====
+                # ===== 只推送数据完成部门，不再推送大脑 =====
                 await self._push_to_data_completion(final_container, event_type)
                 
                 self.step1_output_queue.task_done()
@@ -130,22 +119,7 @@ class PrivateDataScheduler:
                 import traceback
                 logger.error(traceback.format_exc())
 
-    async def _push_to_brain(self, container: Dict[str, Any]):
-        """推送成品数据到大脑（使用全局函数，不依赖brain实例）"""
-        if brain_receive_data is None:
-            logger.warning(f"⚠️【调度器】大脑未安装，数据丢弃: {container.get('交易所')}")
-            return
-
-        try:
-            await brain_receive_data({
-                "exchange": container.get("交易所", "unknown"),
-                "data_type": "user_summary",
-                "data": container,
-                "timestamp": datetime.now().isoformat()
-            })
-            logger.info(f"✅【调度器】已推送 {container.get('交易所')} 数据到大脑")
-        except Exception as e:
-            logger.error(f"❌【调度器】推送大脑失败: {e}")
+    # ✅ 完全移除 _push_to_brain 方法
     
     # ✅ 修改：推送数据到数据完成部门 - 使用 receive_private_data
     async def _push_to_data_completion(self, container: Dict[str, Any], event_type: str):
@@ -174,26 +148,4 @@ class PrivateDataScheduler:
             from data_completion_department import receive_private_data
             await receive_private_data(completion_data)
             
-            logger.info(f"✅【调度器】已推送 {exchange} 数据到数据完成部门")
-            
-        except Exception as e:
-            logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
-    
-    # ===== 新增：等待就绪的方法 =====
-    async def wait_until_ready(self):
-        """等待调度器完全就绪"""
-        await self._ready.wait()
-
-
-# ========== 单例模式 ==========
-_scheduler_instance: Optional[PrivateDataScheduler] = None
-
-
-def get_scheduler() -> PrivateDataScheduler:
-    """获取调度器单例（不再接受brain参数）"""
-    global _scheduler_instance
-    if _scheduler_instance is None:
-        _scheduler_instance = PrivateDataScheduler()
-        logger.info("🔥【调度器】单例已创建")
-    
-    return _scheduler_instance
+     
