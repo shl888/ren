@@ -48,6 +48,7 @@ from .receiver import receive_private_data, receive_market_data, get_receiver
 from .detector import DataDetector
 from .scheduler import Scheduler
 from .database import Database
+from .repair import BinanceRepairArea, BinanceSemiRepair, BinanceMissingRepair, OkxMissingRepair
 from .constants import (
     TAG_CLOSED, TAG_EMPTY, TAG_COMPLETE,
     INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED,
@@ -71,8 +72,12 @@ __all__ = [
     'DataDetector',
     'Scheduler',
     'Database',
+    'BinanceRepairArea',      # ← 新增
+    'BinanceSemiRepair',      # ← 新增
+    'BinanceMissingRepair',   # ← 新增
+    'OkxMissingRepair',       # ← 新增
     
-    # 标签常量（供外部使用）
+    # 标签常量
     'TAG_CLOSED',
     'TAG_EMPTY',
     'TAG_COMPLETE',
