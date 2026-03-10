@@ -244,6 +244,69 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安资产获取任务失败: {e}")
         
+        # ==================== 15. 启动数据完成模块 ====================
+        logger.info("【📦】启动数据完成模块...")
+        try:
+            from data_completion_department import (
+                get_receiver,
+                DataDetector,
+                Scheduler,
+                Database,
+                BinanceRepairArea,
+                OkxMissingRepair,
+            )
+            
+            # 1. 获取接收器实例（已有，但需要确保它被正确引用）
+            data_receiver = get_receiver()
+            logger.info("✅ 数据接收器已获取")
+            
+            # 2. 创建数据库实例（会自己检测建表）
+            database = Database()
+            logger.info("✅ 数据库存储区已初始化")
+            
+            # 3. 创建调度器（传入大脑实例）
+            scheduler = Scheduler(brain.data_manager)
+            logger.info("✅ 调度区已初始化")
+            
+            # 4. 创建检测区
+            detector = DataDetector(scheduler)
+            logger.info("✅ 检测区已初始化")
+            
+            # 5. 创建修复区实例
+            binance_repair = BinanceRepairArea(scheduler)
+            okx_repair = OkxMissingRepair(scheduler)
+            logger.info("✅ 修复区已初始化")
+            
+            # 6. 建立连接（关键！）
+            # 接收器推送数据给三个地方
+            data_receiver.subscribe(detector.handle_store_snapshot)
+            data_receiver.subscribe(binance_repair.handle_store_snapshot)
+            data_receiver.subscribe(okx_repair.handle_store_snapshot)
+            logger.info("✅ 接收器已连接检测区和修复区")
+            
+            # 7. 调度器连接下游模块
+            scheduler.set_database(database)
+            scheduler.set_repair_binance(binance_repair)
+            scheduler.set_repair_okx(okx_repair)
+            logger.info("✅ 调度器已连接数据库和修复区")
+            
+            # 8. 保存到brain实例，方便其他地方访问
+            brain.data_receiver = data_receiver
+            brain.data_detector = detector
+            brain.data_scheduler = scheduler
+            brain.data_database = database
+            brain.binance_repair = binance_repair
+            brain.okx_repair = okx_repair
+            
+            logger.info("✅ 数据完成模块全部启动完成")
+            
+        except ImportError as e:
+            logger.error(f"❌ 无法导入数据完成模块: {e}")
+            logger.error(traceback.format_exc())
+        except Exception as e:
+            logger.error(f"❌ 启动数据完成模块失败: {e}")
+            logger.error(traceback.format_exc())
+        
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
@@ -260,7 +323,7 @@ async def main():
                 else:
                     logger.info(f"  • {exchange}: ⏳ 连接中...")
         
-        # ==================== 15. 运行大脑 ====================
+        # ==================== 16. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
