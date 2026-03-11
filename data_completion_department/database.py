@@ -95,6 +95,9 @@ class Database:
         参数说明：
             tag: 数据标签，只能是"已平仓"或"持仓完整"
             data: 完整的原始数据，字段全是中文
+        
+        处理逻辑：
+            根据tag的值，执行不同的数据库操作
         ==================================================
         
         :param tag: 数据标签（已平仓/持仓完整）
@@ -132,15 +135,21 @@ class Database:
         做了两件事，顺序很重要：
         1. 先写入历史表（永久保存）
         2. 再清理持仓表（只清理这个交易所）
+        
+        日志输出：
+            - 成功写入历史区欧易数据 / 成功写入历史区币安数据
+            - 成功清除持仓区欧易数据 / 成功清除持仓区币安数据
         ==================================================
         
         :param data: 已平仓的完整数据
         :param exchange: 交易所名称（binance/okx）
         """
         # ----- 第1步：写入历史表（追加）-----
+        # 已平仓数据永久保存到历史区，用于收益统计和分析
         await self._insert_closed_position(data)
         
         # ----- 第2步：清理持仓表（只清理该交易所）-----
+        # 该交易所的持仓已平仓，从活跃持仓表中移除
         await self._delete_active_position(exchange)
         
         logger.info(f"✅ 已平仓处理完成: {exchange}")
@@ -150,6 +159,14 @@ class Database:
         处理持仓完整数据
         ==================================================
         做一件事：覆盖更新到持仓区
+        
+        日志输出：
+            - 成功写入持仓区欧易数据 / 成功写入持仓区币安数据
+        
+        注意：
+            - 持仓区使用覆盖更新（INSERT OR REPLACE）
+            - 每个交易所只有一条记录，新数据会替换旧数据
+            - 数据更新时不输出日志（避免日志过多）
         ==================================================
         
         :param data: 持仓完整的完整数据
@@ -170,6 +187,10 @@ class Database:
         
         id生成规则：
             如果数据里没有id，就用"交易所_合约名_开仓时间"拼一个
+        
+        日志说明：
+            - 首次写入输出：成功写入持仓区{交易所}数据
+            - 覆盖更新不输出日志（避免刷屏）
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -210,7 +231,11 @@ class Database:
         
         # ----- 第3步：执行SQL -----
         self._run_sql(sql, values)
-        logger.debug(f"💾 持仓已保存: {data.get('交易所')} - {data.get('开仓合约名')}")
+        
+        # ----- 第4步：输出成功日志 -----
+        exchange = data.get('交易所', 'unknown')
+        contract = data.get('开仓合约名', 'unknown')
+        logger.info(f"✅ 成功写入持仓区{exchange}数据 - {contract}")
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
         """
@@ -218,6 +243,14 @@ class Database:
         ==================================================
         SQL说明：
             使用 INSERT 实现追加写入
+        
+        特点：
+            - 历史表只追加，不覆盖
+            - 每条已平仓记录永久保存
+            - 用于后续收益统计和交易分析
+        
+        日志输出：
+            - 成功写入历史区{交易所}数据
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -248,7 +281,12 @@ class Database:
         logger.debug(f"📝 历史表 值: {values}")
         
         self._run_sql(sql, values)
-        logger.debug(f"📜 历史已写入: {data.get('交易所')} - {data.get('开仓合约名')} 平仓时间:{data.get('平仓时间')}")
+        
+        # 输出成功日志
+        exchange = data.get('交易所', 'unknown')
+        contract = data.get('开仓合约名', 'unknown')
+        close_time = data.get('平仓时间', 'unknown')
+        logger.info(f"✅ 成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
     async def _delete_active_position(self, exchange: str):
         """
@@ -256,6 +294,12 @@ class Database:
         ==================================================
         重要警告：
             必须传入exchange参数，绝对不能删除所有持仓
+        
+        使用场景：
+            - 已平仓时清理对应交易所的持仓记录
+        
+        日志输出：
+            - 成功清除持仓区{交易所}数据
         ==================================================
         
         :param exchange: 'binance' 或 'okx'，不能为空
@@ -266,7 +310,9 @@ class Database:
         
         sql = "DELETE FROM active_positions WHERE 交易所 = ?"
         self._run_sql(sql, [exchange])
-        logger.info(f"🧹 持仓已清理: {exchange}")
+        
+        # 输出成功日志
+        logger.info(f"✅ 成功清除持仓区{exchange}数据")
     
     # ==================== SQL执行基础方法 ====================
     # 【最终修复】2024-03-11 - 强制所有值转字符串
@@ -295,35 +341,38 @@ class Database:
         if params is None:
             params = []
         
-        # ========== 调试信息：打印原始参数 ==========
-        logger.info("=" * 60)
-        logger.info("🔍【调试】开始执行SQL，打印所有原始参数")
-        logger.info(f"📝 SQL: {sql}")
-        logger.info(f"📊 参数总数: {len(params)}")
-        
-        for i, p in enumerate(params):
-            logger.info(f"  🔹 参数[{i}]: 值={p}, 类型={type(p).__name__}")
+        # ========== 【调试代码】如需详细调试，取消下面的注释 ==========
+        # logger.info("=" * 60)
+        # logger.info("🔍【调试】开始执行SQL，打印所有原始参数")
+        # logger.info(f"📝 SQL: {sql}")
+        # logger.info(f"📊 参数总数: {len(params)}")
+        # 
+        # for i, p in enumerate(params):
+        #     logger.info(f"  🔹 参数[{i}]: 值={p}, 类型={type(p).__name__}")
+        # 
+        # logger.info("🔄【调试】强制转换所有值为字符串...")
+        # ========== 【调试代码结束】 ==========
         
         # ========== 强制全部转字符串 ==========
         args = []
         
-        logger.info("🔄【调试】强制转换所有值为字符串...")
-        
         for idx, p in enumerate(params):
-            logger.info(f"  🔸 处理参数[{idx}]: 原始值={p}, 原始类型={type(p).__name__}")
+            # 【调试代码】如需查看每个参数的转换过程，取消下面的注释
+            # logger.info(f"  🔸 处理参数[{idx}]: 原始值={p}, 原始类型={type(p).__name__}")
             
             if p is None:
                 # None值保持为null
                 args.append({"type": "null", "value": None})
-                logger.info(f"    ✅ 转换结果: null")
+                # 【调试代码】logger.info(f"    ✅ 转换结果: null")
             else:
                 # 所有非空值强制转字符串
                 str_value = str(p)
                 args.append({"type": "text", "value": str_value})
-                logger.info(f"    ✅ 强制转字符串: '{str_value}'")
+                # 【调试代码】logger.info(f"    ✅ 强制转字符串: '{str_value}'")
         
-        # ========== 打印转换统计 ==========
-        logger.info(f"📊 参数转换完成: 共 {len(args)} 个参数")
+        # ========== 【调试代码】打印转换统计 ==========
+        # logger.info(f"📊 参数转换完成: 共 {len(args)} 个参数")
+        # ========== 【调试代码结束】 ==========
         
         # ========== 构建请求体 ==========
         payload = {
@@ -338,20 +387,22 @@ class Database:
             ]
         }
         
-        # ========== 打印请求体预览 ==========
-        logger.info("📤【调试】发送到Turso的请求体预览:")
-        try:
-            # 只打印args部分，避免日志过大
-            args_summary = []
-            for i, arg in enumerate(args):
-                args_summary.append(f"参数[{i}]: {arg}")
-            logger.info(f"参数列表: {args_summary}")
-        except Exception as e:
-            logger.error(f"无法打印参数预览: {e}")
+        # ========== 【调试代码】打印请求体预览 ==========
+        # logger.info("📤【调试】发送到Turso的请求体预览:")
+        # try:
+        #     args_summary = []
+        #     for i, arg in enumerate(args):
+        #         args_summary.append(f"参数[{i}]: {arg}")
+        #     logger.info(f"参数列表: {args_summary}")
+        # except Exception as e:
+        #     logger.error(f"无法打印参数预览: {e}")
+        # ========== 【调试代码结束】 ==========
         
         # ========== 发送HTTP请求 ==========
         try:
-            logger.info("📡【调试】发送HTTP请求到Turso...")
+            # 【调试代码】如需查看请求发送过程，取消下面的注释
+            # logger.info("📡【调试】发送HTTP请求到Turso...")
+            
             response = requests.post(
                 f"{self.url}/v2/pipeline",
                 headers={
@@ -362,8 +413,8 @@ class Database:
                 timeout=10
             )
             
-            # ========== 打印响应信息 ==========
-            logger.info(f"📥【调试】收到响应: 状态码={response.status_code}")
+            # 【调试代码】打印响应状态
+            # logger.info(f"📥【调试】收到响应: 状态码={response.status_code}")
             
             if response.status_code != 200:
                 try:
@@ -374,7 +425,7 @@ class Database:
             
             response.raise_for_status()
             
-            logger.info("✅【调试】请求成功")
+            # 【调试代码】logger.info("✅【调试】请求成功")
             return response.json()
             
         except requests.exceptions.Timeout:
@@ -386,8 +437,8 @@ class Database:
         except Exception as e:
             logger.error(f"❌ 未知错误: {e}")
             raise
-        finally:
-            logger.info("=" * 60)
+        # finally:
+        #     【调试代码】logger.info("=" * 60)
     
     # ==================== 连接测试 ====================
     
