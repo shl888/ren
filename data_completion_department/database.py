@@ -16,10 +16,13 @@
 1. active_positions（持仓表）
    - 作用：存储当前正在持仓的数据
    - 特点：覆盖更新，每个交易所只能有一条数据
+   - id生成：交易所_合约名_开仓时间
 
 2. closed_positions（历史表）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
+   - id生成：交易所_合约名_平仓时间（2024-03-11修复）
+   - 幂等性：根据id去重，避免20秒倒计时期间的重复写入
 
 【调用关系】
 调度器 (scheduler.py) 
@@ -133,19 +136,20 @@ class Database:
         处理已平仓数据
         ==================================================
         做了两件事，顺序很重要：
-        1. 先写入历史表（永久保存）
+        1. 先写入历史表（永久保存，带幂等性保护）
         2. 再清理持仓表（只清理这个交易所）
         
         日志输出：
             - 成功写入历史区欧易数据 / 成功写入历史区币安数据
             - 成功清除持仓区欧易数据 / 成功清除持仓区币安数据
+            - 或跳过写入（如果id已存在）
         ==================================================
         
         :param data: 已平仓的完整数据
         :param exchange: 交易所名称（binance/okx）
         """
-        # ----- 第1步：写入历史表（追加）-----
-        # 已平仓数据永久保存到历史区，用于收益统计和分析
+        # ----- 第1步：写入历史表（追加，带幂等性保护）-----
+        # 已平仓数据永久保存到历史区，id=交易所_合约名_平仓时间
         await self._insert_closed_position(data)
         
         # ----- 第2步：清理持仓表（只清理该交易所）-----
@@ -187,6 +191,7 @@ class Database:
         
         id生成规则：
             如果数据里没有id，就用"交易所_合约名_开仓时间"拼一个
+            例如：okx_BTCUSDT_2026.03.11 18:17:00
         
         日志说明：
             - 首次写入输出：成功写入持仓区{交易所}数据
@@ -196,12 +201,12 @@ class Database:
         :param data: 数据字典，key必须全是中文
         """
         # ----- 第1步：确保数据有id字段 -----
-        if 'id' not in data:
+        if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
             open_time = data.get('开仓时间', '')
             data['id'] = f"{exchange}_{contract}_{open_time}"
-            logger.debug(f"🔑 生成id: {data['id']}")
+            logger.debug(f"🔑 持仓表生成id: {data['id']}")
         
         # ----- 第2步：构建SQL语句 -----
         fields = list(data.keys())
@@ -239,54 +244,89 @@ class Database:
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
         """
-        历史区：追加写入
+        历史区：追加写入（带幂等性保护）
         ==================================================
-        SQL说明：
-            使用 INSERT 实现追加写入
+        【防重复逻辑 - 2024-03-11新增】
+        使用 id 字段（交易所_合约名_平仓时间）作为唯一键
+        写入前检查是否已存在相同 id，避免20秒倒计时期间的重复数据
         
-        特点：
-            - 历史表只追加，不覆盖
-            - 每条已平仓记录永久保存
-            - 用于后续收益统计和交易分析
+        【id 生成规则】
+        历史区 id = 交易所_合约名_平仓时间
+        例如：okx_BTCUSDT_2026.03.11 18:17:00
+        【注意】与持仓区不同，持仓区用的是开仓时间！
         
-        日志输出：
-            - 成功写入历史区{交易所}数据
+        【去重判断】
+        - 如果 id 已存在 → 跳过写入（重复数据），输出日志：⏭️ 历史区已存在记录，跳过写入
+        - 如果 id 不存在 → 正常写入（新记录），输出日志：✅ 成功写入历史区...
         ==================================================
         
         :param data: 数据字典，key必须全是中文
         """
+        # ========== 第1步：确保数据有 id 字段（用平仓时间！）==========
+        if 'id' not in data or not data['id']:
+            exchange = data.get('交易所', 'unknown')
+            contract = data.get('开仓合约名', 'unknown')
+            # 【关键】历史区用平仓时间，不是开仓时间！这是与持仓区的区别
+            close_time = data.get('平仓时间', '')
+            data['id'] = f"{exchange}_{contract}_{close_time}"
+            logger.debug(f"🔑 历史表生成id: {data['id']}")
+        
+        record_id = data['id']
+        
+        # ========== 第2步：检查是否已存在相同 id（幂等性保护）==========
+        if self._check_exists_by_id(record_id):
+            logger.info(f"⏭️ 历史区已存在记录，跳过写入: {record_id}")
+            return
+        
+        # ========== 第3步：构建SQL并写入 ==========
         fields = list(data.keys())
-        
-        logger.info(f"📊 历史表 - 字段数量: {len(fields)}")
-        logger.info(f"📋 历史表 - 字段列表: {fields}")
-        
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
         
-        placeholders_count = len(placeholders.split(','))
-        logger.info(f"📊 历史表 - 占位符数量: {placeholders_count}")
-        logger.info(f"📊 历史表 - 值数量: {len(values)}")
-        
-        if len(fields) != len(values):
-            logger.error(f"❌ 历史表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
-            return
-        
-        sql = f"""
-            INSERT INTO closed_positions 
-            ({','.join(fields)}) 
-            VALUES ({placeholders})
-        """
+        sql = f"INSERT INTO closed_positions ({','.join(fields)}) VALUES ({placeholders})"
         
         logger.debug(f"📝 历史表 SQL: {sql}")
         logger.debug(f"📝 历史表 值: {values}")
         
         self._run_sql(sql, values)
         
-        # 输出成功日志
+        # ========== 第4步：输出成功日志 ==========
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         close_time = data.get('平仓时间', 'unknown')
         logger.info(f"✅ 成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+    
+    def _check_exists_by_id(self, record_id: str) -> bool:
+        """
+        根据 id 检查历史记录是否已存在
+        ==================================================
+        用于幂等性保护，避免重复写入
+        查询 closed_positions 表是否存在相同 id 的记录
+        
+        :param record_id: 记录唯一标识（交易所_合约名_平仓时间）
+        :return: True=已存在，False=不存在
+        """
+        if not record_id:
+            return False  # id为空无法判断，允许写入
+        
+        sql = "SELECT 1 FROM closed_positions WHERE id = ? LIMIT 1"
+        
+        try:
+            result = self._run_sql(sql, [record_id])
+            
+            if result and 'results' in result:
+                rows = result['results'][0].get('result', {}).get('rows', [])
+                exists = len(rows) > 0
+                if exists:
+                    logger.debug(f"🔍 发现重复记录 id: {record_id}")
+                return exists
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ 检查记录存在性失败: {e}")
+            # 出错时默认允许写入（避免阻塞正常流程）
+            return False
     
     async def _delete_active_position(self, exchange: str):
         """
