@@ -553,7 +553,7 @@ class Database:
             
             if 'closed_positions' not in tables:
                 self._create_closed_positions_table()
-                logger.info("✅ 创建历史区表 closed_positions")
+                logger.info("✅ 【数据库】创建历史区表 closed_positions")
             
             self._create_indexes()
             
