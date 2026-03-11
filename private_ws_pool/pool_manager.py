@@ -33,6 +33,14 @@ class PrivateWebSocketPool:
         self.start_time = None
         self.reconnect_tasks = {}
         
+        # 推送任务统计（用于监控）
+        self.push_stats = {
+            'total_created': 0,
+            'total_success': 0,
+            'total_failed': 0,
+            'last_push_time': None
+        }
+        
         # 连接质量统计
         self.quality_stats = {
             'binance': {
@@ -55,7 +63,7 @@ class PrivateWebSocketPool:
             }
         }
         
-        logger.info("🔗 [私人连接池] 初始化完成 (直接推送模式)")
+        logger.info("🔗 [私人连接池] 初始化完成 (直接推送模式，永不阻塞)")
     
     async def start(self, brain_store):
         """启动连接池"""
@@ -218,8 +226,8 @@ class PrivateWebSocketPool:
             connection = BinancePrivateConnection(
                 listen_key=listen_key,
                 status_callback=self._handle_connection_status,
-                data_callback=self._process_and_forward_data,  # 仍然使用内部方法
-                raw_data_cache=None  # 🔴 【修改点】设为None
+                data_callback=self._process_and_forward_data,  # 使用不阻塞的推送方法
+                raw_data_cache=None
             )
             
             # 建立连接
@@ -258,8 +266,8 @@ class PrivateWebSocketPool:
                 api_secret=api_creds['api_secret'],
                 passphrase=api_creds.get('passphrase', ''),
                 status_callback=self._handle_connection_status,
-                data_callback=self._process_and_forward_data,  # 仍然使用内部方法
-                raw_data_cache=None  # 🔴 【修改点】设为None
+                data_callback=self._process_and_forward_data,  # 使用不阻塞的推送方法
+                raw_data_cache=None
             )
             
             # 建立连接
@@ -318,21 +326,56 @@ class PrivateWebSocketPool:
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理状态事件失败: {e}")
     
+    # ========== 关键修改：永不阻塞的推送方法 ==========
     async def _process_and_forward_data(self, raw_data: Dict[str, Any]):
-        """🔴 【修改点】处理并转发数据 - 硬编码推送到新模块"""
+        """
+        处理并转发数据 - 绝对不阻塞！
+        创建独立任务推送，立即返回
+        """
         try:
-            # 硬编码推送到私人数据处理模块
-            try:
-                from private_data_processing.manager import receive_private_data
-                await receive_private_data(raw_data)
-                logger.debug(f"📨 [私人连接池] 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
-            except ImportError as e:
-                logger.error(f"❌ [私人连接池] 无法导入私人数据处理模块: {e}")
-            except Exception as e:
-                logger.error(f"❌ [私人连接池] 推送数据失败: {e}")
+            # 更新统计
+            self.push_stats['total_created'] += 1
+            self.push_stats['last_push_time'] = datetime.now().isoformat()
+            
+            # 记录收到时间（调试用）
+            logger.debug(f"📨 [连接池] 收到数据: {raw_data.get('exchange')}.{raw_data.get('data_type')}")
+            
+            # 创建独立任务推送，绝不等待！
+            # 使用 copy() 避免任务间共享数据修改问题
+            asyncio.create_task(self._push_to_manager(raw_data.copy()))
+            
+            # 立即返回，不等待推送完成
+            return
             
         except Exception as e:
-            logger.error(f"❌ [私人连接池] 处理转发数据失败: {e}")
+            logger.error(f"❌ [连接池] 创建推送任务失败: {e}")
+            self.push_stats['total_failed'] += 1
+
+    async def _push_to_manager(self, data: Dict[str, Any]):
+        """
+        实际推送数据到 manager
+        在独立任务中执行，即使失败也不影响连接池
+        """
+        try:
+            # 动态导入，避免循环依赖
+            from private_data_processing.manager import receive_private_data
+            
+            # 执行推送
+            await receive_private_data(data)
+            
+            # 更新成功统计
+            self.push_stats['total_success'] += 1
+            logger.debug(f"✅ [连接池] 推送成功: {data.get('exchange')}.{data.get('data_type')}")
+            
+        except ImportError as e:
+            logger.error(f"❌ [连接池] 无法导入manager模块: {e}")
+            self.push_stats['total_failed'] += 1
+        except Exception as e:
+            logger.error(f"❌ [连接池] 推送数据失败: {e}")
+            self.push_stats['total_failed'] += 1
+            
+            # 这里可以加重试逻辑，但先简单记录
+            # 如果需要重试，可以在这里创建重试任务
     
     async def shutdown(self):
         """关闭所有连接"""
@@ -359,6 +402,10 @@ class PrivateWebSocketPool:
                 pass
         
         self.connections = {'binance': None, 'okx': None}
+        
+        # 打印推送统计
+        logger.info(f"📊 [连接池] 推送统计: 创建{self.push_stats['total_created']}, "
+                   f"成功{self.push_stats['total_success']}, 失败{self.push_stats['total_failed']}")
         logger.info("✅ [私人连接池] 已关闭")
     
     def get_status(self) -> Dict[str, Any]:
@@ -369,12 +416,13 @@ class PrivateWebSocketPool:
             'uptime_seconds': (datetime.now() - self.start_time).total_seconds() if self.start_time else 0,
             'connections': {},
             'quality_stats': self.quality_stats,
+            'push_stats': self.push_stats,  # 添加推送统计
             'alerts': [],
             'exchange_modes': {
                 'binance': '主动探测模式（30秒探测）',
                 'okx': '协议层心跳模式（25秒协议层心跳 + 45秒被动检测）'
             },
-            'data_destination': '私人数据处理模块（硬编码推送）'  # 🔴 【修改点】
+            'data_destination': '私人数据处理模块（异步推送，永不阻塞）'  # 🔴 更新说明
         }
         
         for exchange in ['binance', 'okx']:
