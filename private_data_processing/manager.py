@@ -55,9 +55,9 @@ class PrivateDataProcessor:
             logger.info("🚀 [私人数据处理] 调度器延迟启动完成")
     
     async def _binance_delayed_delete(self, keys: List[str], symbol: str):
-        """30秒后删除该symbol所有当前存在的key（币安使用）"""
+        """5秒后删除该symbol所有当前存在的key（币安使用）"""
         try:
-            await asyncio.sleep(30)
+            await asyncio.sleep(5)
             
             if 'binance_order_update' not in self.memory_store['private_data']:
                 return
@@ -76,11 +76,11 @@ class PrivateDataProcessor:
     
     async def _okx_delayed_delete(self, symbol: str):
         """
-        30秒后清理该symbol的所有相关数据
+        5秒后清理该symbol的所有相关数据
         包括：订单数据和持仓数据
         """
         try:
-            await asyncio.sleep(30)
+            await asyncio.sleep(5)
             
             # ===== 清理订单数据 =====
             if 'okx_order_update' in self.memory_store['private_data']:
@@ -244,11 +244,11 @@ class PrivateDataProcessor:
                         'data': raw_data
                     })
                 
-                # 平仓处理：延迟30秒清理
+                # 平仓处理：延迟5秒清理
                 if is_binance_closing(category):
                     keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                     asyncio.create_task(self._binance_delayed_delete(keys_to_delayed_delete, symbol))
-                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在30秒后清理")
+                    logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 将在5秒后清理")
                 
                 # ===== 保存后，将完整存储区喂给Step1 =====
                 await self._feed_full_storage_to_step1()
@@ -359,10 +359,10 @@ class PrivateDataProcessor:
                         })
                         logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
                     
-                    # ===== 平仓全部成交：延迟30秒清理所有相关数据 =====
+                    # ===== 平仓全部成交：延迟5秒清理所有相关数据 =====
                     if is_okx_closing(category):
                         asyncio.create_task(self._okx_delayed_delete(symbol))
-                        logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在30秒后清理所有相关数据（订单+持仓）")
+                        logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 将在5秒后清理所有相关数据（订单+持仓）")
                     
                     # ===== 保存后，将完整存储区喂给Step1 =====
                     await self._feed_full_storage_to_step1()
