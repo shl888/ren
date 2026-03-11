@@ -39,6 +39,7 @@ Turso API 要求所有值都必须是字符串类型
 【修复历史】
 - 2024-03-11：修复历史区id为空问题，增加id去重
 - 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
+- 2024-03-11：优化持仓区日志，同ID只打印一次成功日志，之后完全静默
 ==================================================
 """
 
@@ -65,11 +66,12 @@ class Database:
         """
         初始化数据库连接
         ==================================================
-        做了四件事：
+        做了五件事：
         1. 从环境变量读取数据库URL和令牌
         2. 验证配置是否存在
         3. 测试数据库连接是否正常
         4. 初始化数据库表（如果表不存在就创建）
+        5. 初始化日志记录集合（用于控制日志输出）
         ==================================================
         """
         # ----- 第1步：从环境变量读取配置 -----
@@ -93,6 +95,10 @@ class Database:
         
         # ----- 第4步：初始化数据库表 -----
         self._init_database()
+        
+        # ----- 第5步：初始化日志记录集合 -----
+        self._logged_active_ids = set()
+        logger.info("✅【数据库】 日志控制集合初始化完成")
     
     # ==================== 对外唯一入口 ====================
     
@@ -167,7 +173,7 @@ class Database:
         """
         处理持仓完整数据
         ==================================================
-        做一件事：覆盖更新到持仓区（带幂等性日志控制）
+        做一件事：覆盖更新到持仓区（带日志控制）
         ==================================================
         
         :param data: 持仓完整的完整数据
@@ -178,19 +184,14 @@ class Database:
     
     async def _save_active_position(self, data: Dict[str, Any]):
         """
-        持仓区：覆盖更新（带幂等性日志控制）
+        持仓区：覆盖更新（日志控制版本）
         ==================================================
-        【日志控制逻辑 - 2024-03-11新增】
-        - 首次写入（id不存在于持仓表）→ 打印成功日志
-        - 覆盖更新（id已存在）→ 静默更新，不打印日志（避免刷屏）
+        【日志控制逻辑 - 2024-03-11 优化版】
+        - 同一个ID只打印一次"首次写入"的成功日志
+        - 之后相同ID的更新完全不打印任何日志（完全静默）
         
         【实现方式】
-        1. 先查询该 id 是否已存在（同步查询）
-        2. 不存在 → 标记为首次写入，打印成功日志
-        3. 存在 → 静默执行，只打印debug日志
-        
-        【注意】
-        使用 INSERT OR REPLACE，id已存在时会覆盖更新，不会报错
+        使用内存集合 _logged_active_ids 记录已打印日志的ID
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -207,11 +208,10 @@ class Database:
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         
-        # ----- 第2步：判断是否为首次写入（同步查询，不用await）-----
-        # 【关键修复】去掉await，因为_check_active_exists_by_id是普通方法
-        is_first_write = not self._check_active_exists_by_id(record_id)
+        # ========== 判断这个ID是否已经打印过日志 ==========
+        should_log_info = record_id not in self._logged_active_ids
         
-        # ----- 第3步：构建SQL语句 -----
+        # ----- 第2步：构建SQL语句 -----
         fields = list(data.keys())
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
@@ -225,14 +225,15 @@ class Database:
         logger.debug(f"📝 【数据库】持仓表 SQL: {sql}")
         logger.debug(f"📝【数据库】 持仓表 值: {values}")
         
-        # ----- 第4步：执行SQL -----
+        # ----- 第3步：执行SQL -----
         self._run_sql(sql, values)
         
-        # ----- 第5步：根据是否首次写入决定是否打印日志 -----
-        if is_first_write:
+        # ========== 只对首次写入打印日志 ==========
+        if should_log_info:
+            # 第一次遇到这个ID，打印info日志，并记录到集合
             logger.info(f"✅【数据库】 成功写入持仓区{exchange}数据 - {contract}（首次）")
-        else:
-            logger.debug(f"🔄【数据库】 静默更新持仓区{exchange}数据 - {contract}（id已存在）")
+            self._logged_active_ids.add(record_id)
+        # 非首次写入：完全静默，不打印任何日志
     
     def _check_active_exists_by_id(self, record_id: str) -> bool:
         """
