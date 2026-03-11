@@ -8,6 +8,7 @@
 1. 这个文件不提供任何读取接口（修复区如果需要读数据库，应该直接连接数据库）
 2. 这个文件只与调度器对话，不与任何其他文件对话
 3. 所有表字段都是中文，SQL语句必须用中文字段名
+4. 数据库会完整保存所有字段，空值就是 null，不需要过滤
 
 【表结构】
 数据库里有两张表，都在同一个Turso数据库里：
@@ -208,6 +209,11 @@ class Database:
             data字典的key必须和表字段完全一致（都是中文）
             例如：data['交易所']、data['开仓合约名']
         
+        重要说明：
+            - 数据库会完整保存所有字段，空值就是 null
+            - 不需要过滤任何字段
+            - 字段数量和占位符数量必须完全一致
+        
         id生成规则：
             如果数据里没有id，就用"交易所_合约名_开仓时间"拼一个
             这样能保证每条数据都有唯一的主键
@@ -231,8 +237,14 @@ class Database:
         # 生成占位符：有多少个字段就有多少个问号
         placeholders = ','.join(['?' for _ in fields])
         
-        # values是对应的值
+        # values是对应的值（包括null值）
         values = [data.get(f) for f in fields]
+        
+        # 调试日志：确认字段数量匹配
+        logger.debug(f"持仓表 - 字段数量: {len(fields)}, 值数量: {len(values)}")
+        if len(fields) != len(values):
+            logger.error(f"❌ 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            return
         
         # 组装SQL
         sql = f"""
@@ -256,6 +268,11 @@ class Database:
         注意事项：
             历史表没有主键约束，可以重复写入
             但实际业务中，同一笔平仓不会重复推送
+        
+        重要说明：
+            - 数据库会完整保存所有字段，空值就是 null
+            - 不需要过滤任何字段
+            - 字段数量和占位符数量必须完全一致
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -263,6 +280,12 @@ class Database:
         fields = list(data.keys())
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
+        
+        # 调试日志：确认字段数量匹配
+        logger.debug(f"历史表 - 字段数量: {len(fields)}, 值数量: {len(values)}")
+        if len(fields) != len(values):
+            logger.error(f"❌ 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            return
         
         sql = f"""
             INSERT INTO closed_positions 
@@ -509,7 +532,7 @@ class Database:
             保证金模式 TEXT,                           -- 全仓/逐仓
             保证金币种 TEXT,                           -- USDT等
             开仓合约名 TEXT,                           -- BTCUSDT
-            开仓方向 TEXT,                             -- 多/空
+            开仓方向 TEXT,                             -- LONG/SHORT
             开仓执行方式 TEXT,                          -- 市价/限价
             开仓价 REAL,                              -- 开仓价格
             持仓币数 REAL,                             -- 持仓数量（币）
