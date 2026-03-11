@@ -234,16 +234,33 @@ class Database:
         # fields是所有字段名（中文）
         fields = list(data.keys())
         
+        # 🔍 调试：打印字段数量和字段列表
+        logger.info(f"📊 持仓表 - 字段数量: {len(fields)}")
+        logger.info(f"📋 持仓表 - 字段列表: {fields}")
+        
         # 生成占位符：有多少个字段就有多少个问号
         placeholders = ','.join(['?' for _ in fields])
         
         # values是对应的值（包括null值）
         values = [data.get(f) for f in fields]
         
-        # 调试日志：确认字段数量匹配
-        logger.debug(f"持仓表 - 字段数量: {len(fields)}, 值数量: {len(values)}")
+        # 🔍 调试：确认字段数量匹配
+        placeholders_count = len(placeholders.split(','))
+        logger.info(f"📊 持仓表 - 占位符数量: {placeholders_count}")
+        logger.info(f"📊 持仓表 - 值数量: {len(values)}")
+        
         if len(fields) != len(values):
-            logger.error(f"❌ 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            logger.error(f"❌ 持仓表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            # 打印不匹配的详细信息
+            for i, field in enumerate(fields):
+                if i < len(values):
+                    logger.error(f"  字段[{i}]: {field} = {values[i]}")
+                else:
+                    logger.error(f"  字段[{i}]: {field} = (无对应值)")
+            return
+        
+        if len(fields) != placeholders_count:
+            logger.error(f"❌ 持仓表 - 字段数量和占位符数量不匹配! fields={len(fields)}, placeholders={placeholders_count}")
             return
         
         # 组装SQL
@@ -252,6 +269,10 @@ class Database:
             ({','.join(fields)}) 
             VALUES ({placeholders})
         """
+        
+        # 🔍 打印完整SQL用于调试
+        logger.debug(f"📝 持仓表 SQL: {sql}")
+        logger.debug(f"📝 持仓表 值: {values}")
         
         # ----- 第3步：执行SQL -----
         self._run_sql(sql, values)
@@ -278,13 +299,31 @@ class Database:
         :param data: 数据字典，key必须全是中文
         """
         fields = list(data.keys())
+        
+        # 🔍 调试：打印字段数量和字段列表
+        logger.info(f"📊 历史表 - 字段数量: {len(fields)}")
+        logger.info(f"📋 历史表 - 字段列表: {fields}")
+        
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
         
-        # 调试日志：确认字段数量匹配
-        logger.debug(f"历史表 - 字段数量: {len(fields)}, 值数量: {len(values)}")
+        # 🔍 调试：确认字段数量匹配
+        placeholders_count = len(placeholders.split(','))
+        logger.info(f"📊 历史表 - 占位符数量: {placeholders_count}")
+        logger.info(f"📊 历史表 - 值数量: {len(values)}")
+        
         if len(fields) != len(values):
-            logger.error(f"❌ 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            logger.error(f"❌ 历史表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
+            # 打印不匹配的详细信息
+            for i, field in enumerate(fields):
+                if i < len(values):
+                    logger.error(f"  字段[{i}]: {field} = {values[i]}")
+                else:
+                    logger.error(f"  字段[{i}]: {field} = (无对应值)")
+            return
+        
+        if len(fields) != placeholders_count:
+            logger.error(f"❌ 历史表 - 字段数量和占位符数量不匹配! fields={len(fields)}, placeholders={placeholders_count}")
             return
         
         sql = f"""
@@ -292,6 +331,10 @@ class Database:
             ({','.join(fields)}) 
             VALUES ({placeholders})
         """
+        
+        # 🔍 打印完整SQL用于调试
+        logger.debug(f"📝 历史表 SQL: {sql}")
+        logger.debug(f"📝 历史表 值: {values}")
         
         self._run_sql(sql, values)
         logger.debug(f"📜 历史已写入: {data.get('交易所')} - {data.get('开仓合约名')} 平仓时间:{data.get('平仓时间')}")
