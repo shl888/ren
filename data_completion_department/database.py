@@ -371,11 +371,16 @@ class Database:
         """
         执行SQL语句 - 所有数据库操作最终都走这个方法
         ==================================================
-        参数转换规则：
+        参数转换规则（关键修复）：
             None → null类型
-            int/float → integer类型
+            int → integer类型
+            float → real类型（重要！区分整数和浮点数）
             str → text类型
             其他类型 → 转成str再作为text类型
+        
+        为什么需要区分int和float？
+            Turso的HTTP API需要精确的类型信息。
+            给REAL字段传一个被标记为integer的浮点数（如20.5）会导致400错误。
         
         返回值格式（Turso标准返回）：
             {
@@ -401,16 +406,23 @@ class Database:
         
         # ----- 第1步：转换参数为Turso API要求的格式 -----
         args = []
-        for p in params:
+        for idx, p in enumerate(params):
+            # 调试：记录每个参数的类型
+            logger.debug(f"参数[{idx}]: 值={p}, 类型={type(p).__name__}")
+            
             if p is None:
                 args.append({"type": "null", "value": None})
-            elif isinstance(p, (int, float)):
-                # 整数和浮点数都作为integer类型
+            elif isinstance(p, int):
+                # ✅ 整数用 integer 类型
                 args.append({"type": "integer", "value": p})
+            elif isinstance(p, float):
+                # ✅ 浮点数用 real 类型（重要修复！）
+                args.append({"type": "real", "value": p})
             elif isinstance(p, str):
                 args.append({"type": "text", "value": p})
             else:
                 # 其他类型（如bool、dict等）转成字符串
+                logger.warning(f"⚠️ 未知类型参数[{idx}]: {type(p).__name__}，转换为字符串")
                 args.append({"type": "text", "value": str(p)})
         
         # ----- 第2步：构建请求体 -----
@@ -426,6 +438,11 @@ class Database:
             ]
         }
         
+        # 调试：打印完整的请求信息
+        logger.debug(f"📤 发送SQL请求到Turso")
+        logger.debug(f"   SQL: {sql}")
+        logger.debug(f"   参数数量: {len(args)}")
+        
         # ----- 第3步：发送HTTP请求到Turso -----
         try:
             response = requests.post(
@@ -438,6 +455,9 @@ class Database:
                 timeout=10  # 10秒超时，防止卡死
             )
             response.raise_for_status()  # 如果返回4xx/5xx，抛出异常
+            
+            # 调试：记录响应状态
+            logger.debug(f"📥 收到数据库响应: 状态码={response.status_code}")
             return response.json()
             
         except requests.exceptions.Timeout:
@@ -445,6 +465,13 @@ class Database:
             raise
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ 数据库请求失败: {e}\nSQL: {sql}")
+            # 如果是400错误，尝试打印更详细的信息
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    logger.error(f"❌ 错误详情: {error_detail}")
+                except:
+                    logger.error(f"❌ 响应内容: {e.response.text[:500]}")
             raise
         except Exception as e:
             logger.error(f"❌ 未知错误: {e}\nSQL: {sql}")
