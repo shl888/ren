@@ -281,15 +281,24 @@ class Database:
     
     def _run_sql(self, sql: str, params: List = None) -> Dict:
         """
-        执行SQL语句 - 最简单的实现
+        执行SQL语句 - 修复版
         ==================================================
         【核心原则】
-        字段名已经一一对应，值是什么类型就用什么类型标记：
+        字段名已经一一对应，值是什么类型就用什么标记：
             - None → null
+            - bool → integer (0/1) 【注意：bool必须在int之前判断，因为bool是int的子类】
             - int → integer
             - float → float
             - str → text
-            - 其他类型 → 转成 text
+            - 其他类型 → 尝试转数字，不行转text
+        
+        【关键修复 - 2026-03-11】
+        问题：Turso API 返回错误 "invalid type: integer `20`, expected a borrowed string"
+        原因：可能存在 numpy.int64 等非Python原生类型，导致JSON序列化时类型标记错误
+        修复：
+            1. bool类型必须在int之前判断（isinstance(True, int) == True）
+            2. 强制转为Python原生int/float，确保JSON序列化正确
+            3. 使用标准json库手动序列化，避免requests的json参数处理异常
         
         不做任何字段类型判断，不关心字段的业务含义。
         让数据库自己处理类型匹配。
@@ -302,41 +311,57 @@ class Database:
         if params is None:
             params = []
         
-        # ----- 转换参数：值是什么类型就用什么标记 -----
+        # ----- 构建 args 数组（Turso API格式）-----
         args = []
-        type_counts = {"integer": 0, "float": 0, "text": 0, "null": 0}
         
         for idx, p in enumerate(params):
             logger.debug(f"参数[{idx}]: 值={p}, 类型={type(p).__name__}")
             
             if p is None:
                 args.append({"type": "null", "value": None})
-                type_counts["null"] += 1
                 logger.debug(f"   → null")
                 
+            elif isinstance(p, bool):
+                # 【关键】bool必须在int之前判断！因为isinstance(True, int)返回True
+                # Turso没有bool类型，用integer 0/1表示
+                bool_val = 1 if p else 0
+                args.append({"type": "integer", "value": bool_val})
+                logger.debug(f"   → bool转integer: {p} → {bool_val}")
+                
             elif isinstance(p, int):
-                args.append({"type": "integer", "value": p})
-                type_counts["integer"] += 1
-                logger.debug(f"   → integer: {p}")
+                # 【关键】强制转为Python原生int，避免numpy.int64等问题
+                native_int = int(p)
+                args.append({"type": "integer", "value": native_int})
+                logger.debug(f"   → integer: {native_int}")
                 
             elif isinstance(p, float):
-                args.append({"type": "float", "value": p})
-                type_counts["float"] += 1
-                logger.debug(f"   → float: {p}")
+                # 【关键】强制转为Python原生float，避免numpy.float64等问题
+                native_float = float(p)
+                args.append({"type": "float", "value": native_float})
+                logger.debug(f"   → float: {native_float}")
                 
             elif isinstance(p, str):
                 args.append({"type": "text", "value": p})
-                type_counts["text"] += 1
                 logger.debug(f"   → text: '{p[:50]}...'")
                 
             else:
-                # 其他类型（bool、list等）转成字符串
-                str_val = str(p)
-                args.append({"type": "text", "value": str_val})
-                type_counts["text"] += 1
-                logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为text: '{str_val[:50]}...'")
-        
-        logger.debug(f"📊 参数类型统计: {type_counts}")
+                # 其他类型（numpy、decimal、datetime等）尝试转为数字
+                try:
+                    num_val = float(p)
+                    if num_val.is_integer():
+                        # 整数值用integer类型
+                        int_val = int(num_val)
+                        args.append({"type": "integer", "value": int_val})
+                        logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为integer: {int_val}")
+                    else:
+                        # 小数值用float类型
+                        args.append({"type": "float", "value": num_val})
+                        logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为float: {num_val}")
+                except (ValueError, TypeError):
+                    # 转不了数字就转字符串
+                    str_val = str(p)
+                    args.append({"type": "text", "value": str_val})
+                    logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为text: '{str_val[:50]}...'")
         
         # ----- 构建请求体 -----
         payload = {
@@ -351,19 +376,30 @@ class Database:
             ]
         }
         
+        # 【关键修复】使用标准json库手动序列化，确保格式完全可控
+        import json
+        try:
+            json_data = json.dumps(payload, ensure_ascii=False)
+            logger.debug(f"📊 JSON序列化成功，长度: {len(json_data)}")
+        except Exception as e:
+            logger.error(f"❌ JSON序列化失败: {e}")
+            raise
+        
         logger.debug(f"📤 发送SQL请求到Turso")
         logger.debug(f"   SQL: {sql[:100]}...")
         logger.debug(f"   参数数量: {len(args)}")
         
         # ----- 发送HTTP请求到Turso -----
         try:
+            # 【关键修复】使用data参数发送已序列化的JSON字符串，而不是用json参数
+            # 这样可以避免requests库对numpy等特殊类型的处理异常
             response = requests.post(
                 f"{self.url}/v2/pipeline",
                 headers={
                     "Authorization": f"Bearer {self.token}",
                     "Content-Type": "application/json"
                 },
-                json=payload,
+                data=json_data,  # 使用data而不是json
                 timeout=10
             )
             response.raise_for_status()
