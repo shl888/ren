@@ -9,7 +9,7 @@
 """
 import time
 import logging
-import asyncio
+import threading
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -82,32 +82,40 @@ class Step2Fusion:
         self.containers["binance"]["交易所"] = "binance"
         self.containers["okx"]["交易所"] = "okx"
         
-        # 重置任务（各自独立）- 改用真正的异步任务
-        self.reset_tasks = {
+        # 线程锁保护容器
+        self._lock = threading.Lock()
+        
+        # 重置线程标记（各自独立）
+        self.reset_threads = {
             "binance": None,
             "okx": None
         }
         
-        # 倒计时秒数
-        self.reset_countdown = 5
-        
         logger.info("✅【step2】容器缓存已创建: binance, okx")
     
-    async def _delayed_reset(self, exchange: str):
-        """真正的异步延迟重置"""
+    def _delayed_reset_sync(self, exchange: str):
+        """同步版：5秒后重置容器"""
         try:
-            logger.info(f"⏰【{exchange}】开始5秒倒计时")
-            await asyncio.sleep(self.reset_countdown)
+            time.sleep(5)
             
-            container = self.containers[exchange]
-            self._reset_container(container)
-            logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
+            with self._lock:
+                container = self.containers[exchange]
+                self._reset_container(container)
+                logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
             
-        except asyncio.CancelledError:
-            logger.debug(f"⏰【{exchange}】清理倒计时被取消")
-            raise
+        except Exception as e:
+            logger.error(f"❌【{exchange}】延迟重置失败: {e}")
         finally:
-            self.reset_tasks[exchange] = None
+            self.reset_threads[exchange] = None
+    
+    def _start_reset_thread(self, exchange: str):
+        """启动独立线程执行重置"""
+        # 如果已有线程在运行，先取消？（这里简单处理：允许新线程覆盖旧线程）
+        thread = threading.Thread(target=self._delayed_reset_sync, args=(exchange,))
+        thread.daemon = True
+        thread.start()
+        self.reset_threads[exchange] = thread
+        logger.info(f"⏰【{exchange}】重置线程已启动，将在5秒后清理")
     
     def process(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -122,20 +130,15 @@ class Step2Fusion:
         exchange = extracted_data.get('交易所')
         data_type = extracted_data.get('data_type', 'unknown')
         
-        # ===== 调试日志 =====
         logger.info(f"🔍【step2】收到数据: 交易所={exchange}, 类型={data_type}")
-        logger.info(f"🔍【step2】数据内容: {extracted_data}")
         
         if not exchange or exchange not in self.containers:
             logger.warning(f"⚠️【step2】未知交易所: {exchange}")
             return None
         
         # 获取对应交易所的容器
-        container = self.containers[exchange]
-        
-        # ===== 调试：更新前容器内容 =====
-        if exchange == 'okx':
-            logger.info(f"🔍【step2-okx】更新前容器: {container}")
+        with self._lock:
+            container = self.containers[exchange].copy()  # 操作副本
         
         # 检查是否有平仓相关字段
         close_fields = ["平仓执行方式", "平仓价", "平仓收益", "平仓时间"]
@@ -144,43 +147,35 @@ class Step2Fusion:
             for field in close_fields
         )
         
-        # 如果有平仓字段且没有正在进行的重置任务，启动倒计时
-        if has_close_field and self.reset_tasks[exchange] is None:
-            # 创建真正的异步任务
-            self.reset_tasks[exchange] = asyncio.create_task(
-                self._delayed_reset(exchange)
-            )
-            logger.info(f"⏰【{exchange}】检测到平仓字段，启动{self.reset_countdown}秒重置倒计时")
+        # 如果有平仓字段，启动独立线程重置
+        if has_close_field:
+            self._start_reset_thread(exchange)
+            logger.info(f"⏰【{exchange}】检测到平仓字段，启动重置线程")
         
-        # 检查平仓事件（币安专用，但放在这里不影响欧易）
+        # 检查平仓事件（币安专用）
         event_type = extracted_data.get('event_type', '')
         if event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]:
-            self._clear_trade_data(container)
-            # 平仓事件也会触发倒计时
-            if self.reset_tasks[exchange] is None:
-                self.reset_tasks[exchange] = asyncio.create_task(
-                    self._delayed_reset(exchange)
-                )
-                logger.info(f"⏰【{exchange}】检测到平仓事件，启动{self.reset_countdown}秒重置倒计时")
+            with self._lock:
+                self._clear_trade_data(self.containers[exchange])
+            # 平仓事件也会启动重置线程
+            self._start_reset_thread(exchange)
+            logger.info(f"⏰【{exchange}】检测到平仓事件，启动重置线程")
         
         # ===== 覆盖式更新原始容器 =====
-        update_count = 0
-        for key, value in extracted_data.items():
-            if key in container:  # 只检查字段是否存在，不检查值是否为None
-                old_value = container.get(key)
-                container[key] = value
-                update_count += 1
-                if exchange == 'okx':
-                    logger.info(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
-        
-        logger.info(f"📊【step2-{exchange}】更新了 {update_count} 个字段")
-        
-        # ===== 调试：更新后容器内容 =====
-        if exchange == 'okx':
-            logger.info(f"📦【step2-okx】更新后容器: {container}")
-        
-        # 返回副本给调度器
-        return container.copy()
+        with self._lock:
+            update_count = 0
+            for key, value in extracted_data.items():
+                if key in self.containers[exchange]:
+                    old_value = self.containers[exchange].get(key)
+                    self.containers[exchange][key] = value
+                    update_count += 1
+                    if exchange == 'okx':
+                        logger.info(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
+            
+            logger.info(f"📊【step2-{exchange}】更新了 {update_count} 个字段")
+            
+            # 返回副本
+            return self.containers[exchange].copy()
     
     def _clear_trade_data(self, container: Dict):
         """清空交易相关字段"""
@@ -227,6 +222,7 @@ class Step2Fusion:
     
     def get_container(self, exchange: str) -> Optional[Dict]:
         """获取指定交易所的容器副本（调试用）"""
-        if exchange in self.containers:
-            return self.containers[exchange].copy()
+        with self._lock:
+            if exchange in self.containers:
+                return self.containers[exchange].copy()
         return None
