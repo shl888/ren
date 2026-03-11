@@ -40,6 +40,7 @@ Turso API 要求所有值都必须是字符串类型
 - 2024-03-11：修复历史区id为空问题，增加id去重
 - 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
 - 2024-03-11：优化持仓区日志，同ID只打印一次成功日志，之后完全静默
+- 2024-03-11：添加收到数据日志的时间控制，每分钟最多打印一条
 ==================================================
 """
 
@@ -47,6 +48,7 @@ import os
 import requests
 import logging
 import json
+import time
 from typing import Dict, Any, List, Optional
 
 # 配置日志
@@ -66,12 +68,13 @@ class Database:
         """
         初始化数据库连接
         ==================================================
-        做了五件事：
+        做了六件事：
         1. 从环境变量读取数据库URL和令牌
         2. 验证配置是否存在
         3. 测试数据库连接是否正常
         4. 初始化数据库表（如果表不存在就创建）
         5. 初始化日志记录集合（用于控制日志输出）
+        6. 初始化最后日志时间记录（用于控制收到数据日志频率）
         ==================================================
         """
         # ----- 第1步：从环境变量读取配置 -----
@@ -99,6 +102,11 @@ class Database:
         # ----- 第5步：初始化日志记录集合 -----
         self._logged_active_ids = set()
         logger.info("✅【数据库】 日志控制集合初始化完成")
+        
+        # ----- 第6步：初始化最后日志时间记录 -----
+        self._last_log_time = 0  # 上一次打印收到数据日志的时间戳
+        self._log_interval = 60  # 日志打印间隔（秒）
+        logger.info(f"✅【数据库】 日志时间控制初始化完成，间隔{self._log_interval}秒")
     
     # ==================== 对外唯一入口 ====================
     
@@ -112,6 +120,10 @@ class Database:
         
         处理逻辑：
             根据tag的值，执行不同的数据库操作
+            
+        【日志控制 - 2024-03-11新增】
+        - 收到数据日志每分钟最多打印一条，避免刷屏
+        - 使用时间戳控制，精确到秒
         ==================================================
         
         :param tag: 数据标签（已平仓/持仓完整）
@@ -126,12 +138,25 @@ class Database:
             
             # ----- 第2步：根据标签执行不同逻辑 -----
             if tag == '已平仓':
+                # 已平仓数据一直打印，因为频率低
                 logger.info(f"📦【数据库】 收到已平仓数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
                 contract = data.get('开仓合约名', 'unknown')
-                logger.info(f"📦【数据库】 收到持仓完整数据: {exchange} - {contract}")
+                
+                # ========== 【新增】时间控制：每分钟最多打印一条 ==========
+                current_time = time.time()
+                time_since_last_log = current_time - self._last_log_time
+                
+                if time_since_last_log >= self._log_interval:
+                    # 距离上次打印已超过间隔，打印日志
+                    logger.info(f"📦【数据库】 收到持仓完整数据: {exchange} - {contract}")
+                    self._last_log_time = current_time
+                else:
+                    # 间隔内，只打印debug日志
+                    logger.debug(f"📦【数据库】 收到持仓完整数据: {exchange} - {contract} (已抑制)")
+                
                 await self._handle_active(data)
                 
             else:
