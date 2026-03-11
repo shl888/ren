@@ -20,13 +20,16 @@ Step1 (提取) → 队列
         ↓
     数据完成部门 (receiver.py)
 
-【重要规则 - 数据格式转换】
-推送前必须将所有数字字段转换为Python原生数字类型：
-    - 字符串 "69789.4" → float 69789.4
-    - 字符串 "20" → int 20
-    - 字符串 "0.0817" → float 0.0817
+【重要规则 - 数据格式转换 - 2024-03-11 更新】
+Turso API 要求：
+    1. 所有值都必须作为字符串传递（避免JSON精度丢失）
+    2. 数据库文件会根据字段类型标记为 integer/float/text
 
-这样数据库才能正确接收（表定义中这些字段是 REAL/INTEGER）
+因此推送前必须将所有字段值转换为字符串格式：
+    - 整数 20 → "20"
+    - 浮点数 69789.4 → "69789.4" 
+    - 字符串 "binance" → "binance"（保持不变）
+    - None → None（保持null）
 ==================================================
 """
 
@@ -47,7 +50,7 @@ class PrivateDataScheduler:
         2. 从Step1输出队列获取数据
         3. 驱动Step2-3-4的流水线处理
         4. 将最终数据推送到数据完成部门
-        5. 在推送前统一转换数据类型
+        5. 在推送前统一转换数据格式为字符串（符合Turso API要求）
     ==================================================
     """
 
@@ -196,20 +199,25 @@ class PrivateDataScheduler:
         推送数据到数据完成部门的接收器
         ==================================================
         做了三件事：
-            1. 将容器中的所有数字字段转换为Python原生数字类型
+            1. 将所有字段值转换为字符串格式（符合Turso API要求）
             2. 组装符合receiver要求的数据格式
             3. 调用 receive_private_data 推送
         
-        为什么需要转换数字字段？
-            数据库表定义中，这些字段是 REAL 或 INTEGER，
-            如果传字符串会导致 Turso HTTP API 400错误。
+        【重要 - Turso API 要求】
+        Turso官方文档明确要求：
+            "In JSON, the value is a String to avoid losing precision"
+        所有值都必须作为字符串传递，即使是数字也要转成字符串。
         
-        转换规则：
-            - 字符串 "69789.4" → float 69789.4
-            - 字符串 "20" → int 20
-            - 字符串 "0.0817" → float 0.0817
-            - None/null → 保持 None
-            - 已经是数字的保持原样
+        转换规则（2024-03-11 更新）：
+            - 整数 20 → "20"
+            - 浮点数 69789.4 → "69789.4"
+            - 字符串 "binance" → "binance"（保持不变）
+            - None → None（保持null）
+            - 其他类型 → str() 转换
+        
+        为什么这样转换？
+            database.py 中的 _run_sql 方法会根据字段类型
+            （integer/float/text）正确标记参数，但值必须是字符串。
         ==================================================
         
         :param container: Step4处理后的完整数据容器
@@ -226,8 +234,9 @@ class PrivateDataScheduler:
             else:
                 data_type = "unknown"
             
-            # ===== 关键步骤：转换数字字段类型 =====
-            converted_container = self._convert_numeric_fields(container)
+            # ===== 关键步骤：将所有字段值转换为字符串格式 =====
+            # 符合Turso API要求：所有值都作为字符串传递
+            converted_container = self._convert_all_to_strings(container)
             
             # 组装数据包
             completion_data = {
@@ -247,115 +256,69 @@ class PrivateDataScheduler:
         except Exception as e:
             logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
 
-    def _convert_numeric_fields(self, data: dict) -> dict:
+    def _convert_all_to_strings(self, data: dict) -> dict:
         """
-        将数字字段统一转换为 Python 数字类型
+        将所有字段值统一转换为字符串格式
         ==================================================
-        这是解决数据库400错误的关键方法！
+        【Turso API 要求】
+        官方文档明确指出：所有值在JSON中必须作为字符串传递，
+        这是为了避免精度丢失（because some JSON implementations 
+        treat all numbers as 64-bit floats）。
         
         转换规则：
-            1. 字符串数字 → float 或 int
-            2. 已经是数字的 → 保持原样
-            3. None → 保持 None
-            4. 其他类型 → 保持原样并警告
+            - 整数 20 → "20"
+            - 浮点数 69789.4 → "69789.4"
+            - 字符串 "binance" → "binance"（保持不变）
+            - None → None（保持null，不转换）
+            - 其他类型（bool、list等）→ str() 转换
         
-        字段分类：
-            - 数字字段：价格、数量、价值、保证金、盈亏等
-            - 字符串字段：交易所、币种、模式、合约名等
-            - 时间字段：保持字符串格式
+        为什么不用之前的分字段转换？
+            之前尝试区分 numeric_fields 和 string_fields，
+            但Turso API要求所有值都是字符串，所以统一转换最简单可靠。
+        
+        为什么保留 None？
+            None 对应数据库的 null，需要保持原样，
+            在 database.py 中会标记为 "null" 类型。
         
         :param data: 原始数据字典
-        :return: 转换后的数据字典
+        :return: 所有值都转换为字符串的数据字典
         ==================================================
         """
         # 创建副本，避免修改原始数据
         converted = data.copy()
         
-        # ===== 定义字段分类 =====
-        # 1. 必须转换为数字的字段（对应数据库 REAL/INTEGER）
-        numeric_fields = [
-            # 价格和数量类
-            '开仓价', '标记价', '最新价', '平仓价',
-            '持仓币数', '持仓张数', '合约面值',
-            
-            # 价值类
-            '开仓价仓位价值', '标记价仓位价值', '最新价仓位价值', '平仓价仓位价值',
-            
-            # 保证金类
-            '开仓保证金', '标记价保证金', '最新价保证金',
-            
-            # 盈亏类
-            '标记价涨跌盈亏幅', '最新价涨跌盈亏幅', '平仓价涨跌盈亏幅',
-            '标记价浮盈', '最新价浮盈', '平仓收益',
-            '标记价浮盈百分比', '最新价浮盈百分比', '平仓收益率',
-            
-            # 杠杆和费率
-            '杠杆', '本次资金费', '累计资金费', '平均资金费率',
-            '资金费结算次数',  # INTEGER
-            
-            # 止损止盈
-            '止损触发价', '止损幅度', '止盈触发价', '止盈幅度',
-            
-            # 手续费
-            '开仓手续费', '平仓手续费',
-            
-            # 账户资产
-            '账户资产额',
-        ]
+        # 转换计数器，用于日志
+        convert_count = 0
+        none_count = 0
+        already_str_count = 0
         
-        # 2. 保持为字符串的字段
-        string_fields = [
-            '交易所', '资产币种', '保证金模式', '保证金币种',
-            '开仓合约名', '开仓方向', '开仓执行方式', '开仓手续费币种',
-            '止损触发方式', '止盈触发方式', '平仓执行方式', '平仓手续费币种',
-        ]
+        for key, value in converted.items():
+            if value is None:
+                # None 保持 None，不转换
+                none_count += 1
+                logger.debug(f"字段 [{key}]: None (保持null)")
+                
+            elif isinstance(value, str):
+                # 已经是字符串，保持不变
+                already_str_count += 1
+                logger.debug(f"字段 [{key}]: '{value}' (已经是字符串)")
+                
+            else:
+                # 其他所有类型都转成字符串
+                original_type = type(value).__name__
+                str_value = str(value)
+                converted[key] = str_value
+                convert_count += 1
+                logger.debug(f"字段 [{key}]: {value} ({original_type}) → '{str_value}'")
         
-        # 3. 时间字段（保持字符串格式）
-        time_fields = [
-            '开仓时间', '本次资金费结算时间', '平仓时间'
-        ]
+        # 记录转换统计
+        logger.info(f"📊 数据转换统计: {convert_count}个字段转字符串, {already_str_count}个已是字符串, {none_count}个null")
         
-        # ===== 转换数字字段 =====
-        for field in numeric_fields:
-            if field in converted and converted[field] is not None:
-                value = converted[field]
-                try:
-                    # 如果是字符串，尝试转成数字
-                    if isinstance(value, str):
-                        # 去除可能的逗号、空格
-                        cleaned = value.strip().replace(',', '')
-                        
-                        # 判断是否包含小数点
-                        if '.' in cleaned:
-                            converted[field] = float(cleaned)
-                        else:
-                            # 尝试转int，如果失败就转float
-                            try:
-                                converted[field] = int(cleaned)
-                            except ValueError:
-                                converted[field] = float(cleaned)
-                    
-                    # 如果已经是数字，确保是float（数据库REAL类型）
-                    elif isinstance(value, (int, float)):
-                        # 对于资金费结算次数这样的整数字段，保持int
-                        if field == '资金费结算次数':
-                            converted[field] = int(value)
-                        else:
-                            converted[field] = float(value)
-                            
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"⚠️ 字段 {field} 转换失败: {value} (错误: {e})，保持原样")
-                    # 转换失败就保持原样，但记录警告
-        
-        # ===== 确保字符串字段确实是字符串 =====
-        for field in string_fields:
-            if field in converted and converted[field] is not None:
-                if not isinstance(converted[field], str):
-                    converted[field] = str(converted[field])
-        
-        # ===== 记录转换统计 =====
-        numeric_count = sum(1 for f in numeric_fields if f in converted and converted[f] is not None)
-        logger.debug(f"📊 已转换 {numeric_count} 个数字字段")
+        # 记录几个关键字段的示例
+        sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', 'id']
+        for field in sample_fields:
+            if field in converted:
+                logger.debug(f"  📌 {field}: {converted[field]} ({type(converted[field]).__name__})")
         
         return converted
 
