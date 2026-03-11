@@ -17,12 +17,13 @@
    - 作用：存储当前正在持仓的数据
    - 特点：覆盖更新，每个交易所只能有一条数据
    - id生成：交易所_合约名_开仓时间
+   - 幂等性：根据id判断首次写入还是静默更新（2024-03-11新增）
 
 2. closed_positions（历史表）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
-   - id生成：交易所_合约名_平仓时间（2024-03-11修复）
-   - 幂等性：根据id去重，避免20秒倒计时期间的重复写入
+   - id生成：交易所_合约名_平仓时间
+   - 幂等性：根据id去重，避免20秒倒计时期间的重复写入（2024-03-11修复）
 
 【调用关系】
 调度器 (scheduler.py) 
@@ -34,6 +35,10 @@ Turso数据库
 【重要原则 - 2024-03-11 最终修复】
 Turso API 要求所有值都必须是字符串类型
 所以不管来的是什么类型的数据，都统一转成字符串
+
+【修复历史】
+- 2024-03-11：修复历史区id为空问题，增加id去重
+- 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
 ==================================================
 """
 
@@ -80,11 +85,11 @@ class Database:
                 "  export TURSO_DATABASE_TOKEN=你的令牌"
             )
         
-        logger.info("✅ 数据库配置加载成功")
+        logger.info("✅ 【数据库】数据库配置加载成功")
         
         # ----- 第3步：测试数据库连接 -----
         if not self.test_connection():
-            raise ConnectionError("❌ 无法连接到数据库，请检查网络和令牌")
+            raise ConnectionError("❌【数据库】 无法连接到数据库，请检查网络和令牌")
         
         # ----- 第4步：初始化数据库表 -----
         self._init_database()
@@ -110,17 +115,17 @@ class Database:
             # ----- 第1步：从数据中提取交易所信息 -----
             exchange = data.get('交易所')
             if not exchange:
-                logger.error("❌ 数据中没有'交易所'字段，无法处理")
+                logger.error("❌【数据库】 数据中没有'交易所'字段，无法处理")
                 return
             
             # ----- 第2步：根据标签执行不同逻辑 -----
             if tag == '已平仓':
-                logger.info(f"📦 收到已平仓数据: {exchange}")
+                logger.info(f"📦【数据库】 收到已平仓数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
                 contract = data.get('开仓合约名', 'unknown')
-                logger.info(f"📦 收到持仓完整数据: {exchange} - {contract}")
+                logger.info(f"📦【数据库】 收到持仓完整数据: {exchange} - {contract}")
                 await self._handle_active(data)
                 
             else:
@@ -156,21 +161,13 @@ class Database:
         # 该交易所的持仓已平仓，从活跃持仓表中移除
         await self._delete_active_position(exchange)
         
-        logger.info(f"✅ 已平仓处理完成: {exchange}")
+        logger.info(f"✅【数据库】 已平仓处理完成: {exchange}")
     
     async def _handle_active(self, data: Dict[str, Any]):
         """
         处理持仓完整数据
         ==================================================
-        做一件事：覆盖更新到持仓区
-        
-        日志输出：
-            - 成功写入持仓区欧易数据 / 成功写入持仓区币安数据
-        
-        注意：
-            - 持仓区使用覆盖更新（INSERT OR REPLACE）
-            - 每个交易所只有一条记录，新数据会替换旧数据
-            - 数据更新时不输出日志（避免日志过多）
+        做一件事：覆盖更新到持仓区（带幂等性日志控制）
         ==================================================
         
         :param data: 持仓完整的完整数据
@@ -181,21 +178,19 @@ class Database:
     
     async def _save_active_position(self, data: Dict[str, Any]):
         """
-        持仓区：覆盖更新
+        持仓区：覆盖更新（带幂等性日志控制）
         ==================================================
-        SQL说明：
-            使用 INSERT OR REPLACE 实现覆盖更新
+        【日志控制逻辑 - 2024-03-11新增】
+        - 首次写入（id不存在于持仓表）→ 打印成功日志
+        - 覆盖更新（id已存在）→ 静默更新，不打印日志（避免刷屏）
         
-        字段说明：
-            data字典的key必须和表字段完全一致（都是中文）
+        【实现方式】
+        1. 先查询该 id 是否已存在（同步查询）
+        2. 不存在 → 标记为首次写入，打印成功日志
+        3. 存在 → 静默执行，只打印debug日志
         
-        id生成规则：
-            如果数据里没有id，就用"交易所_合约名_开仓时间"拼一个
-            例如：okx_BTCUSDT_2026.03.11 18:17:00
-        
-        日志说明：
-            - 首次写入输出：成功写入持仓区{交易所}数据
-            - 覆盖更新不输出日志（避免刷屏）
+        【注意】
+        使用 INSERT OR REPLACE，id已存在时会覆盖更新，不会报错
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -206,24 +201,20 @@ class Database:
             contract = data.get('开仓合约名', 'unknown')
             open_time = data.get('开仓时间', '')
             data['id'] = f"{exchange}_{contract}_{open_time}"
-            logger.debug(f"🔑 持仓表生成id: {data['id']}")
+            logger.debug(f"🔑 【数据库】持仓表生成id: {data['id']}")
         
-        # ----- 第2步：构建SQL语句 -----
+        record_id = data['id']
+        exchange = data.get('交易所', 'unknown')
+        contract = data.get('开仓合约名', 'unknown')
+        
+        # ----- 第2步：判断是否为首次写入（同步查询，不用await）-----
+        # 【关键修复】去掉await，因为_check_active_exists_by_id是普通方法
+        is_first_write = not self._check_active_exists_by_id(record_id)
+        
+        # ----- 第3步：构建SQL语句 -----
         fields = list(data.keys())
-        
-        logger.info(f"📊 持仓表 - 字段数量: {len(fields)}")
-        logger.info(f"📋 持仓表 - 字段列表: {fields}")
-        
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
-        
-        placeholders_count = len(placeholders.split(','))
-        logger.info(f"📊 持仓表 - 占位符数量: {placeholders_count}")
-        logger.info(f"📊 持仓表 - 值数量: {len(values)}")
-        
-        if len(fields) != len(values):
-            logger.error(f"❌ 持仓表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
-            return
         
         sql = f"""
             INSERT OR REPLACE INTO active_positions 
@@ -231,16 +222,47 @@ class Database:
             VALUES ({placeholders})
         """
         
-        logger.debug(f"📝 持仓表 SQL: {sql}")
-        logger.debug(f"📝 持仓表 值: {values}")
+        logger.debug(f"📝 【数据库】持仓表 SQL: {sql}")
+        logger.debug(f"📝【数据库】 持仓表 值: {values}")
         
-        # ----- 第3步：执行SQL -----
+        # ----- 第4步：执行SQL -----
         self._run_sql(sql, values)
         
-        # ----- 第4步：输出成功日志 -----
-        exchange = data.get('交易所', 'unknown')
-        contract = data.get('开仓合约名', 'unknown')
-        logger.info(f"✅ 成功写入持仓区{exchange}数据 - {contract}")
+        # ----- 第5步：根据是否首次写入决定是否打印日志 -----
+        if is_first_write:
+            logger.info(f"✅【数据库】 成功写入持仓区{exchange}数据 - {contract}（首次）")
+        else:
+            logger.debug(f"🔄【数据库】 静默更新持仓区{exchange}数据 - {contract}（id已存在）")
+    
+    def _check_active_exists_by_id(self, record_id: str) -> bool:
+        """
+        根据 id 检查持仓记录是否已存在（同步方法）
+        ==================================================
+        用于日志控制，判断是首次写入还是覆盖更新
+        
+        【注意】这是同步方法，不需要async/await
+        因为底层_run_sql也是同步的（使用requests）
+        
+        :param record_id: 记录唯一标识（交易所_合约名_开仓时间）
+        :return: True=已存在（覆盖更新），False=不存在（首次写入）
+        """
+        if not record_id:
+            return False
+        
+        sql = "SELECT 1 FROM active_positions WHERE id = ? LIMIT 1"
+        
+        try:
+            result = self._run_sql(sql, [record_id])
+            if result and 'results' in result:
+                rows = result['results'][0].get('result', {}).get('rows', [])
+                exists = len(rows) > 0
+                if exists:
+                    logger.debug(f"🔍【数据库】 持仓表发现已存在id: {record_id}")
+                return exists
+            return False
+        except Exception as e:
+            logger.error(f"❌【数据库】 检查持仓记录存在性失败: {e}")
+            return False  # 出错时假设不存在，允许打印首次写入日志
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
         """
@@ -258,6 +280,9 @@ class Database:
         【去重判断】
         - 如果 id 已存在 → 跳过写入（重复数据），输出日志：⏭️ 历史区已存在记录，跳过写入
         - 如果 id 不存在 → 正常写入（新记录），输出日志：✅ 成功写入历史区...
+        
+        【关键修复】2024-03-11 19:49
+        修复了去重不生效的问题：_check_exists_by_id改为同步方法，调用时去掉await
         ==================================================
         
         :param data: 数据字典，key必须全是中文
@@ -266,16 +291,17 @@ class Database:
         if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
-            # 【关键】历史区用平仓时间，不是开仓时间！这是与持仓区的区别
+            # 【关键】历史区用平仓时间，不是开仓时间！
             close_time = data.get('平仓时间', '')
             data['id'] = f"{exchange}_{contract}_{close_time}"
-            logger.debug(f"🔑 历史表生成id: {data['id']}")
+            logger.debug(f"🔑 【数据库】历史表生成id: {data['id']}")
         
         record_id = data['id']
         
         # ========== 第2步：检查是否已存在相同 id（幂等性保护）==========
+        # 【关键修复】去掉await，因为_check_exists_by_id是普通方法
         if self._check_exists_by_id(record_id):
-            logger.info(f"⏭️ 历史区已存在记录，跳过写入: {record_id}")
+            logger.info(f"⏭️【数据库】 历史区已存在记录，跳过写入: {record_id}")
             return
         
         # ========== 第3步：构建SQL并写入 ==========
@@ -294,14 +320,17 @@ class Database:
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         close_time = data.get('平仓时间', 'unknown')
-        logger.info(f"✅ 成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+        logger.info(f"✅【数据库】 成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
     def _check_exists_by_id(self, record_id: str) -> bool:
         """
-        根据 id 检查历史记录是否已存在
+        根据 id 检查历史记录是否已存在（同步方法）
         ==================================================
         用于幂等性保护，避免重复写入
-        查询 closed_positions 表是否存在相同 id 的记录
+        
+        【关键修复】2024-03-11 19:49
+        改为普通同步方法（去掉async），因为底层_run_sql是同步的
+        调用时不需要await，否则判断总是返回False，导致重复写入
         
         :param record_id: 记录唯一标识（交易所_合约名_平仓时间）
         :return: True=已存在，False=不存在
@@ -318,13 +347,13 @@ class Database:
                 rows = result['results'][0].get('result', {}).get('rows', [])
                 exists = len(rows) > 0
                 if exists:
-                    logger.debug(f"🔍 发现重复记录 id: {record_id}")
+                    logger.debug(f"🔍【数据库】 历史表发现重复记录 id: {record_id}")
                 return exists
                 
             return False
             
         except Exception as e:
-            logger.error(f"❌ 检查记录存在性失败: {e}")
+            logger.error(f"❌ 检查历史记录存在性失败: {e}")
             # 出错时默认允许写入（避免阻塞正常流程）
             return False
     
@@ -345,14 +374,14 @@ class Database:
         :param exchange: 'binance' 或 'okx'，不能为空
         """
         if not exchange:
-            logger.error("❌ 清理持仓必须传入交易所参数，本次操作已取消")
+            logger.error("❌【数据库】 清理持仓必须传入交易所参数，本次操作已取消")
             return
         
         sql = "DELETE FROM active_positions WHERE 交易所 = ?"
         self._run_sql(sql, [exchange])
         
         # 输出成功日志
-        logger.info(f"✅ 成功清除持仓区{exchange}数据")
+        logger.info(f"✅【数据库】 成功清除持仓区{exchange}数据")
     
     # ==================== SQL执行基础方法 ====================
     # 【最终修复】2024-03-11 - 强制所有值转字符串
@@ -403,15 +432,15 @@ class Database:
             if p is None:
                 # None值保持为null
                 args.append({"type": "null", "value": None})
-                # 【调试代码】logger.info(f"    ✅ 转换结果: null")
+                # 【调试代码】logger.info(f"    ✅ 【数据库】转换结果: null")
             else:
                 # 所有非空值强制转字符串
                 str_value = str(p)
                 args.append({"type": "text", "value": str_value})
-                # 【调试代码】logger.info(f"    ✅ 强制转字符串: '{str_value}'")
+                # 【调试代码】logger.info(f"    ✅ 【数据库】强制转字符串: '{str_value}'")
         
         # ========== 【调试代码】打印转换统计 ==========
-        # logger.info(f"📊 参数转换完成: 共 {len(args)} 个参数")
+        # logger.info(f"📊 【数据库】参数转换完成: 共 {len(args)} 个参数")
         # ========== 【调试代码结束】 ==========
         
         # ========== 构建请求体 ==========
@@ -441,7 +470,7 @@ class Database:
         # ========== 发送HTTP请求 ==========
         try:
             # 【调试代码】如需查看请求发送过程，取消下面的注释
-            # logger.info("📡【调试】发送HTTP请求到Turso...")
+            # logger.info("📡【调试】【数据库】发送HTTP请求到Turso...")
             
             response = requests.post(
                 f"{self.url}/v2/pipeline",
@@ -454,7 +483,7 @@ class Database:
             )
             
             # 【调试代码】打印响应状态
-            # logger.info(f"📥【调试】收到响应: 状态码={response.status_code}")
+            # logger.info(f"📥【调试】【数据库】收到响应: 状态码={response.status_code}")
             
             if response.status_code != 200:
                 try:
@@ -465,7 +494,7 @@ class Database:
             
             response.raise_for_status()
             
-            # 【调试代码】logger.info("✅【调试】请求成功")
+            # 【调试代码】logger.info("✅【调试】【数据库】请求成功")
             return response.json()
             
         except requests.exceptions.Timeout:
@@ -475,7 +504,7 @@ class Database:
             logger.error(f"❌ 数据库请求失败: {e}")
             raise
         except Exception as e:
-            logger.error(f"❌ 未知错误: {e}")
+            logger.error(f"❌ 【数据库】未知错误: {e}")
             raise
         # finally:
         #     【调试代码】logger.info("=" * 60)
@@ -520,11 +549,11 @@ class Database:
             
             if 'active_positions' not in tables:
                 self._create_active_positions_table()
-                logger.info("✅ 创建持仓表 active_positions")
+                logger.info("✅ 【数据库】创建持仓区表 active_positions")
             
             if 'closed_positions' not in tables:
                 self._create_closed_positions_table()
-                logger.info("✅ 创建历史表 closed_positions")
+                logger.info("✅ 创建历史区表 closed_positions")
             
             self._create_indexes()
             
@@ -557,7 +586,7 @@ class Database:
     
     def _create_active_positions_table(self):
         """
-        创建持仓表
+        创建持仓区表
         """
         sql = """
         CREATE TABLE IF NOT EXISTS active_positions (
@@ -619,7 +648,7 @@ class Database:
     
     def _create_closed_positions_table(self):
         """
-        创建历史表
+        创建历史区表
         """
         sql = """
         CREATE TABLE IF NOT EXISTS closed_positions (
@@ -694,6 +723,6 @@ class Database:
         for sql in indexes:
             try:
                 self._run_sql(sql)
-                logger.debug(f"✅ 索引创建/已存在: {sql[:40]}...")
+                logger.debug(f"✅ 【数据库】索引创建/已存在: {sql[:40]}...")
             except Exception as e:
-                logger.warning(f"⚠️ 索引创建失败（可能已存在）: {e}")
+                logger.warning(f"⚠️【数据库】 索引创建失败（可能已存在）: {e}")
