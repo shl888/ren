@@ -9,6 +9,7 @@
 """
 import time
 import logging
+import asyncio
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -81,21 +82,32 @@ class Step2Fusion:
         self.containers["binance"]["交易所"] = "binance"
         self.containers["okx"]["交易所"] = "okx"
         
-        # 重置计时器状态（各自独立）
-        self.reset_timers = {
-            "binance": {
-                "active": False,  # 是否正在计时
-                "start_time": None,  # 开始计时的时间戳
-                "countdown": 5  # 倒计时秒数
-            },
-            "okx": {
-                "active": False,
-                "start_time": None,
-                "countdown": 5
-            }
+        # 重置任务（各自独立）- 改用真正的异步任务
+        self.reset_tasks = {
+            "binance": None,
+            "okx": None
         }
         
+        # 倒计时秒数
+        self.reset_countdown = 5
+        
         logger.info("✅【step2】容器缓存已创建: binance, okx")
+    
+    async def _delayed_reset(self, exchange: str):
+        """真正的异步延迟重置"""
+        try:
+            logger.info(f"⏰【{exchange}】开始5秒倒计时")
+            await asyncio.sleep(self.reset_countdown)
+            
+            container = self.containers[exchange]
+            self._reset_container(container)
+            logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
+            
+        except asyncio.CancelledError:
+            logger.debug(f"⏰【{exchange}】清理倒计时被取消")
+            raise
+        finally:
+            self.reset_tasks[exchange] = None
     
     def process(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -118,9 +130,8 @@ class Step2Fusion:
             logger.warning(f"⚠️【step2】未知交易所: {exchange}")
             return None
         
-        # 获取对应交易所的容器和计时器（完全隔离）
+        # 获取对应交易所的容器
         container = self.containers[exchange]
-        timer = self.reset_timers[exchange]
         
         # ===== 调试：更新前容器内容 =====
         if exchange == 'okx':
@@ -133,30 +144,24 @@ class Step2Fusion:
             for field in close_fields
         )
         
-        # 如果有平仓字段，启动倒计时
-        if has_close_field and not timer["active"]:
-            timer["active"] = True
-            timer["start_time"] = time.time()
-            logger.info(f"⏰【{exchange}】检测到平仓字段，启动5秒重置倒计时")
+        # 如果有平仓字段且没有正在进行的重置任务，启动倒计时
+        if has_close_field and self.reset_tasks[exchange] is None:
+            # 创建真正的异步任务
+            self.reset_tasks[exchange] = asyncio.create_task(
+                self._delayed_reset(exchange)
+            )
+            logger.info(f"⏰【{exchange}】检测到平仓字段，启动{self.reset_countdown}秒重置倒计时")
         
         # 检查平仓事件（币安专用，但放在这里不影响欧易）
         event_type = extracted_data.get('event_type', '')
         if event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]:
             self._clear_trade_data(container)
             # 平仓事件也会触发倒计时
-            if not timer["active"]:
-                timer["active"] = True
-                timer["start_time"] = time.time()
-                logger.info(f"⏰【{exchange}】检测到平仓事件，启动5秒重置倒计时")
-        
-        # 检查是否需要重置容器
-        if timer["active"]:
-            elapsed = time.time() - timer["start_time"]
-            if elapsed >= timer["countdown"]:
-                self._reset_container(container)
-                timer["active"] = False
-                timer["start_time"] = None
-                logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
+            if self.reset_tasks[exchange] is None:
+                self.reset_tasks[exchange] = asyncio.create_task(
+                    self._delayed_reset(exchange)
+                )
+                logger.info(f"⏰【{exchange}】检测到平仓事件，启动{self.reset_countdown}秒重置倒计时")
         
         # ===== 覆盖式更新原始容器 =====
         update_count = 0
