@@ -281,33 +281,37 @@ class Database:
     
     def _run_sql(self, sql: str, params: List = None) -> Dict:
         """
-        执行SQL语句 - Turso API 格式修正版
+        执行SQL语句 - Turso API 最终修正版
         ==================================================
-        【核心原则】
-        Turso HTTP API 要求所有 value 必须是字符串格式（包括数字）。
-        通过 type 字段标记数据类型，value 字段统一用字符串传输。
-        Turso 会根据 type 自动将字符串转为对应的数据库类型。
+        【Turso API 格式要求 - 关键规则】
         
-        【Turso API 格式】
-        {
-            "type": "integer",  // 标记数据类型：null/integer/float/text/blob
-            "value": "20"       // 值必须是字符串，即使是数字也要加引号
-        }
+        Turso 的 value 字段类型必须与 type 标记严格匹配：
         
-        【类型映射】
-        - None → {"type": "null"} （无value字段）
-        - bool → {"type": "integer", "value": "1"/"0"}
-        - int → {"type": "integer", "value": "20"}
-        - float → {"type": "float", "value": "92047.08"}
-        - str → {"type": "text", "value": "okx"}
+        1. null: {"type": "null"}
+           - 不需要 value 字段
+           
+        2. integer: {"type": "integer", "value": 20}
+           - value 可以是 Python int 或 str（如 20 或 "20"）
+           
+        3. float: {"type": "float", "value": 92045.29}
+           - 【关键】value 必须是 Python float 类型（数字）
+           - 不能是字符串 "92045.29"，否则报错：expected f64
+           
+        4. text: {"type": "text", "value": "okx"}
+           - value 必须是字符串
         
-        【关键修复 - 2026-03-11】
-        问题：Turso API 返回 "invalid type: integer `20`, expected a borrowed string"
-        原因：Turso 要求 value 字段必须是字符串，但代码传了数字 20
-        修复：所有 value 统一用 str() 转为字符串
+        【修复历史】
+        - 第1次修复：bool 判断顺序 + 强制原生类型转换（失败）
+        - 第2次修复：所有 value 转字符串（失败，float不能是字符串）
+        - 第3次修复（当前）：float 保持数字类型，其他按需处理
         
-        不做任何字段类型判断，不关心字段的业务含义。
-        让数据库自己处理类型匹配。
+        【类型处理逻辑】
+        - None → null
+        - bool → integer (0/1)，必须在 int 之前判断
+        - int → integer，value 为 int 类型
+        - float → float，value 为 float 类型（不能转字符串！）
+        - str → text
+        - 其他 → 尝试转 float，不行转 str
         ==================================================
         
         :param sql: SQL语句（字段名用中文）
@@ -317,7 +321,7 @@ class Database:
         if params is None:
             params = []
         
-        # ----- 构建 args 数组（Turso API格式：所有value必须是字符串）-----
+        # ----- 构建 args 数组（Turso API格式）-----
         args = []
         
         for idx, p in enumerate(params):
@@ -329,34 +333,40 @@ class Database:
                 logger.debug(f"   → null")
                 
             elif isinstance(p, bool):
-                # bool 转 integer 的字符串 "1" 或 "0"
-                # 【注意】bool 必须在 int 之前判断，因为 isinstance(True, int) == True
-                bool_str = "1" if p else "0"
-                args.append({"type": "integer", "value": bool_str})
-                logger.debug(f"   → bool转integer字符串: {p} → '{bool_str}'")
+                # 【关键】bool 必须在 int 之前判断！因为 isinstance(True, int) == True
+                # Turso 没有 bool 类型，用 integer 0/1 表示
+                bool_val = 1 if p else 0
+                args.append({"type": "integer", "value": bool_val})
+                logger.debug(f"   → bool转integer: {p} → {bool_val}")
                 
             elif isinstance(p, int):
-                # 整数转字符串，如 20 → "20"
-                int_str = str(int(p))
-                args.append({"type": "integer", "value": int_str})
-                logger.debug(f"   → integer字符串: '{int_str}'")
+                # 整数：value 为 int 类型（Turso 也接受字符串，但用数字更规范）
+                native_int = int(p)
+                args.append({"type": "integer", "value": native_int})
+                logger.debug(f"   → integer: {native_int}")
                 
             elif isinstance(p, float):
-                # 浮点数转字符串，如 92047.0778923121 → "92047.0778923121"
-                float_str = str(float(p))
-                args.append({"type": "float", "value": float_str})
-                logger.debug(f"   → float字符串: '{float_str}'")
+                # 【关键修复】浮点数：value 必须是 float 类型，不能是字符串！
+                # 如果转字符串 "92045.29"，Turso 报错：expected f64
+                native_float = float(p)
+                args.append({"type": "float", "value": native_float})
+                logger.debug(f"   → float: {native_float}")
                 
             elif isinstance(p, str):
-                # 字符串保持原样
+                # 字符串：value 为 str 类型
                 args.append({"type": "text", "value": p})
                 logger.debug(f"   → text: '{p[:50]}...'")
                 
             else:
-                # 其他类型（numpy、decimal、datetime等）统一转字符串
-                str_val = str(p)
-                args.append({"type": "text", "value": str_val})
-                logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为text: '{str_val[:50]}...'")
+                # 其他类型（numpy、decimal、datetime等）：先尝试转 float，不行转 str
+                try:
+                    num_val = float(p)
+                    args.append({"type": "float", "value": num_val})
+                    logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为float: {num_val}")
+                except (ValueError, TypeError):
+                    str_val = str(p)
+                    args.append({"type": "text", "value": str_val})
+                    logger.warning(f"⚠️ 未知类型 {type(p).__name__}，转为text: '{str_val[:50]}...'")
         
         # ----- 构建请求体 -----
         payload = {
@@ -379,7 +389,7 @@ class Database:
         try:
             import json
             
-            # 序列化为JSON，确保所有字符串正确编码
+            # 序列化为JSON，确保数字类型正确编码
             json_data = json.dumps(payload, ensure_ascii=False)
             
             response = requests.post(
