@@ -32,8 +32,8 @@ class Step4Funding:
             "okx": None
         }
         
-        # 清理倒计时秒数（统一20秒）
-        self.reset_countdown = 20
+        # 清理倒计时秒数（统一5秒）
+        self.reset_countdown = 5
         
         logger.info("✅【step4】资金费缓存已创建: binance, okx")
     
@@ -136,7 +136,7 @@ class Step4Funding:
                 # 更新5个资金费字段（累加）
                 self._update_funding_fields_binance(self.cache[exchange], cached, is_first=False)
         
-        # ===== 检查平仓并启动倒计时（20秒）=====
+        # ===== 检查平仓并启动倒计时（5秒）=====
         if container.get("平仓时间") is not None:
             self._schedule_reset(exchange)
         

@@ -5,7 +5,7 @@
 2. 收到数据直接更新对应容器
 3. 返回副本给调度器
 4. 平仓时清空交易字段
-5. 收到平仓字段后开始60秒倒计时，到时重置容器
+5. 收到平仓字段后开始5秒倒计时，到时重置容器
 """
 import time
 import logging
@@ -86,12 +86,12 @@ class Step2Fusion:
             "binance": {
                 "active": False,  # 是否正在计时
                 "start_time": None,  # 开始计时的时间戳
-                "countdown": 60  # 倒计时秒数
+                "countdown": 5  # 倒计时秒数
             },
             "okx": {
                 "active": False,
                 "start_time": None,
-                "countdown": 60
+                "countdown": 5
             }
         }
         
@@ -137,7 +137,7 @@ class Step2Fusion:
         if has_close_field and not timer["active"]:
             timer["active"] = True
             timer["start_time"] = time.time()
-            logger.info(f"⏰【{exchange}】检测到平仓字段，启动60秒重置倒计时")
+            logger.info(f"⏰【{exchange}】检测到平仓字段，启动5秒重置倒计时")
         
         # 检查平仓事件（币安专用，但放在这里不影响欧易）
         event_type = extracted_data.get('event_type', '')
@@ -147,7 +147,7 @@ class Step2Fusion:
             if not timer["active"]:
                 timer["active"] = True
                 timer["start_time"] = time.time()
-                logger.info(f"⏰【{exchange}】检测到平仓事件，启动60秒重置倒计时")
+                logger.info(f"⏰【{exchange}】检测到平仓事件，启动5秒重置倒计时")
         
         # 检查是否需要重置容器
         if timer["active"]:
@@ -156,7 +156,7 @@ class Step2Fusion:
                 self._reset_container(container)
                 timer["active"] = False
                 timer["start_time"] = None
-                logger.info(f"🔄【{exchange}】60秒倒计时结束，容器已完全重置")
+                logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
         
         # ===== 覆盖式更新原始容器 =====
         update_count = 0
