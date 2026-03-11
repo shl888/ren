@@ -275,7 +275,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.probe_counter += 1
                 probe_id = 99900 + (self.probe_counter % 100)
                 
-                # ✅ 关键：使用LIST_SUBSCRIPTIONS（币安必响应）
+                # 关键：使用LIST_SUBSCRIPTIONS（币安必响应）
                 probe_msg = {
                     "method": "LIST_SUBSCRIPTIONS",
                     "id": probe_id
@@ -286,7 +286,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.waiting_for_probe = True
                 self.probe_ids.add(probe_id)
                 
-                # 🔥 发送失败 = 连接已死
+                # 发送失败 = 连接已死
                 await self.ws.send(json.dumps(probe_msg))
                 
             except asyncio.CancelledError:
@@ -311,14 +311,14 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 try:
                     data = json.loads(message)
                     
-                    # ✅ 核心逻辑：只检查ID，不问内容
+                    # 核心逻辑：只检查ID，不问内容
                     msg_id = data.get('id')
                     if msg_id and msg_id in self.probe_ids:
-                        # 🎯 有回音 = 连接活（不管内容是什么）
+                        # 有回音 = 连接活（不管内容是什么）
                         self.waiting_for_probe = False
                         self.probe_ids.discard(msg_id)
                         logger.debug(f"[币安探测] 收到响应 ID={msg_id}")
-                        continue  # ⚠️ 重要：不转发探测响应
+                        continue  # 重要：不转发探测响应
                     
                     # 正常业务消息
                     await self._process_binance_message(data)
@@ -368,11 +368,11 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         映射币安事件类型 - 关键修改：直接返回原生事件名
         让数据处理模块做过滤和映射，连接池只负责转发原始数据
         """
-        # 🔴 【修改前】包含映射，会导致数据处理模块收到错误的类型
+        # 【修改前】包含映射，会导致数据处理模块收到错误的类型
         # mapping = {
         #     'ACCOUNT_UPDATE': 'account_update',
         #     'ORDER_TRADE_UPDATE': 'order_update',
-        #     'TRADE_LITE': 'trade_update',  # ❌ 错误映射
+        #     'TRADE_LITE': 'trade_update',  # 错误映射
         #     'listenKeyExpired': 'system_event',
         #     'MARGIN_CALL': 'risk_event',
         #     'balanceUpdate': 'balance_update',
@@ -381,7 +381,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         # }
         # return mapping.get(event_type, 'unknown')
         
-        # 🟢 【修改后】直接返回原生事件名的小写
+        # 【修改后】直接返回原生事件名的小写
         # 数据处理模块会基于 event_type 做过滤和映射
         return event_type.lower()
     
@@ -413,10 +413,10 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         # 主动模式参数
         self.authenticated = False
         self.last_heartbeat_time = None
-        self.heartbeat_interval = 25  # 25秒心跳间隔
+        self.heartbeat_interval = 30  # 30秒心跳间隔（官方要求）
         self.no_message_threshold = 45  # 45秒无消息报警
         
-        logger.info(f"[欧意私人] 初始化完成（心跳模式，间隔{self.no_message_threshold}秒）")
+        logger.info(f"[欧意私人] 初始化完成（心跳模式，间隔{self.heartbeat_interval}秒）")
     
     async def connect(self):
         """建立欧意连接"""
@@ -462,7 +462,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         if not subscribe_success:
             logger.warning("[欧意私人] 订阅部分失败，但连接已建立")
         
-        # 4. 启动维护任务
+        # 4. 启动维护任务（启用官方心跳）
         await self._start_maintenance_tasks()
         
         return True
@@ -612,17 +612,32 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             return False
     
     async def _start_maintenance_tasks(self):
-        """启动维护任务"""
+        """启动维护任务（启用官方应用层心跳）"""
         # 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
         
-        # 删除应用层心跳任务（OKX不支持主动ping）
-        # self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # ✅ 启用官方要求的应用层心跳（每30秒）
+        self.heartbeat_task = asyncio.create_task(self._okx_heartbeat_loop())
         
         # 启动被动健康监控任务
         self.health_check_task = asyncio.create_task(self._active_mode_health_check())
         
-        logger.info("[欧意私人] 维护任务已启动")
+        logger.info("[欧意私人] 维护任务已启动（30秒应用层心跳）")
+    
+    async def _okx_heartbeat_loop(self):
+        """OKX官方心跳：每30秒发送{'op':'ping'}"""
+        while self.connected and self.authenticated:
+            try:
+                await asyncio.sleep(self.heartbeat_interval)  # 30秒
+                await self.ws.send(json.dumps({"op": "ping"}))
+                self.last_heartbeat_time = datetime.now()
+                logger.debug("[欧意私人] 应用层心跳已发送")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[欧意私人] 心跳发送失败: {e}")
+                self.connected = False
+                break
     
     async def _active_mode_health_check(self):
         """主动模式健康检查 - 消息间隔法（被动监控）"""
@@ -633,10 +648,9 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             if self.last_message_time:
                 seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
                 
-                # 超过阈值时仅记录警告，由协议层心跳处理断开
+                # 超过阈值时仅记录警告，由协议层心跳和应用层心跳处理断开
                 if seconds_since_last > self.no_message_threshold:
-                    logger.warning(f"[欧意私人] {seconds_since_last:.0f}秒未收到消息，依赖协议层心跳维持连接")
-                    # 不再主动发送ping，避免"非法请求"错误
+                    logger.warning(f"[欧意私人] {seconds_since_last:.0f}秒未收到消息，依赖心跳维持连接")
     
     async def _receive_messages(self):
         """接收欧意私人消息"""
@@ -681,6 +695,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 logger.debug(f"[欧意私人] 订阅事件: {data.get('arg')}")
             elif event == 'error':
                 logger.error(f"[欧意私人] 错误事件: {data}")
+            elif event == 'pong':
+                logger.debug(f"[欧意私人] 收到pong响应")
             return
         
         # 保存原始数据到缓存（可选）
