@@ -139,7 +139,7 @@ class PrivateDataProcessor:
             full_storage_item = {
                 'full_storage': self.memory_store['private_data'].copy()
             }
-            self.scheduler.feed_step1(full_storage_item)
+            await self.scheduler.feed_step1(full_storage_item) # ✅ 加上 await
             logger.info(f"📤【Manager】已将完整存储区喂给Step1，包含 {len(self.memory_store['private_data'])} 个数据项")
         except Exception as e:
             logger.error(f"❌【Manager】喂给Step1完整存储区失败: {e}")
