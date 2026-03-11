@@ -309,7 +309,8 @@ class Database:
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
         
-        sql = f"INSERT INTO closed_positions ({','.join(fields)}) VALUES ({placeholders})"
+        # 【修复】INSERT → INSERT OR REPLACE，实现去重
+        sql = f"INSERT OR REPLACE INTO closed_positions ({','.join(fields)}) VALUES ({placeholders})"
         
         logger.debug(f"📝 历史表 SQL: {sql}")
         logger.debug(f"📝 历史表 值: {values}")
