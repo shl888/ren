@@ -20,26 +20,26 @@ Step1 (提取) → 队列
         ↓
     数据完成部门 (receiver.py)
 
-【重要规则 - 数据格式转换 - 2024-03-11 最终修正】
-根据Turso API要求和数据库表定义，必须按字段类型转换：
+【重要规则 - 数据格式转换】
+调度器负责把数据转换成下游需要的格式：
 
-1. 数字字段（数据库中是 REAL/INTEGER）→ 转换为 Python 数字类型（int/float）
-   - 原因：Turso API要求数字字段的值必须是数字类型
-   - 例如：杠杆 "20" → 20 (int)，开仓价 "69789.4" → 69789.4 (float)
+1. 数字字段（供大脑计算使用）→ 转换为不带双引号的 Python 数字类型
+   - 例如：开仓价 "69789.4" → 69789.4 (float)
+   - 例如：杠杆 "10" → 10 (int)
+   - 原因：大脑模块计算时需要数字类型，字符串会导致计算错误
 
-2. 文本字段（数据库中是 TEXT）→ 保持为字符串
-   - 原因：Turso API要求文本字段的值必须是字符串
-   - 例如：交易所 "binance" → "binance"，id "binance_BTCUSDT_..." → 保持字符串
+2. 文本字段 → 保持为字符串（带不带双引号都行）
+   - 例如：交易所 "binance" → "binance"
+   - 例如：开仓方向 "LONG" → "LONG"
 
-3. 时间字段（数据库中是 DATETIME，本质是TEXT）→ 保持为字符串
-   - 例如：开仓时间 "2024-03-11T07:39:25" → 保持字符串
+3. 时间字段 → 保持为字符串格式
+   - 例如：开仓时间 "2024-03-11T07:39:25" → "2024-03-11T07:39:25"
 
 4. None值 → 保持 None（对应数据库的 null）
 
-【为什么不能统一转字符串或统一转数字？】
-- 第一个错误：integer 20, expected string → 文本字段收到了数字
-- 第二个错误：string 92045, expected f64 → 数字字段收到了字符串
-- 结论：必须按字段类型分别处理！
+【为什么调度器必须做转换？】
+- 大脑模块：需要数字字段是 int/float 才能计算盈亏、保证金等
+- 数据库文件：只负责根据类型标记，不负责转换格式
 ==================================================
 """
 
@@ -60,7 +60,7 @@ class PrivateDataScheduler:
         2. 从Step1输出队列获取数据
         3. 驱动Step2-3-4的流水线处理
         4. 将最终数据推送到数据完成部门
-        5. 在推送前按字段类型转换数据格式
+        5. 在推送前把数字字段转换为 Python 数字类型（供大脑计算）
     ==================================================
     """
 
@@ -158,7 +158,7 @@ class PrivateDataScheduler:
             2. Step2：融合更新（合并新旧数据）
             3. Step3：计算衍生字段（盈亏、保证金等）
             4. Step4：资金费处理
-            5. 按字段类型转换数据并推送到数据完成部门
+            5. 转换数字字段为Python数字类型，推送到数据完成部门
         ==================================================
         """
         logger.info("🏭【流水线工作线程】已启动")
@@ -209,16 +209,25 @@ class PrivateDataScheduler:
         推送数据到数据完成部门的接收器
         ==================================================
         做了三件事：
-            1. 按字段类型转换数据格式（数字字段转数字，文本字段保持字符串）
+            1. 把数字字段转换为 Python 数字类型（供大脑计算）
             2. 组装符合receiver要求的数据格式
             3. 调用 receive_private_data 推送
         
-        【为什么必须按字段类型转换？】
-        根据两次错误经验：
-        - 错误1: integer 20, expected string → 文本字段收到了数字
-        - 错误2: string 92045, expected f64 → 数字字段收到了字符串
+        【为什么必须转换数字字段？】
+        大脑模块需要计算：
+            - 盈亏 = (最新价 - 开仓价) * 持仓币数
+            - 保证金 = 开仓价 * 持仓币数 / 杠杆
+        如果开仓价是字符串 "69789.4"，计算时会报错！
         
-        结论：必须严格区分字段类型，分别处理！
+        所以必须把数字字段转成不带双引号的 int/float：
+            - 开仓价 "69789.4" → 69789.4 (float)
+            - 杠杆 "10" → 10 (int)
+            - 持仓币数 "0.1" → 0.1 (float)
+        
+        文本字段保持原样：
+            - 交易所 "binance" → "binance"
+            - 开仓方向 "LONG" → "LONG"
+            - 开仓时间 "2024-03-11T07:39:25" → "2024-03-11T07:39:25"
         ==================================================
         
         :param container: Step4处理后的完整数据容器
@@ -235,9 +244,9 @@ class PrivateDataScheduler:
             else:
                 data_type = "unknown"
             
-            # ===== 关键步骤：按字段类型转换数据格式 =====
-            # 根据数据库表定义，分别处理数字字段和文本字段
-            converted_container = self._convert_by_field_type(container)
+            # ===== 关键步骤：把数字字段转换为Python数字类型 =====
+            # 供大脑模块计算使用
+            converted_container = self._convert_numeric_fields(container)
             
             # 组装数据包
             completion_data = {
@@ -257,40 +266,42 @@ class PrivateDataScheduler:
         except Exception as e:
             logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
 
-    def _convert_by_field_type(self, data: dict) -> dict:
+    def _convert_numeric_fields(self, data: dict) -> dict:
         """
-        根据字段类型转换数据格式
+        把数字字段转换为 Python 数字类型（不带双引号）
         ==================================================
-        【字段类型分类 - 基于数据库表定义】
+        【目的】
+        大脑模块需要计算盈亏、保证金等，必须使用数字类型。
+        如果字段值是字符串 "69789.4"，计算时会报错。
         
-        1. 数字字段（REAL/INTEGER）- 必须转为 Python 数字类型
-           - 价格类：开仓价、标记价、最新价、平仓价
-           - 数量类：持仓币数、持仓张数、合约面值
-           - 价值类：开仓价仓位价值、标记价仓位价值、最新价仓位价值、平仓价仓位价值
-           - 保证金类：开仓保证金、标记价保证金、最新价保证金
-           - 盈亏类：标记价涨跌盈亏幅、最新价涨跌盈亏幅、平仓价涨跌盈亏幅
-           - 盈亏金额类：标记价浮盈、最新价浮盈、平仓收益
-           - 盈亏百分比类：标记价浮盈百分比、最新价浮盈百分比、平仓收益率
-           - 杠杆费率类：杠杆、本次资金费、累计资金费、平均资金费率
-           - 整数类：资金费结算次数
-           - 止损止盈类：止损触发价、止损幅度、止盈触发价、止盈幅度
-           - 手续费类：开仓手续费、平仓手续费
-           - 资产类：账户资产额
+        【转换规则】
+        1. 数字字段（数据库中是 REAL/INTEGER）→ 转换为 Python 数字类型
+           - 字符串 "69789.4" → 69789.4 (float)
+           - 字符串 "10" → 10 (int)
+           - 已经是数字的保持不变
         
-        2. 文本字段（TEXT）- 必须保持为字符串
-           - 标识类：id、交易所、资产币种
-           - 模式类：保证金模式、保证金币种
-           - 合约类：开仓合约名
-           - 方向类：开仓方向、开仓执行方式
-           - 币种类：开仓手续费币种、平仓手续费币种
-           - 触发方式类：止损触发方式、止盈触发方式、平仓执行方式
-           - 时间类：开仓时间、本次资金费结算时间、平仓时间（DATETIME本质是TEXT）
+        2. 文本字段 → 保持为字符串
+           - 交易所、开仓方向、时间等保持不变
         
-        3. None值 - 保持 None（对应数据库null）
+        3. None值 → 保持 None
+        
+        【数字字段列表 - 基于数据库表定义】
+        - 价格类：开仓价、标记价、最新价、平仓价
+        - 数量类：持仓币数、持仓张数、合约面值
+        - 价值类：开仓价仓位价值、标记价仓位价值、最新价仓位价值、平仓价仓位价值
+        - 保证金类：开仓保证金、标记价保证金、最新价保证金
+        - 盈亏类：标记价涨跌盈亏幅、最新价涨跌盈亏幅、平仓价涨跌盈亏幅
+        - 盈亏金额类：标记价浮盈、最新价浮盈、平仓收益
+        - 盈亏百分比类：标记价浮盈百分比、最新价浮盈百分比、平仓收益率
+        - 杠杆费率类：杠杆、本次资金费、累计资金费、平均资金费率
+        - 整数类：资金费结算次数
+        - 止损止盈类：止损触发价、止损幅度、止盈触发价、止盈幅度
+        - 手续费类：开仓手续费、平仓手续费
+        - 资产类：账户资产额
+        ==================================================
         
         :param data: 原始数据字典
-        :return: 按字段类型转换后的数据字典
-        ==================================================
+        :return: 数字字段转换为Python数字类型后的数据字典
         """
         # 创建副本，避免修改原始数据
         converted = data.copy()
@@ -307,14 +318,20 @@ class PrivateDataScheduler:
             # 保证金类
             '开仓保证金', '标记价保证金', '最新价保证金',
             
-            # 盈亏类
+            # 盈亏幅类
             '标记价涨跌盈亏幅', '最新价涨跌盈亏幅', '平仓价涨跌盈亏幅',
+            
+            # 盈亏金额类
             '标记价浮盈', '最新价浮盈', '平仓收益',
+            
+            # 盈亏百分比类
             '标记价浮盈百分比', '最新价浮盈百分比', '平仓收益率',
             
             # 杠杆和费率
             '杠杆', '本次资金费', '累计资金费', '平均资金费率',
-            '资金费结算次数',  # INTEGER
+            
+            # 整数类
+            '资金费结算次数',
             
             # 止损止盈
             '止损触发价', '止损幅度', '止盈触发价', '止盈幅度',
@@ -326,36 +343,9 @@ class PrivateDataScheduler:
             '账户资产额',
         }
         
-        # ----- 文本字段列表（必须保持字符串）-----
-        # 这些字段即使内容是数字（如时间戳），也要保持为字符串
-        text_fields = {
-            # 标识类
-            'id', '交易所', '资产币种',
-            
-            # 模式类
-            '保证金模式', '保证金币种',
-            
-            # 合约类
-            '开仓合约名',
-            
-            # 方向类
-            '开仓方向', '开仓执行方式',
-            
-            # 币种类
-            '开仓手续费币种', '平仓手续费币种',
-            
-            # 触发方式类
-            '止损触发方式', '止盈触发方式', '平仓执行方式',
-            
-            # 时间类（DATETIME本质是TEXT）
-            '开仓时间', '本次资金费结算时间', '平仓时间',
-        }
-        
         # ----- 转换统计 -----
-        convert_to_num_count = 0
-        keep_as_str_count = 0
+        convert_count = 0
         none_count = 0
-        other_count = 0
         
         for key, value in converted.items():
             if value is None:
@@ -364,7 +354,7 @@ class PrivateDataScheduler:
                 logger.debug(f"字段 [{key}]: None (保持null)")
                 
             elif key in numeric_fields:
-                # 数字字段：必须转成 int/float
+                # 数字字段：必须转成 int/float（不带双引号）
                 try:
                     if isinstance(value, str):
                         # 字符串数字转成数字
@@ -380,40 +370,25 @@ class PrivateDataScheduler:
                             except ValueError:
                                 converted[key] = float(cleaned)
                                 logger.debug(f"字段 [{key}]: '{value}' → {converted[key]} (float)")
-                        convert_to_num_count += 1
+                        convert_count += 1
                     elif isinstance(value, (int, float)):
-                        # 已经是数字，保持原样，但确保资金费结算次数是int
-                        if key == '资金费结算次数' and isinstance(value, float):
-                            converted[key] = int(value)
-                            logger.debug(f"字段 [{key}]: {value} → {converted[key]} (强制转int)")
-                        else:
-                            logger.debug(f"字段 [{key}]: {value} (已是{type(value).__name__})")
-                        convert_to_num_count += 1
+                        # 已经是数字，保持原样
+                        logger.debug(f"字段 [{key}]: {value} (已是{type(value).__name__})")
+                        convert_count += 1
                     else:
                         # 意外类型，尝试转数字
                         converted[key] = float(value)
                         logger.warning(f"字段 [{key}]: 意外类型 {type(value).__name__}，强制转float")
-                        convert_to_num_count += 1
+                        convert_count += 1
                 except (ValueError, TypeError) as e:
                     logger.error(f"字段 [{key}] 转换失败: {value}, 错误: {e}")
                     # 转换失败就保持原样，但记录错误
-                    
-            elif key in text_fields:
-                # 文本字段：确保是字符串
-                if not isinstance(value, str):
-                    converted[key] = str(value)
-                    logger.debug(f"字段 [{key}]: {value} ({type(value).__name__}) → '{converted[key]}'")
-                else:
-                    logger.debug(f"字段 [{key}]: '{value}' (已是字符串)")
-                keep_as_str_count += 1
-                
             else:
-                # 未知字段：默认保持原样，但记录警告
-                other_count += 1
-                logger.warning(f"字段 [{key}] 不在分类中，保持原样: {value} ({type(value).__name__})")
+                # 文本字段：保持原样（字符串、时间等）
+                logger.debug(f"字段 [{key}]: {value} ({type(value).__name__}) - 文本字段保持原样")
         
         # 记录转换统计
-        logger.info(f"📊 数据转换统计: {convert_to_num_count}个数字字段, {keep_as_str_count}个文本字段, {none_count}个null, {other_count}个未知字段")
+        logger.info(f"📊 数字字段转换统计: {convert_count}个字段转成数字, {none_count}个null")
         
         # 记录关键字段示例
         sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', 'id', '开仓时间']
