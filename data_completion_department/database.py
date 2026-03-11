@@ -275,7 +275,7 @@ class Database:
         logger.debug(f"📝 持仓表 值: {values}")
         
         # ----- 第3步：执行SQL -----
-        self._run_sql(sql, values)
+        self._run_sql(sql, values, table_name="active_positions")
         logger.debug(f"💾 持仓已保存: {data.get('交易所')} - {data.get('开仓合约名')}")
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
@@ -336,7 +336,7 @@ class Database:
         logger.debug(f"📝 历史表 SQL: {sql}")
         logger.debug(f"📝 历史表 值: {values}")
         
-        self._run_sql(sql, values)
+        self._run_sql(sql, values, table_name="closed_positions")
         logger.debug(f"📜 历史已写入: {data.get('交易所')} - {data.get('开仓合约名')} 平仓时间:{data.get('平仓时间')}")
     
     async def _delete_active_position(self, exchange: str):
@@ -362,72 +362,151 @@ class Database:
         
         # ----- 执行删除 -----
         sql = "DELETE FROM active_positions WHERE 交易所 = ?"
-        self._run_sql(sql, [exchange])
+        self._run_sql(sql, [exchange], table_name="active_positions")
         logger.info(f"🧹 持仓已清理: {exchange}")
     
     # ==================== SQL执行基础方法 ====================
     
-    def _run_sql(self, sql: str, params: List = None) -> Dict:
+    def _run_sql(self, sql: str, params: List = None, table_name: str = None) -> Dict:
         """
         执行SQL语句 - 所有数据库操作最终都走这个方法
         ==================================================
-        参数转换规则（关键修复 - 2024-01-XX 修正）：
-            None → null类型
-            int → integer类型
-            float → float类型（重要：是"float"不是"real"！）
-            str → text类型
-            其他类型 → 转成str再作为text类型
+        【Turso API要求 - 2024-03-11 重要更新】
         
-        【重要修复说明】
-        2024-01-XX: 将浮点数类型从"real"改为"float"
+        1. 值的格式（来自源头调度器）：
+           - 所有值都已经是字符串格式（包括数字）
+           - None 保持 None
         
-        问题背景：
-            之前使用"real"类型标记浮点数，导致插入时出现错误：
-            "unknown variant `real`, expected one of `null`, `integer`, `float`, `text`, `blob`"
+        2. 类型标记规则（本方法负责）：
+           - 需要根据字段类型，用正确的类型标记
+           - 值是字符串，但类型标记要准确！
         
-        为什么是"float"而不是"real"？
-            Turso API接受的类型枚举是：null, integer, float, text, blob
-            虽然SQLite内部用REAL存储，但API层要求使用"float"作为类型标识符
+        3. 字段类型对照表（根据表定义）：
+           
+           【INTEGER字段】- 标记为 "integer"
+           - 资金费结算次数
+           
+           【REAL字段】- 标记为 "float"（注意：是float不是real！）
+           - 开仓价、标记价、最新价、平仓价
+           - 持仓币数、持仓张数、合约面值
+           - 开仓价仓位价值、标记价仓位价值、最新价仓位价值、平仓价仓位价值
+           - 开仓保证金、标记价保证金、最新价保证金
+           - 标记价涨跌盈亏幅、最新价涨跌盈亏幅、平仓价涨跌盈亏幅
+           - 标记价浮盈、最新价浮盈、平仓收益
+           - 标记价浮盈百分比、最新价浮盈百分比、平仓收益率
+           - 杠杆、本次资金费、累计资金费、平均资金费率
+           - 止损触发价、止损幅度、止盈触发价、止盈幅度
+           - 开仓手续费、平仓手续费
+           - 账户资产额
+           
+           【TEXT字段】- 标记为 "text"
+           - id、交易所、资产币种、保证金模式、保证金币种
+           - 开仓合约名、开仓方向、开仓执行方式、开仓手续费币种
+           - 止损触发方式、止盈触发方式、平仓执行方式、平仓手续费币种
+           - 开仓时间、本次资金费结算时间、平仓时间
         
-        为什么测试连接能通过但插入失败？
-            - 测试连接 SELECT 1 用的是整数，走integer分支
-            - 真实数据包含浮点数（价格69789.4、杠杆10.5等），之前错误地用了"real"
+        示例：
+           杠杆字段：值是 "20"，标记为 {"type": "float", "value": "20"}
+           交易所字段：值是 "binance"，标记为 {"type": "text", "value": "binance"}
+           资金费结算次数：值是 "2"，标记为 {"type": "integer", "value": "2"}
         
-        修复验证：
-            修改后，所有浮点数（价格、金额、百分比等）都能正确写入数据库
-        
+        为什么这么设计？
+            Turso官方文档要求：
+            "In JSON, the value is a String to avoid losing precision"
+            值必须是字符串，但类型标记要准确，这样数据库才能正确存储。
         ==================================================
         
         :param sql: SQL语句（字段名用中文）
-        :param params: 参数列表
+        :param params: 参数列表（所有值都已是字符串格式）
+        :param table_name: 表名，用于字段类型判断
         :return: Turso API返回的原始结果
         """
         if params is None:
             params = []
         
-        # ----- 第1步：转换参数为Turso API要求的格式 -----
+        # ----- 定义字段类型映射（根据表结构）-----
+        # INTEGER字段
+        integer_fields = {
+            '资金费结算次数',
+        }
+        
+        # REAL字段（注意：API要求用"float"标记）
+        float_fields = {
+            '开仓价', '标记价', '最新价', '平仓价',
+            '持仓币数', '持仓张数', '合约面值',
+            '开仓价仓位价值', '标记价仓位价值', '最新价仓位价值', '平仓价仓位价值',
+            '开仓保证金', '标记价保证金', '最新价保证金',
+            '标记价涨跌盈亏幅', '最新价涨跌盈亏幅', '平仓价涨跌盈亏幅',
+            '标记价浮盈', '最新价浮盈', '平仓收益',
+            '标记价浮盈百分比', '最新价浮盈百分比', '平仓收益率',
+            '杠杆', '本次资金费', '累计资金费', '平均资金费率',
+            '止损触发价', '止损幅度', '止盈触发价', '止盈幅度',
+            '开仓手续费', '平仓手续费',
+            '账户资产额',
+        }
+        
+        # TEXT字段（包括所有不在上述列表中的字段）
+        # 注意：id、交易所、各种时间字段都是TEXT
+        
+        # ----- 第1步：从SQL中提取字段名（用于类型判断）-----
+        # 这个方法只处理简单的INSERT/UPDATE/DELETE语句
+        # 对于复杂SQL，需要依赖传入的table_name
+        
+        # 如果是INSERT语句，尝试提取字段名
+        fields_in_sql = []
+        if sql.strip().upper().startswith('INSERT'):
+            # 简单解析：找到括号中的字段列表
+            import re
+            match = re.search(r'\(([^)]+)\)', sql)
+            if match:
+                fields_str = match.group(1)
+                fields_in_sql = [f.strip() for f in fields_str.split(',')]
+        
+        # ----- 第2步：转换参数为Turso API要求的格式 -----
         args = []
         for idx, p in enumerate(params):
-            # 调试：记录每个参数的类型
-            logger.debug(f"参数[{idx}]: 值={p}, 类型={type(p).__name__}")
+            # 调试：记录每个参数的原始信息
+            logger.debug(f"参数[{idx}]: 值='{p}', 类型={type(p).__name__}")
             
             if p is None:
+                # None值保持为null
                 args.append({"type": "null", "value": None})
-            elif isinstance(p, int):
-                # 整数用 integer 类型
+                logger.debug(f"   → 标记为 null")
+                continue
+            
+            # 确定这个参数对应的字段名（如果可能）
+            field_name = None
+            if idx < len(fields_in_sql):
+                field_name = fields_in_sql[idx]
+            
+            # 根据字段名或表名判断类型
+            if field_name and field_name in integer_fields:
+                # INTEGER字段
                 args.append({"type": "integer", "value": p})
-            elif isinstance(p, float):
-                # ✅ 浮点数用 float 类型（重要：是"float"不是"real"！）
-                # 2024-01-XX 修复：Turso API只接受"float"作为浮点数类型标识
+                logger.debug(f"   → 字段 '{field_name}' 标记为 integer，值='{p}'")
+                
+            elif field_name and field_name in float_fields:
+                # REAL字段（用float标记）
                 args.append({"type": "float", "value": p})
-            elif isinstance(p, str):
-                args.append({"type": "text", "value": p})
+                logger.debug(f"   → 字段 '{field_name}' 标记为 float，值='{p}'")
+                
             else:
-                # 其他类型（如bool、dict等）转成字符串
-                logger.warning(f"⚠️ 未知类型参数[{idx}]: {type(p).__name__}，转换为字符串")
-                args.append({"type": "text", "value": str(p)})
+                # TEXT字段（默认）
+                args.append({"type": "text", "value": p})
+                if field_name:
+                    logger.debug(f"   → 字段 '{field_name}' 标记为 text，值='{p}'")
+                else:
+                    logger.debug(f"   → 未知字段，默认标记为 text，值='{p}'")
         
-        # ----- 第2步：构建请求体 -----
+        # 调试：打印类型转换统计
+        type_counts = {}
+        for a in args:
+            t = a["type"]
+            type_counts[t] = type_counts.get(t, 0) + 1
+        
+        logger.debug(f"📊 参数类型统计: {type_counts}")
+        
+        # ----- 第3步：构建请求体 -----
         payload = {
             "requests": [
                 {
@@ -442,10 +521,10 @@ class Database:
         
         # 调试：打印完整的请求信息
         logger.debug(f"📤 发送SQL请求到Turso")
-        logger.debug(f"   SQL: {sql}")
+        logger.debug(f"   SQL: {sql[:100]}...")  # 只打印前100个字符
         logger.debug(f"   参数数量: {len(args)}")
         
-        # ----- 第3步：发送HTTP请求到Turso -----
+        # ----- 第4步：发送HTTP请求到Turso -----
         try:
             response = requests.post(
                 f"{self.url}/v2/pipeline",
@@ -466,17 +545,20 @@ class Database:
             logger.error(f"❌ 数据库请求超时: {sql[:50]}...")
             raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ 数据库请求失败: {e}\nSQL: {sql}")
+            logger.error(f"❌ 数据库请求失败: {e}\nSQL: {sql[:200]}...")
             # 如果是400错误，尝试打印更详细的信息
             if hasattr(e, 'response') and e.response is not None:
                 try:
                     error_detail = e.response.json()
                     logger.error(f"❌ 错误详情: {error_detail}")
+                    # 如果是JSON解析错误，打印前500字节的响应内容
+                    if 'JSON parse error' in str(error_detail):
+                        logger.error(f"❌ 响应内容前500字符: {e.response.text[:500]}")
                 except:
                     logger.error(f"❌ 响应内容: {e.response.text[:500]}")
             raise
         except Exception as e:
-            logger.error(f"❌ 未知错误: {e}\nSQL: {sql}")
+            logger.error(f"❌ 未知错误: {e}\nSQL: {sql[:200]}...")
             raise
     
     # ==================== 连接测试 ====================
@@ -663,7 +745,7 @@ class Database:
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP  -- 最后更新时间
         );
         """
-        self._run_sql(sql)
+        self._run_sql(sql, table_name="active_positions")
     
     def _create_closed_positions_table(self):
         """
@@ -748,7 +830,7 @@ class Database:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP  -- 记录写入时间
         );
         """
-        self._run_sql(sql)
+        self._run_sql(sql, table_name="closed_positions")
     
     def _create_indexes(self):
         """
