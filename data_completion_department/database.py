@@ -45,6 +45,7 @@ Turso数据库
 import os
 import requests
 import logging
+import re
 from typing import Dict, Any, List, Optional
 
 # 配置日志
@@ -371,53 +372,56 @@ class Database:
         """
         执行SQL语句 - 所有数据库操作最终都走这个方法
         ==================================================
-        【Turso API要求 - 2024-03-11 重要更新】
+        【Turso API 要求 - 2024-03-11 最终修正】
         
-        1. 值的格式（来自源头调度器）：
-           - 所有值都已经是字符串格式（包括数字）
-           - None 保持 None
+        重要原则：
+            1. 调度器已经按字段类型处理好数据：
+               - 数字字段（REAL/INTEGER）→ Python int/float
+               - 文本字段（TEXT）→ Python str
+               - None → None
+            
+            2. 本方法只需要根据字段类型，用正确的类型标记：
+               - int 值 → 标记为 "integer"
+               - float 值 → 标记为 "float"（注意是float不是real！）
+               - str 值 → 标记为 "text"
+               - None → 标记为 "null"
+            
+        为什么不能统一用text？
+            错误信息 string 92045, expected f64 证明：
+            Turso API要求数字字段的值必须是数字类型，且类型标记要正确。
         
-        2. 类型标记规则（本方法负责）：
-           - 需要根据字段类型，用正确的类型标记
-           - 值是字符串，但类型标记要准确！
+        字段类型对照表（根据表定义）：
         
-        3. 字段类型对照表（根据表定义）：
-           
-           【INTEGER字段】- 标记为 "integer"
-           - 资金费结算次数
-           
-           【REAL字段】- 标记为 "float"（注意：是float不是real！）
-           - 开仓价、标记价、最新价、平仓价
-           - 持仓币数、持仓张数、合约面值
-           - 开仓价仓位价值、标记价仓位价值、最新价仓位价值、平仓价仓位价值
-           - 开仓保证金、标记价保证金、最新价保证金
-           - 标记价涨跌盈亏幅、最新价涨跌盈亏幅、平仓价涨跌盈亏幅
-           - 标记价浮盈、最新价浮盈、平仓收益
-           - 标记价浮盈百分比、最新价浮盈百分比、平仓收益率
-           - 杠杆、本次资金费、累计资金费、平均资金费率
-           - 止损触发价、止损幅度、止盈触发价、止盈幅度
-           - 开仓手续费、平仓手续费
-           - 账户资产额
-           
-           【TEXT字段】- 标记为 "text"
-           - id、交易所、资产币种、保证金模式、保证金币种
-           - 开仓合约名、开仓方向、开仓执行方式、开仓手续费币种
-           - 止损触发方式、止盈触发方式、平仓执行方式、平仓手续费币种
-           - 开仓时间、本次资金费结算时间、平仓时间
+        【INTEGER字段】- 标记为 "integer"
+        - 资金费结算次数
+        
+        【REAL字段】- 标记为 "float"
+        - 开仓价、标记价、最新价、平仓价
+        - 持仓币数、持仓张数、合约面值
+        - 开仓价仓位价值、标记价仓位价值、最新价仓位价值、平仓价仓位价值
+        - 开仓保证金、标记价保证金、最新价保证金
+        - 标记价涨跌盈亏幅、最新价涨跌盈亏幅、平仓价涨跌盈亏幅
+        - 标记价浮盈、最新价浮盈、平仓收益
+        - 标记价浮盈百分比、最新价浮盈百分比、平仓收益率
+        - 杠杆、本次资金费、累计资金费、平均资金费率
+        - 止损触发价、止损幅度、止盈触发价、止盈幅度
+        - 开仓手续费、平仓手续费
+        - 账户资产额
+        
+        【TEXT字段】- 标记为 "text"
+        - id、交易所、资产币种、保证金模式、保证金币种
+        - 开仓合约名、开仓方向、开仓执行方式、开仓手续费币种
+        - 止损触发方式、止盈触发方式、平仓执行方式、平仓手续费币种
+        - 开仓时间、本次资金费结算时间、平仓时间
         
         示例：
-           杠杆字段：值是 "20"，标记为 {"type": "float", "value": "20"}
-           交易所字段：值是 "binance"，标记为 {"type": "text", "value": "binance"}
-           资金费结算次数：值是 "2"，标记为 {"type": "integer", "value": "2"}
-        
-        为什么这么设计？
-            Turso官方文档要求：
-            "In JSON, the value is a String to avoid losing precision"
-            值必须是字符串，但类型标记要准确，这样数据库才能正确存储。
+           杠杆字段：值是 20 (int) → {"type": "integer", "value": 20}
+           开仓价字段：值是 92045.6032090571 (float) → {"type": "float", "value": 92045.6032090571}
+           交易所字段：值是 "binance" (str) → {"type": "text", "value": "binance"}
         ==================================================
         
         :param sql: SQL语句（字段名用中文）
-        :param params: 参数列表（所有值都已是字符串格式）
+        :param params: 参数列表（已按字段类型处理好）
         :param table_name: 表名，用于字段类型判断
         :return: Turso API返回的原始结果
         """
@@ -445,32 +449,29 @@ class Database:
             '账户资产额',
         }
         
-        # TEXT字段（包括所有不在上述列表中的字段）
-        # 注意：id、交易所、各种时间字段都是TEXT
-        
-        # ----- 第1步：从SQL中提取字段名（用于类型判断）-----
-        # 这个方法只处理简单的INSERT/UPDATE/DELETE语句
-        # 对于复杂SQL，需要依赖传入的table_name
-        
-        # 如果是INSERT语句，尝试提取字段名
+        # ----- 从SQL中提取字段名（用于类型判断）-----
+        # 只处理INSERT语句，其他语句不需要字段类型判断
         fields_in_sql = []
         if sql.strip().upper().startswith('INSERT'):
-            # 简单解析：找到括号中的字段列表
-            import re
+            # 使用正则提取括号中的字段列表
             match = re.search(r'\(([^)]+)\)', sql)
             if match:
                 fields_str = match.group(1)
                 fields_in_sql = [f.strip() for f in fields_str.split(',')]
+                logger.debug(f"解析到字段列表: {fields_in_sql}")
         
-        # ----- 第2步：转换参数为Turso API要求的格式 -----
+        # ----- 转换参数为Turso API要求的格式 -----
         args = []
+        type_counts = {"integer": 0, "float": 0, "text": 0, "null": 0}
+        
         for idx, p in enumerate(params):
             # 调试：记录每个参数的原始信息
-            logger.debug(f"参数[{idx}]: 值='{p}', 类型={type(p).__name__}")
+            logger.debug(f"参数[{idx}]: 值={p}, 类型={type(p).__name__}")
             
             if p is None:
                 # None值保持为null
                 args.append({"type": "null", "value": None})
+                type_counts["null"] += 1
                 logger.debug(f"   → 标记为 null")
                 continue
             
@@ -479,32 +480,79 @@ class Database:
             if idx < len(fields_in_sql):
                 field_name = fields_in_sql[idx]
             
-            # 根据字段名或表名判断类型
-            if field_name and field_name in integer_fields:
-                # INTEGER字段
-                args.append({"type": "integer", "value": p})
-                logger.debug(f"   → 字段 '{field_name}' 标记为 integer，值='{p}'")
-                
-            elif field_name and field_name in float_fields:
-                # REAL字段（用float标记）
-                args.append({"type": "float", "value": p})
-                logger.debug(f"   → 字段 '{field_name}' 标记为 float，值='{p}'")
-                
-            else:
-                # TEXT字段（默认）
-                args.append({"type": "text", "value": p})
-                if field_name:
-                    logger.debug(f"   → 字段 '{field_name}' 标记为 text，值='{p}'")
+            # 根据Python类型和字段名判断
+            if isinstance(p, int):
+                # 整数类型
+                if field_name and field_name in integer_fields:
+                    # 确实是INTEGER字段
+                    args.append({"type": "integer", "value": p})
+                    type_counts["integer"] += 1
+                    logger.debug(f"   → 字段 '{field_name}' 标记为 integer，值={p}")
+                elif field_name and field_name in float_fields:
+                    # 如果是FLOAT字段收到了int，转成float
+                    args.append({"type": "float", "value": float(p)})
+                    type_counts["float"] += 1
+                    logger.debug(f"   → 字段 '{field_name}' 是FLOAT，将int转float标记，值={float(p)}")
                 else:
-                    logger.debug(f"   → 未知字段，默认标记为 text，值='{p}'")
+                    # 未知字段或TEXT字段收到了int，按原样处理
+                    args.append({"type": "integer", "value": p})
+                    type_counts["integer"] += 1
+                    logger.debug(f"   → 字段 '{field_name or 'unknown'}' 标记为 integer，值={p}")
+                    
+            elif isinstance(p, float):
+                # 浮点类型
+                if field_name and field_name in float_fields:
+                    # 确实是FLOAT字段
+                    args.append({"type": "float", "value": p})
+                    type_counts["float"] += 1
+                    logger.debug(f"   → 字段 '{field_name}' 标记为 float，值={p}")
+                elif field_name and field_name in integer_fields:
+                    # 如果是INTEGER字段收到了float，转成int
+                    args.append({"type": "integer", "value": int(p)})
+                    type_counts["integer"] += 1
+                    logger.debug(f"   → 字段 '{field_name}' 是INTEGER，将float转int标记，值={int(p)}")
+                else:
+                    # 未知字段或TEXT字段收到了float，按原样处理
+                    args.append({"type": "float", "value": p})
+                    type_counts["float"] += 1
+                    logger.debug(f"   → 字段 '{field_name or 'unknown'}' 标记为 float，值={p}")
+                    
+            elif isinstance(p, str):
+                # 字符串类型
+                if field_name and (field_name in float_fields or field_name in integer_fields):
+                    # 如果是数字字段收到了字符串，说明调度器没处理好，尝试转换
+                    logger.warning(f"⚠️ 数字字段 '{field_name}' 收到了字符串 '{p}'，尝试转换")
+                    try:
+                        if '.' in p:
+                            num_val = float(p)
+                            args.append({"type": "float", "value": num_val})
+                            type_counts["float"] += 1
+                            logger.debug(f"   → 强制转float: {num_val}")
+                        else:
+                            num_val = int(p)
+                            args.append({"type": "integer", "value": num_val})
+                            type_counts["integer"] += 1
+                            logger.debug(f"   → 强制转integer: {num_val}")
+                    except ValueError:
+                        # 转换失败，按text处理
+                        args.append({"type": "text", "value": p})
+                        type_counts["text"] += 1
+                        logger.error(f"❌ 数字字段 '{field_name}' 字符串转换失败，按text处理: '{p}'")
+                else:
+                    # 正常的文本字段
+                    args.append({"type": "text", "value": p})
+                    type_counts["text"] += 1
+                    logger.debug(f"   → 字段 '{field_name or 'unknown'}' 标记为 text，值='{p[:50]}...'")
+                    
+            else:
+                # 其他类型（bool、list等），转成字符串
+                str_val = str(p)
+                args.append({"type": "text", "value": str_val})
+                type_counts["text"] += 1
+                logger.warning(f"⚠️ 未知类型参数[{idx}]: {type(p).__name__}，转为text: '{str_val[:50]}...'")
         
         # 调试：打印类型转换统计
-        type_counts = {}
-        for a in args:
-            t = a["type"]
-            type_counts[t] = type_counts.get(t, 0) + 1
-        
-        logger.debug(f"📊 参数类型统计: {type_counts}")
+        logger.debug(f"📊 参数类型统计: integer={type_counts['integer']}, float={type_counts['float']}, text={type_counts['text']}, null={type_counts['null']}")
         
         # ----- 第3步：构建请求体 -----
         payload = {
