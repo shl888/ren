@@ -16,29 +16,21 @@
 1. active_positions（持仓表）
    - 作用：存储当前正在持仓的数据
    - 特点：覆盖更新，每个交易所只能有一条数据
-   - 举例：币安开仓BTC → 写入一条；币安平仓 → 删除这条
 
 2. closed_positions（历史表）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
-   - 举例：每次平仓都新增一条记录，几年后还能查到
 
 【调用关系】
 调度器 (scheduler.py) 
-    ↓ 推送 {tag, data}  （tag是"已平仓"或"持仓完整"）
+    ↓ 推送 {tag, data}
 数据库 (database.py) 
     ↓ 根据tag执行不同逻辑
 Turso数据库
 
-【处理逻辑】
-- 收到"已平仓"标签：两步走
-  1. 写入历史表（永久保存）
-  2. 清理持仓表（只清理该交易所的，腾出位置）
-
-- 收到"持仓完整"标签：一步走
-  1. 写入持仓表（覆盖更新，旧数据自动被替换）
-
-- 收不到"空仓"标签：调度器已经禁止推送空仓数据
+【重要原则 - 2024-03-11 最终修复】
+Turso API 要求所有值都必须是字符串类型
+所以不管来的是什么类型的数据，都统一转成字符串
 ==================================================
 """
 
@@ -73,12 +65,10 @@ class Database:
         ==================================================
         """
         # ----- 第1步：从环境变量读取配置 -----
-        # 为什么用环境变量？因为数据库令牌是敏感信息，不能写死在代码里
         self.url = os.getenv('TURSO_DATABASE_URL')
         self.token = os.getenv('TURSO_DATABASE_TOKEN')
         
         # ----- 第2步：验证配置是否存在 -----
-        # 如果环境变量没设置，直接报错，不让程序继续运行
         if not self.url or not self.token:
             raise ValueError(
                 "❌ 环境变量 TURSO_DATABASE_URL 和 TURSO_DATABASE_TOKEN 必须设置\n"
@@ -90,13 +80,10 @@ class Database:
         logger.info("✅ 数据库配置加载成功")
         
         # ----- 第3步：测试数据库连接 -----
-        # 确保数据库真的能连上，避免后续操作失败
         if not self.test_connection():
             raise ConnectionError("❌ 无法连接到数据库，请检查网络和令牌")
         
         # ----- 第4步：初始化数据库表 -----
-        # 启动时自动检测表是否存在，不存在就创建
-        # 这样部署新环境时就不用手动建表了
         self._init_database()
     
     # ==================== 对外唯一入口 ====================
@@ -108,14 +95,6 @@ class Database:
         参数说明：
             tag: 数据标签，只能是"已平仓"或"持仓完整"
             data: 完整的原始数据，字段全是中文
-        
-        处理逻辑：
-            根据tag的值，执行不同的数据库操作
-        
-        注意事项：
-            1. 这个方法是被调度器调用的，不要在其他地方调用
-            2. 空仓标签的数据不会到这里，因为调度器禁止推送
-            3. 这个方法内部调用了私有方法，不直接操作SQL
         ==================================================
         
         :param tag: 数据标签（已平仓/持仓完整）
@@ -123,7 +102,6 @@ class Database:
         """
         try:
             # ----- 第1步：从数据中提取交易所信息 -----
-            # 为什么要提取交易所？因为后续清理持仓时需要知道清理哪个交易所
             exchange = data.get('交易所')
             if not exchange:
                 logger.error("❌ 数据中没有'交易所'字段，无法处理")
@@ -131,20 +109,15 @@ class Database:
             
             # ----- 第2步：根据标签执行不同逻辑 -----
             if tag == '已平仓':
-                # 已平仓数据要做两件事：
-                # 1. 写入历史区（永久保存，以后查账用）
-                # 2. 清理持仓区（腾出位置给下次开仓）
                 logger.info(f"📦 收到已平仓数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
-                # 持仓完整数据：覆盖更新到持仓区
                 contract = data.get('开仓合约名', 'unknown')
                 logger.info(f"📦 收到持仓完整数据: {exchange} - {contract}")
                 await self._handle_active(data)
                 
             else:
-                # 理论上不会走到这里，因为调度器只会推送这两种标签
                 logger.warning(f"⚠️ 收到未知标签: {tag}")
                 
         except Exception as e:
@@ -159,22 +132,15 @@ class Database:
         做了两件事，顺序很重要：
         1. 先写入历史表（永久保存）
         2. 再清理持仓表（只清理这个交易所）
-        
-        为什么先写历史再清理？
-            如果先清理，万一写入历史失败，数据就丢了。
-            先写历史，即使清理失败，至少数据还在历史表里。
         ==================================================
         
         :param data: 已平仓的完整数据
         :param exchange: 交易所名称（binance/okx）
         """
         # ----- 第1步：写入历史表（追加）-----
-        # 历史表是永久保存的，所以用INSERT，不是INSERT OR REPLACE
         await self._insert_closed_position(data)
         
         # ----- 第2步：清理持仓表（只清理该交易所）-----
-        # 清理时必须指定交易所，绝对不能写DELETE FROM active_positions
-        # 那样会把所有交易所的持仓都删掉
         await self._delete_active_position(exchange)
         
         logger.info(f"✅ 已平仓处理完成: {exchange}")
@@ -184,10 +150,6 @@ class Database:
         处理持仓完整数据
         ==================================================
         做一件事：覆盖更新到持仓区
-        
-        为什么是覆盖更新？
-            因为持仓区每个交易所只能有一条数据。
-            新数据来了，旧数据自动被替换，不需要先删除。
         ==================================================
         
         :param data: 持仓完整的完整数据
@@ -195,8 +157,6 @@ class Database:
         await self._save_active_position(data)
     
     # ==================== 实际数据库操作 ====================
-    # 以下方法都是私有的，只被上面的处理方法调用
-    # 所有SQL语句都直接写在方法里，这样逻辑更清晰
     
     async def _save_active_position(self, data: Dict[str, Any]):
         """
@@ -204,26 +164,17 @@ class Database:
         ==================================================
         SQL说明：
             使用 INSERT OR REPLACE 实现覆盖更新
-            如果主键id存在，就更新；不存在，就插入
         
         字段说明：
             data字典的key必须和表字段完全一致（都是中文）
-            例如：data['交易所']、data['开仓合约名']
-        
-        重要说明：
-            - 数据库会完整保存所有字段，空值就是 null
-            - 不需要过滤任何字段
-            - 字段数量和占位符数量必须完全一致
         
         id生成规则：
             如果数据里没有id，就用"交易所_合约名_开仓时间"拼一个
-            这样能保证每条数据都有唯一的主键
         ==================================================
         
         :param data: 数据字典，key必须全是中文
         """
         # ----- 第1步：确保数据有id字段 -----
-        # 表的主键是id，所以每条数据必须有id
         if 'id' not in data:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
@@ -232,46 +183,28 @@ class Database:
             logger.debug(f"🔑 生成id: {data['id']}")
         
         # ----- 第2步：构建SQL语句 -----
-        # fields是所有字段名（中文）
         fields = list(data.keys())
         
-        # 🔍 调试：打印字段数量和字段列表
         logger.info(f"📊 持仓表 - 字段数量: {len(fields)}")
         logger.info(f"📋 持仓表 - 字段列表: {fields}")
         
-        # 生成占位符：有多少个字段就有多少个问号
         placeholders = ','.join(['?' for _ in fields])
-        
-        # values是对应的值（包括null值）
         values = [data.get(f) for f in fields]
         
-        # 🔍 调试：确认字段数量匹配
         placeholders_count = len(placeholders.split(','))
         logger.info(f"📊 持仓表 - 占位符数量: {placeholders_count}")
         logger.info(f"📊 持仓表 - 值数量: {len(values)}")
         
         if len(fields) != len(values):
             logger.error(f"❌ 持仓表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
-            # 打印不匹配的详细信息
-            for i, field in enumerate(fields):
-                if i < len(values):
-                    logger.error(f"  字段[{i}]: {field} = {values[i]}")
-                else:
-                    logger.error(f"  字段[{i}]: {field} = (无对应值)")
             return
         
-        if len(fields) != placeholders_count:
-            logger.error(f"❌ 持仓表 - 字段数量和占位符数量不匹配! fields={len(fields)}, placeholders={placeholders_count}")
-            return
-        
-        # 组装SQL
         sql = f"""
             INSERT OR REPLACE INTO active_positions 
             ({','.join(fields)}) 
             VALUES ({placeholders})
         """
         
-        # 🔍 打印完整SQL用于调试
         logger.debug(f"📝 持仓表 SQL: {sql}")
         logger.debug(f"📝 持仓表 值: {values}")
         
@@ -285,46 +218,24 @@ class Database:
         ==================================================
         SQL说明：
             使用 INSERT 实现追加写入
-            每次执行都会在表里新增一行，不会覆盖旧数据
-        
-        注意事项：
-            历史表没有主键约束，可以重复写入
-            但实际业务中，同一笔平仓不会重复推送
-        
-        重要说明：
-            - 数据库会完整保存所有字段，空值就是 null
-            - 不需要过滤任何字段
-            - 字段数量和占位符数量必须完全一致
         ==================================================
         
         :param data: 数据字典，key必须全是中文
         """
         fields = list(data.keys())
         
-        # 🔍 调试：打印字段数量和字段列表
         logger.info(f"📊 历史表 - 字段数量: {len(fields)}")
         logger.info(f"📋 历史表 - 字段列表: {fields}")
         
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
         
-        # 🔍 调试：确认字段数量匹配
         placeholders_count = len(placeholders.split(','))
         logger.info(f"📊 历史表 - 占位符数量: {placeholders_count}")
         logger.info(f"📊 历史表 - 值数量: {len(values)}")
         
         if len(fields) != len(values):
             logger.error(f"❌ 历史表 - 字段数量不匹配! fields={len(fields)}, values={len(values)}")
-            # 打印不匹配的详细信息
-            for i, field in enumerate(fields):
-                if i < len(values):
-                    logger.error(f"  字段[{i}]: {field} = {values[i]}")
-                else:
-                    logger.error(f"  字段[{i}]: {field} = (无对应值)")
-            return
-        
-        if len(fields) != placeholders_count:
-            logger.error(f"❌ 历史表 - 字段数量和占位符数量不匹配! fields={len(fields)}, placeholders={placeholders_count}")
             return
         
         sql = f"""
@@ -333,7 +244,6 @@ class Database:
             VALUES ({placeholders})
         """
         
-        # 🔍 打印完整SQL用于调试
         logger.debug(f"📝 历史表 SQL: {sql}")
         logger.debug(f"📝 历史表 值: {values}")
         
@@ -345,42 +255,37 @@ class Database:
         清理持仓区 - 只清理指定交易所
         ==================================================
         重要警告：
-            这个方法必须传入exchange参数
-            绝对禁止写成：DELETE FROM active_positions
-            那样会把所有交易所的持仓都删掉，造成数据丢失！
-        
-        执行时机：
-            当某个交易所平仓时调用，清理该交易所的旧持仓
-            为新开仓腾出位置
+            必须传入exchange参数，绝对不能删除所有持仓
         ==================================================
         
         :param exchange: 'binance' 或 'okx'，不能为空
         """
-        # ----- 安全检查 -----
         if not exchange:
             logger.error("❌ 清理持仓必须传入交易所参数，本次操作已取消")
             return
         
-        # ----- 执行删除 -----
         sql = "DELETE FROM active_positions WHERE 交易所 = ?"
         self._run_sql(sql, [exchange])
         logger.info(f"🧹 持仓已清理: {exchange}")
     
     # ==================== SQL执行基础方法 ====================
-    # 这个方法是调试的核心，加了详细的日志来追踪问题
+    # 【最终修复】2024-03-11 - 强制所有值转字符串
     
     def _run_sql(self, sql: str, params: List = None) -> Dict:
         """
-        执行SQL语句 - 带完整调试信息，用于定位问题
+        执行SQL语句 - 最终修复版本
         ==================================================
-        【调试模式开启】
-        这个版本会打印所有详细信息，帮助找出问题根源
+        【问题】Turso API要求所有值都必须是字符串类型
+        【解决方案】不管来的是什么类型，全部转成字符串
         
-        打印内容：
-        1. 原始参数的值和类型
-        2. 转换后的参数类型
-        3. 完整的请求体
-        4. 数据库返回的完整响应
+        转换规则：
+            - None → {"type": "null", "value": None}
+            - 其他所有值 → {"type": "text", "value": str(值)}
+        
+        例如：
+            - 整数 20 → {"type": "text", "value": "20"}
+            - 浮点数 69761.2 → {"type": "text", "value": "69761.2"}
+            - 字符串 "okx" → {"type": "text", "value": "okx"}
         ==================================================
         
         :param sql: SQL语句（字段名用中文）
@@ -390,20 +295,19 @@ class Database:
         if params is None:
             params = []
         
-        # ========== 调试信息第一部分：原始参数 ==========
+        # ========== 调试信息：打印原始参数 ==========
         logger.info("=" * 60)
         logger.info("🔍【调试】开始执行SQL，打印所有原始参数")
         logger.info(f"📝 SQL: {sql}")
         logger.info(f"📊 参数总数: {len(params)}")
         
         for i, p in enumerate(params):
-            logger.info(f"  🔹 参数[{i}]: 值={p}, 类型={type(p).__name__}, 内存ID={id(p)}")
+            logger.info(f"  🔹 参数[{i}]: 值={p}, 类型={type(p).__name__}")
         
-        # ========== 转换参数 ==========
+        # ========== 强制全部转字符串 ==========
         args = []
-        type_counts = {"integer": 0, "float": 0, "text": 0, "null": 0}
         
-        logger.info("🔄【调试】开始转换参数...")
+        logger.info("🔄【调试】强制转换所有值为字符串...")
         
         for idx, p in enumerate(params):
             logger.info(f"  🔸 处理参数[{idx}]: 原始值={p}, 原始类型={type(p).__name__}")
@@ -411,44 +315,15 @@ class Database:
             if p is None:
                 # None值保持为null
                 args.append({"type": "null", "value": None})
-                type_counts["null"] += 1
                 logger.info(f"    ✅ 转换结果: null")
-                
-            elif isinstance(p, int):
-                # 整数类型 - 这里可能会被错误处理
-                logger.info(f"    ⚠️ 这是整数类型，当前处理分支: integer")
-                args.append({"type": "integer", "value": p})
-                type_counts["integer"] += 1
-                logger.info(f"    ✅ 转换结果: type=integer, value={p}")
-                
-            elif isinstance(p, float):
-                # 浮点类型
-                logger.info(f"    ⚠️ 这是浮点类型，当前处理分支: float")
-                args.append({"type": "float", "value": p})
-                type_counts["float"] += 1
-                logger.info(f"    ✅ 转换结果: type=float, value={p}")
-                
-            elif isinstance(p, str):
-                # 字符串类型
-                logger.info(f"    ⚠️ 这是字符串类型，当前处理分支: text")
-                args.append({"type": "text", "value": p})
-                type_counts["text"] += 1
-                logger.info(f"    ✅ 转换结果: type=text, value='{p[:50]}...'")
-                
             else:
-                # 其他类型，转成字符串
-                str_val = str(p)
-                logger.info(f"    ⚠️ 这是其他类型({type(p).__name__})，转为text")
-                args.append({"type": "text", "value": str_val})
-                type_counts["text"] += 1
-                logger.info(f"    ✅ 转换结果: type=text, value='{str_val[:50]}...'")
+                # 所有非空值强制转字符串
+                str_value = str(p)
+                args.append({"type": "text", "value": str_value})
+                logger.info(f"    ✅ 强制转字符串: '{str_value}'")
         
         # ========== 打印转换统计 ==========
-        logger.info("📊【调试】参数转换统计:")
-        logger.info(f"   integer: {type_counts['integer']}")
-        logger.info(f"   float: {type_counts['float']}")
-        logger.info(f"   text: {type_counts['text']}")
-        logger.info(f"   null: {type_counts['null']}")
+        logger.info(f"📊 参数转换完成: 共 {len(args)} 个参数")
         
         # ========== 构建请求体 ==========
         payload = {
@@ -463,17 +338,16 @@ class Database:
             ]
         }
         
-        # ========== 打印完整请求体 ==========
-        logger.info("📤【调试】发送到Turso的完整请求体:")
+        # ========== 打印请求体预览 ==========
+        logger.info("📤【调试】发送到Turso的请求体预览:")
         try:
-            payload_str = json.dumps(payload, indent=2, ensure_ascii=False)
-            # 限制打印长度，避免日志过大
-            if len(payload_str) > 2000:
-                logger.info(payload_str[:2000] + "... (截断)")
-            else:
-                logger.info(payload_str)
+            # 只打印args部分，避免日志过大
+            args_summary = []
+            for i, arg in enumerate(args):
+                args_summary.append(f"参数[{i}]: {arg}")
+            logger.info(f"参数列表: {args_summary}")
         except Exception as e:
-            logger.error(f"无法序列化payload: {e}")
+            logger.error(f"无法打印参数预览: {e}")
         
         # ========== 发送HTTP请求 ==========
         try:
@@ -490,14 +364,13 @@ class Database:
             
             # ========== 打印响应信息 ==========
             logger.info(f"📥【调试】收到响应: 状态码={response.status_code}")
-            logger.info(f"📥 响应头: {dict(response.headers)}")
             
-            # 尝试解析响应内容
-            try:
-                response_json = response.json()
-                logger.info(f"📥 响应体: {json.dumps(response_json, indent=2, ensure_ascii=False)}")
-            except:
-                logger.info(f"📥 响应文本: {response.text[:500]}")
+            if response.status_code != 200:
+                try:
+                    error_detail = response.json()
+                    logger.error(f"❌ 错误详情: {error_detail}")
+                except:
+                    logger.error(f"❌ 响应内容: {response.text[:500]}")
             
             response.raise_for_status()
             
@@ -505,27 +378,13 @@ class Database:
             return response.json()
             
         except requests.exceptions.Timeout:
-            logger.error("❌【调试】数据库请求超时")
+            logger.error("❌ 数据库请求超时")
             raise
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌【调试】数据库请求失败: {e}")
-            
-            # 如果是400错误，这可能是我们关心的
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"❌【调试】错误状态码: {e.response.status_code}")
-                try:
-                    error_detail = e.response.json()
-                    logger.error(f"❌【调试】错误详情: {error_detail}")
-                except:
-                    logger.error(f"❌【调试】错误响应: {e.response.text[:500]}")
-                
-                # 额外提示
-                if 'expected a borrowed string' in str(error_detail):
-                    logger.error("💡【调试】关键信息: API期望字符串，但收到了其他类型")
-                    logger.error("💡【调试】检查上面转换结果中哪些参数是 integer/float 类型")
+            logger.error(f"❌ 数据库请求失败: {e}")
             raise
         except Exception as e:
-            logger.error(f"❌【调试】未知错误: {e}")
+            logger.error(f"❌ 未知错误: {e}")
             raise
         finally:
             logger.info("=" * 60)
@@ -536,21 +395,14 @@ class Database:
         """
         测试数据库连接是否正常
         ==================================================
-        执行一个简单的SQL查询，验证：
-            1. 网络连接正常
-            2. 令牌有效
-            3. 数据库服务正常
-        
-        如果测试失败，程序应该停止启动，避免后续操作全部失败。
+        执行一个简单的SQL查询，验证连接
         ==================================================
         
         :return: True=连接正常，False=连接失败
         """
         try:
-            # 执行最简单的SQL：SELECT 1
             result = self._run_sql("SELECT 1")
             
-            # 检查返回结果
             if result and 'results' in result:
                 logger.info("✅ 数据库连接测试成功")
                 return True
@@ -568,54 +420,37 @@ class Database:
         """
         初始化数据库
         ==================================================
-        在程序启动时自动调用，确保数据库表存在。
-        如果表已存在，不会重复创建（用了IF NOT EXISTS）。
-        
-        做了三件事：
-        1. 获取当前所有表
-        2. 如果持仓表不存在，创建它
-        3. 如果历史表不存在，创建它
-        4. 创建索引（提高查询速度）
+        确保数据库表存在，如果不存在就创建
         ==================================================
         """
         try:
-            # ----- 第1步：获取现有表 -----
             tables = self._get_tables()
             logger.debug(f"当前数据库中的表: {tables}")
             
-            # ----- 第2步：检查并创建持仓表 -----
             if 'active_positions' not in tables:
                 self._create_active_positions_table()
                 logger.info("✅ 创建持仓表 active_positions")
             
-            # ----- 第3步：检查并创建历史表 -----
             if 'closed_positions' not in tables:
                 self._create_closed_positions_table()
                 logger.info("✅ 创建历史表 closed_positions")
             
-            # ----- 第4步：创建索引 -----
-            # 索引用于提高查询速度，重复执行无害
             self._create_indexes()
             
             logger.info("✅ 数据库初始化完成")
             
         except Exception as e:
             logger.error(f"❌ 数据库初始化失败: {e}")
-            raise  # 初始化失败就让程序退出，不要继续运行
+            raise
     
     def _get_tables(self) -> List[str]:
         """
         获取当前数据库中的所有表名
         ==================================================
-        执行SQLite的系统表查询，返回所有用户表的名字。
-        
-        SQL说明：
-            SELECT name FROM sqlite_master 
-            WHERE type='table'
-            这条语句查询SQLite的系统表，返回所有表名
+        执行SQLite的系统表查询
         ==================================================
         
-        :return: 表名列表，例如 ['active_positions', 'closed_positions']
+        :return: 表名列表
         """
         sql = "SELECT name FROM sqlite_master WHERE type='table';"
         result = self._run_sql(sql)
@@ -625,118 +460,20 @@ class Database:
             rows = result['results'][0].get('result', {}).get('rows', [])
             for row in rows:
                 if row and len(row) > 0:
-                    # row[0]是表名，它的结构是 {"type": "text", "value": "表名"}
                     tables.append(row[0].get('value'))
         
         return tables
     
     def _create_active_positions_table(self):
         """
-        创建持仓表（覆盖更新）
-        ==================================================
-        表名：active_positions
-        特点：使用INSERT OR REPLACE写入，自动覆盖旧数据
-        
-        字段说明：
-            所有字段都是中文，与数据字段完全对应
-            id是主键，确保每条数据唯一
-            updated_at自动记录更新时间
-        ==================================================
+        创建持仓表
         """
         sql = """
         CREATE TABLE IF NOT EXISTS active_positions (
-            -- ===== 基础信息 =====
-            id TEXT PRIMARY KEY,                    -- 主键：交易所_合约名_开仓时间
-            交易所 TEXT NOT NULL,                    -- binance/okx
-            账户资产额 REAL,                          -- 账户总资产
-            资产币种 TEXT,                            -- USDT等
-            
-            -- ===== 开仓信息 =====
-            保证金模式 TEXT,                           -- 全仓/逐仓
-            保证金币种 TEXT,                           -- USDT等
-            开仓合约名 TEXT,                           -- BTCUSDT
-            开仓方向 TEXT,                             -- LONG/SHORT
-            开仓执行方式 TEXT,                          -- 市价/限价
-            开仓价 REAL,                              -- 开仓价格
-            持仓币数 REAL,                             -- 持仓数量（币）
-            持仓张数 REAL,                             -- 持仓数量（张）
-            合约面值 REAL,                             -- 每张合约的面值
-            开仓价仓位价值 REAL,                        -- 开仓价 * 持仓币数
-            杠杆 REAL,                                -- 杠杆倍数
-            开仓保证金 REAL,                           -- 开仓时占用的保证金
-            开仓手续费 REAL,                           -- 开仓手续费
-            开仓手续费币种 TEXT,                        -- 手续费币种
-            开仓时间 DATETIME,                         -- 开仓时间
-            
-            -- ===== 标记价相关（用于计算） =====
-            标记价 REAL,                               -- 当前标记价格
-            标记价涨跌盈亏幅 REAL,                       -- 基于标记价的盈亏百分比
-            标记价保证金 REAL,                          -- 基于标记价计算的保证金
-            标记价仓位价值 REAL,                         -- 标记价 * 持仓币数
-            标记价浮盈 REAL,                            -- 基于标记价的浮动盈亏
-            标记价浮盈百分比 REAL,                       -- 基于标记价的盈亏百分比
-            
-            -- ===== 最新价相关（用于显示） =====
-            最新价 REAL,                               -- 当前最新成交价
-            最新价涨跌盈亏幅 REAL,                       -- 基于最新价的盈亏百分比
-            最新价保证金 REAL,                          -- 基于最新价计算的保证金
-            最新价仓位价值 REAL,                         -- 最新价 * 持仓币数
-            最新价浮盈 REAL,                            -- 基于最新价的浮动盈亏
-            最新价浮盈百分比 REAL,                       -- 基于最新价的盈亏百分比
-            
-            -- ===== 止损止盈 =====
-            止损触发方式 TEXT,                           -- 价格/幅度
-            止损触发价 REAL,                            -- 止损触发价格
-            止损幅度 REAL,                              -- 止损百分比
-            止盈触发方式 TEXT,                           -- 价格/幅度
-            止盈触发价 REAL,                            -- 止盈触发价格
-            止盈幅度 REAL,                              -- 止盈百分比
-            
-            -- ===== 资金费 =====
-            本次资金费 REAL DEFAULT 0,                  -- 最近一次资金费
-            累计资金费 REAL DEFAULT 0,                  -- 累计资金费总和
-            资金费结算次数 INTEGER DEFAULT 0,            -- 结算次数
-            平均资金费率 REAL,                           -- 平均费率
-            本次资金费结算时间 DATETIME,                 -- 最近结算时间
-            
-            -- ===== 平仓信息（持仓期间为空） =====
-            平仓执行方式 TEXT,                           -- 平仓方式
-            平仓价 REAL,                                -- 平仓价格
-            平仓价涨跌盈亏幅 REAL,                        -- 平仓盈亏百分比
-            平仓价仓位价值 REAL,                         -- 平仓价 * 持仓币数
-            平仓手续费 REAL,                             -- 平仓手续费
-            平仓手续费币种 TEXT,                          -- 手续费币种
-            平仓收益 REAL,                               -- 平仓盈亏金额
-            平仓收益率 REAL,                              -- 平仓收益率
-            平仓时间 DATETIME,                           -- 平仓时间
-            
-            -- ===== 时间戳 =====
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP  -- 最后更新时间
-        );
-        """
-        self._run_sql(sql)
-    
-    def _create_closed_positions_table(self):
-        """
-        创建历史表（追加写入）
-        ==================================================
-        表名：closed_positions
-        特点：使用INSERT写入，每次都是新增记录
-        
-        字段说明：
-            与持仓表几乎一样，但多了created_at
-            没有主键，可以有多条相同id的记录（不同时间平仓）
-        ==================================================
-        """
-        sql = """
-        CREATE TABLE IF NOT EXISTS closed_positions (
-            -- ===== 基础信息 =====
-            id TEXT,                                   -- 可以是重复的（多次开平仓）
-            交易所 TEXT NOT NULL,                    -- binance/okx
-            账户资产额 REAL,                          -- 平仓时的账户资产
-            资产币种 TEXT,                            -- USDT等
-            
-            -- ===== 开仓信息 =====
+            id TEXT PRIMARY KEY,
+            交易所 TEXT NOT NULL,
+            账户资产额 REAL,
+            资产币种 TEXT,
             保证金模式 TEXT,
             保证金币种 TEXT,
             开仓合约名 TEXT,
@@ -752,39 +489,29 @@ class Database:
             开仓手续费 REAL,
             开仓手续费币种 TEXT,
             开仓时间 DATETIME,
-            
-            -- ===== 标记价相关 =====
             标记价 REAL,
             标记价涨跌盈亏幅 REAL,
             标记价保证金 REAL,
             标记价仓位价值 REAL,
             标记价浮盈 REAL,
             标记价浮盈百分比 REAL,
-            
-            -- ===== 最新价相关 =====
             最新价 REAL,
             最新价涨跌盈亏幅 REAL,
             最新价保证金 REAL,
             最新价仓位价值 REAL,
             最新价浮盈 REAL,
             最新价浮盈百分比 REAL,
-            
-            -- ===== 止损止盈 =====
             止损触发方式 TEXT,
             止损触发价 REAL,
             止损幅度 REAL,
             止盈触发方式 TEXT,
             止盈触发价 REAL,
             止盈幅度 REAL,
-            
-            -- ===== 资金费 =====
             本次资金费 REAL DEFAULT 0,
             累计资金费 REAL DEFAULT 0,
             资金费结算次数 INTEGER DEFAULT 0,
             平均资金费率 REAL,
             本次资金费结算时间 DATETIME,
-            
-            -- ===== 平仓信息（历史表必须有值） =====
             平仓执行方式 TEXT,
             平仓价 REAL,
             平仓价涨跌盈亏幅 REAL,
@@ -794,9 +521,69 @@ class Database:
             平仓收益 REAL,
             平仓收益率 REAL,
             平仓时间 DATETIME,
-            
-            -- ===== 时间戳 =====
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP  -- 记录写入时间
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+        self._run_sql(sql)
+    
+    def _create_closed_positions_table(self):
+        """
+        创建历史表
+        """
+        sql = """
+        CREATE TABLE IF NOT EXISTS closed_positions (
+            id TEXT,
+            交易所 TEXT NOT NULL,
+            账户资产额 REAL,
+            资产币种 TEXT,
+            保证金模式 TEXT,
+            保证金币种 TEXT,
+            开仓合约名 TEXT,
+            开仓方向 TEXT,
+            开仓执行方式 TEXT,
+            开仓价 REAL,
+            持仓币数 REAL,
+            持仓张数 REAL,
+            合约面值 REAL,
+            开仓价仓位价值 REAL,
+            杠杆 REAL,
+            开仓保证金 REAL,
+            开仓手续费 REAL,
+            开仓手续费币种 TEXT,
+            开仓时间 DATETIME,
+            标记价 REAL,
+            标记价涨跌盈亏幅 REAL,
+            标记价保证金 REAL,
+            标记价仓位价值 REAL,
+            标记价浮盈 REAL,
+            标记价浮盈百分比 REAL,
+            最新价 REAL,
+            最新价涨跌盈亏幅 REAL,
+            最新价保证金 REAL,
+            最新价仓位价值 REAL,
+            最新价浮盈 REAL,
+            最新价浮盈百分比 REAL,
+            止损触发方式 TEXT,
+            止损触发价 REAL,
+            止损幅度 REAL,
+            止盈触发方式 TEXT,
+            止盈触发价 REAL,
+            止盈幅度 REAL,
+            本次资金费 REAL DEFAULT 0,
+            累计资金费 REAL DEFAULT 0,
+            资金费结算次数 INTEGER DEFAULT 0,
+            平均资金费率 REAL,
+            本次资金费结算时间 DATETIME,
+            平仓执行方式 TEXT,
+            平仓价 REAL,
+            平仓价涨跌盈亏幅 REAL,
+            平仓价仓位价值 REAL,
+            平仓手续费 REAL,
+            平仓手续费币种 TEXT,
+            平仓收益 REAL,
+            平仓收益率 REAL,
+            平仓时间 DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         """
         self._run_sql(sql)
@@ -804,14 +591,6 @@ class Database:
     def _create_indexes(self):
         """
         创建索引
-        ==================================================
-        索引的作用：加快查询速度
-        虽然这个文件不提供查询接口，但修复区会直接查数据库
-        所以索引还是需要的
-        
-        注意事项：
-            使用IF NOT EXISTS，重复执行不会报错
-        ==================================================
         """
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
@@ -826,5 +605,4 @@ class Database:
                 self._run_sql(sql)
                 logger.debug(f"✅ 索引创建/已存在: {sql[:40]}...")
             except Exception as e:
-                # 索引创建失败不影响主要功能，只记录警告
                 logger.warning(f"⚠️ 索引创建失败（可能已存在）: {e}")
