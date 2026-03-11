@@ -3,43 +3,18 @@
 ==================================================
 【文件职责】
 1. 启动和管理步骤1-2-3-4的流水线
-2. 接收Step1的输出，驱动Step2-3-4
+2. 接收Manager的完整存储区，直接驱动Step1-2-3-4
 3. 将最终处理后的数据推送到数据完成部门
 
-【数据流向】
-Manager.feed_step1() 
-    ↓
-Step1 (提取) → 队列
-    ↓
-流水线工作线程:
-    Step2 (融合更新) 
-        ↓
-    Step3 (计算衍生字段)
-        ↓
-    Step4 (资金费处理)
-        ↓
-    数据完成部门 (receiver.py)
+【重要变更 - 2026.03.12】
+==================================================
+彻底取消所有队列，改为直接调用链：
+- Manager → feed_step1() → Step1.receive() → 返回结果列表
+- 对每个结果 → Step2.process() → Step3.process() → Step4.process() → 推送
+- 所有步骤串行处理单条数据，但多条数据之间并行（通过异步任务）
 
-【重要规则 - 数据格式转换】
-调度器负责把数据转换成下游需要的格式：
-
-1. 数字字段（供大脑计算使用）→ 转换为不带双引号的 Python 数字类型
-   - 例如：开仓价 "69789.4" → 69789.4 (float)
-   - 例如：杠杆 "10" → 10 (int)
-   - 原因：大脑模块计算时需要数字类型，字符串会导致计算错误
-
-2. 文本字段 → 保持为字符串（带不带双引号都行）
-   - 例如：交易所 "binance" → "binance"
-   - 例如：开仓方向 "LONG" → "LONG"
-
-3. 时间字段 → 保持为字符串格式
-   - 例如：开仓时间 "2024-03-11T07:39:25" → "2024-03-11T07:39:25"
-
-4. None值 → 保持 None（对应数据库的 null）
-
-【为什么调度器必须做转换？】
-- 大脑模块：需要数字字段是 int/float 才能计算盈亏、保证金等
-- 数据库文件：只负责根据类型标记，不负责转换格式
+这样改造后，数据在模块内的延迟 = Step1 + Step2 + Step3 + Step4 的处理时间
+没有任何排队等待时间，极大提升实时性
 ==================================================
 """
 
@@ -57,10 +32,9 @@ class PrivateDataScheduler:
     ==================================================
     负责：
         1. 创建并管理Step1-4的实例
-        2. 从Step1输出队列获取数据
-        3. 驱动Step2-3-4的流水线处理
+        2. 直接从Manager接收完整存储区
+        3. 驱动Step1-2-3-4的流水线处理
         4. 将最终数据推送到数据完成部门
-        5. 在推送前把数字字段转换为 Python 数字类型（供大脑计算）
     ==================================================
     """
 
@@ -72,11 +46,15 @@ class PrivateDataScheduler:
         self.step4 = None
         self.running = False
         
-        # Step1输出队列：Step1提取后推到这里，调度器从这里取
-        self.step1_output_queue = asyncio.Queue()
-        
         # 添加就绪事件，用于等待调度器完全启动
         self._ready = asyncio.Event()
+        
+        # 统计信息（用于监控）
+        self.stats = {
+            "total_processed": 0,
+            "total_results": 0,
+            "last_process_time": None
+        }
         
         logger.info("✅【调度器】实例已创建")
 
@@ -84,11 +62,10 @@ class PrivateDataScheduler:
         """
         启动调度器 - 启动所有步骤和工作流
         ==================================================
-        做了四件事：
+        做了三件事：
             1. 导入所有Step模块
             2. 创建Step1-4的实例
             3. 标记运行状态
-            4. 启动流水线工作线程
         ==================================================
         """
         if self.running:
@@ -103,7 +80,7 @@ class PrivateDataScheduler:
         from .pipeline.step4_funding import Step4Funding
         
         # 创建所有步骤实例
-        self.step1 = Step1Extract(self.step1_output_queue)
+        self.step1 = Step1Extract()  # 不再传队列！
         self.step2 = Step2Fusion()
         self.step3 = Step3Calc()
         self.step4 = Step4Funding()
@@ -113,96 +90,125 @@ class PrivateDataScheduler:
         
         # 标记就绪
         self._ready.set()
-        
-        # 启动流水线工作线程
-        asyncio.create_task(self._pipeline_worker())
 
     async def stop(self):
         """停止调度器"""
         self.running = False
         logger.info("🛑【调度器】已停止")
 
-    def feed_step1(self, stored_item: Dict[str, Any]):
+    async def feed_step1(self, stored_item: Dict[str, Any]):
         """
-        Manager直接调用这个，往Step1嘴里塞数据
+        Manager直接调用这个，把完整存储区塞给Step1
         ==================================================
-        这是调度器的输入入口，Manager收到原始数据后调用此方法。
+        这是调度器的输入入口，Manager收到数据后调用此方法。
         
-        :param stored_item: 原始数据，格式：
+        重要变更：不再使用队列，直接 await Step1 处理完成，
+        然后对每个结果直接调用后续步骤。
+        
+        :param stored_item: 完整存储区数据，格式：
             {
-                'exchange': 'binance',
-                'data_type': 'account_update',
-                'data': {...},  # 真正的业务数据
-                'timestamp': '...'
+                'full_storage': {
+                    'binance_order_update': {...},
+                    'okx_order_update': {...},
+                    ...
+                }
             }
         ==================================================
         """
-        logger.info(f"🎯【调度器】feed_step1被调用！数据类型: {stored_item.get('data_type')}, 交易所: {stored_item.get('exchange')}")
+        logger.info(f"🎯【调度器】feed_step1被调用！存储区包含数据项: {len(stored_item.get('full_storage', {}))}")
         
-        if self.step1:
-            try:
-                # 创建异步任务交给Step1处理，不阻塞当前调用
-                asyncio.create_task(self.step1.receive(stored_item))
-                logger.info(f"📥【调度器】已创建任务塞给Step1，队列当前大小: {self.step1_output_queue.qsize()}")
-            except Exception as e:
-                logger.error(f"❌【调度器】创建任务失败: {e}")
-        else:
-            logger.error(f"❌【调度器】Step1未初始化！无法处理数据: {stored_item.get('data_type')}")
+        if not self.running:
+            logger.error("❌【调度器】未启动，无法处理数据")
+            return
+            
+        if not self.step1:
+            logger.error("❌【调度器】Step1未初始化")
+            return
+            
+        try:
+            # ===== 步骤1：提取字段（直接await，等待处理完成）=====
+            # Step1会并行处理所有key，返回提取结果列表
+            results = await self.step1.receive(stored_item)
+            
+            if not results:
+                logger.debug("⏭️【调度器】step1没有返回任何结果")
+                return
+                
+            logger.info(f"📊【调度器】step1返回 {len(results)} 条提取结果")
+            
+            # ===== 对每条提取结果，独立执行后续步骤 =====
+            # 为每条结果创建独立任务，实现并行处理
+            process_tasks = []
+            for result in results:
+                task = asyncio.create_task(self._process_single_result(result))
+                process_tasks.append(task)
+            
+            # 等待所有处理任务完成（可选，如果不关心结果可以不等待）
+            if process_tasks:
+                await asyncio.gather(*process_tasks, return_exceptions=True)
+                logger.debug(f"✅【调度器】所有 {len(process_tasks)} 条结果处理完成")
+            
+            # 更新统计
+            self.stats["total_processed"] += 1
+            self.stats["total_results"] += len(results)
+            self.stats["last_process_time"] = datetime.now().isoformat()
+            
+        except Exception as e:
+            logger.error(f"❌【调度器】处理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
-    async def _pipeline_worker(self):
+    async def _process_single_result(self, extracted: Dict[str, Any]):
         """
-        流水线工作线程
+        处理单条提取结果：Step2 → Step3 → Step4 → 推送
         ==================================================
-        这是调度器的核心处理循环：
-            1. 从Step1输出队列取数据
-            2. Step2：融合更新（合并新旧数据）
-            3. Step3：计算衍生字段（盈亏、保证金等）
-            4. Step4：资金费处理
-            5. 转换数字字段为Python数字类型，推送到数据完成部门
-        ==================================================
-        """
-        logger.info("🏭【流水线工作线程】已启动")
+        为每条结果独立执行完整的流水线处理。
+        所有步骤都在线程池中执行，避免阻塞事件循环。
         
-        while self.running:
-            try:
-                # 从Step1输出队列取数据（等待1秒超时）
-                extracted = await asyncio.wait_for(self.step1_output_queue.get(), timeout=1.0)
+        :param extracted: Step1提取的单条结果
+        ==================================================
+        """
+        try:
+            exchange = extracted.get('交易所', 'unknown')
+            event_type = extracted.get('event_type', extracted.get('data_type', 'unknown'))
+            
+            logger.info(f"🔨【调度器】开始处理单条结果: {exchange} {event_type}")
+            
+            # 获取事件循环
+            loop = asyncio.get_event_loop()
+            
+            # ===== 步骤2：融合更新（在线程池执行，避免阻塞）=====
+            container = await loop.run_in_executor(
+                None, self.step2.process, extracted
+            )
+            
+            if not container:
+                logger.warning(f"⚠️【调度器】Step2返回空，跳过本条结果")
+                return
                 
-                # 获取事件类型（兼容币安和欧易）
-                event_type = extracted.get('event_type')
-                if not event_type:
-                    event_type = extracted.get('data_type', 'unknown')
-                
-                logger.info(f"✅【调度器】从队列取到数据！类型: {event_type}, 交易所: {extracted.get('交易所')}")
-                
-                # ===== 步骤2：融合更新 =====
-                container = self.step2.process(extracted)
-                if not container:
-                    logger.warning(f"⚠️【调度器】Step2返回空，跳过")
-                    self.step1_output_queue.task_done()
-                    continue
-                logger.info(f"✅【调度器】Step2完成")
-
-                # ===== 步骤3：计算衍生字段 =====
-                self.step3.process(container)
-                logger.info(f"✅【调度器】Step3完成")
-
-                # ===== 步骤4：资金费处理 =====
-                final_container = self.step4.process(container)
-                logger.info(f"✅【调度器】Step4完成")
-
-                # ===== 推送数据完成部门 =====
-                await self._push_to_data_completion(final_container, event_type)
-                
-                self.step1_output_queue.task_done()
-                
-            except asyncio.TimeoutError:
-                # 超时正常，继续循环
-                continue
-            except Exception as e:
-                logger.error(f"❌【流水线工作线程】错误: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
+            logger.debug(f"✅【调度器】Step2完成: {exchange}")
+            
+            # ===== 步骤3：计算衍生字段 =====
+            await loop.run_in_executor(
+                None, self.step3.process, container
+            )
+            logger.debug(f"✅【调度器】Step3完成: {exchange}")
+            
+            # ===== 步骤4：资金费处理 =====
+            final_container = await loop.run_in_executor(
+                None, self.step4.process, container
+            )
+            logger.debug(f"✅【调度器】Step4完成: {exchange}")
+            
+            # ===== 推送数据到完成部门 =====
+            await self._push_to_data_completion(final_container, event_type)
+            
+            logger.info(f"✅【调度器】单条结果处理完成: {exchange} {event_type}")
+            
+        except Exception as e:
+            logger.error(f"❌【调度器】处理单条结果失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     async def _push_to_data_completion(self, container: Dict[str, Any], event_type: str):
         """
@@ -212,22 +218,6 @@ class PrivateDataScheduler:
             1. 把数字字段转换为 Python 数字类型（供大脑计算）
             2. 组装符合receiver要求的数据格式
             3. 调用 receive_private_data 推送
-        
-        【为什么必须转换数字字段？】
-        大脑模块需要计算：
-            - 盈亏 = (最新价 - 开仓价) * 持仓币数
-            - 保证金 = 开仓价 * 持仓币数 / 杠杆
-        如果开仓价是字符串 "69789.4"，计算时会报错！
-        
-        所以必须把数字字段转成不带双引号的 int/float：
-            - 开仓价 "69789.4" → 69789.4 (float)
-            - 杠杆 "10" → 10 (int)
-            - 持仓币数 "0.1" → 0.1 (float)
-        
-        文本字段保持原样：
-            - 交易所 "binance" → "binance"
-            - 开仓方向 "LONG" → "LONG"
-            - 开仓时间 "2024-03-11T07:39:25" → "2024-03-11T07:39:25"
         ==================================================
         
         :param container: Step4处理后的完整数据容器
@@ -391,7 +381,7 @@ class PrivateDataScheduler:
         logger.info(f"📊 数字字段转换统计: {convert_count}个字段转成数字, {none_count}个null")
         
         # 记录关键字段示例
-        sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', 'id', '开仓时间']
+        sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', '开仓时间']
         for field in sample_fields:
             if field in converted:
                 logger.debug(f"  📌 {field}: {converted[field]} ({type(converted[field]).__name__})")
@@ -401,6 +391,10 @@ class PrivateDataScheduler:
     async def wait_until_ready(self):
         """等待调度器完全就绪"""
         await self._ready.wait()
+    
+    def get_stats(self) -> Dict:
+        """获取统计信息（调试用）"""
+        return self.stats.copy()
 
 
 # ========== 单例模式 ==========
