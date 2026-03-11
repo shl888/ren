@@ -371,30 +371,31 @@ class Database:
         """
         执行SQL语句 - 所有数据库操作最终都走这个方法
         ==================================================
-        参数转换规则（关键修复）：
+        参数转换规则（关键修复 - 2024-01-XX 修正）：
             None → null类型
             int → integer类型
-            float → real类型（重要！区分整数和浮点数）
+            float → float类型（重要：是"float"不是"real"！）
             str → text类型
             其他类型 → 转成str再作为text类型
         
-        为什么需要区分int和float？
-            Turso的HTTP API需要精确的类型信息。
-            给REAL字段传一个被标记为integer的浮点数（如20.5）会导致400错误。
+        【重要修复说明】
+        2024-01-XX: 将浮点数类型从"real"改为"float"
         
-        返回值格式（Turso标准返回）：
-            {
-                "results": [
-                    {
-                        "type": "execute",
-                        "result": {
-                            "cols": [...],  # 列信息
-                            "rows": [...],  # 数据行
-                            "affected_row_count": 数字  # 影响的行数
-                        }
-                    }
-                ]
-            }
+        问题背景：
+            之前使用"real"类型标记浮点数，导致插入时出现错误：
+            "unknown variant `real`, expected one of `null`, `integer`, `float`, `text`, `blob`"
+        
+        为什么是"float"而不是"real"？
+            Turso API接受的类型枚举是：null, integer, float, text, blob
+            虽然SQLite内部用REAL存储，但API层要求使用"float"作为类型标识符
+        
+        为什么测试连接能通过但插入失败？
+            - 测试连接 SELECT 1 用的是整数，走integer分支
+            - 真实数据包含浮点数（价格69789.4、杠杆10.5等），之前错误地用了"real"
+        
+        修复验证：
+            修改后，所有浮点数（价格、金额、百分比等）都能正确写入数据库
+        
         ==================================================
         
         :param sql: SQL语句（字段名用中文）
@@ -413,11 +414,12 @@ class Database:
             if p is None:
                 args.append({"type": "null", "value": None})
             elif isinstance(p, int):
-                # ✅ 整数用 integer 类型
+                # 整数用 integer 类型
                 args.append({"type": "integer", "value": p})
             elif isinstance(p, float):
-                # ✅ 浮点数用 real 类型（重要修复！）
-                args.append({"type": "real", "value": p})
+                # ✅ 浮点数用 float 类型（重要：是"float"不是"real"！）
+                # 2024-01-XX 修复：Turso API只接受"float"作为浮点数类型标识
+                args.append({"type": "float", "value": p})
             elif isinstance(p, str):
                 args.append({"type": "text", "value": p})
             else:
