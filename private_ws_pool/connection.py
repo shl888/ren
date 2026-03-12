@@ -639,9 +639,9 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     logger.warning(f"[私人连接池] 欧意私人 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
                     # 捕获所有异常，但继续接收下一条消息
-                    logger.error(f"[私人连接池] 欧意私人 ❌❌❌ 处理消息错误: {e}")
-                    logger.error(f"[私人连接池] 欧意私人 ❌❌❌ 错误详情: {traceback.format_exc()}")
-                    logger.error(f"[私人连接池] 欧意私人 ❌❌❌ 问题消息: {message[:500]}")
+                    logger.info(f"[私人连接池] 欧意私人 ❌❌❌ 处理消息错误: {e}")
+                    logger.info(f"[私人连接池] 欧意私人 ❌❌❌ 错误详情: {traceback.format_exc()}")
+                    logger.info(f"[私人连接池] 欧意私人 ❌❌❌ 问题消息: {message[:500]}")
                     continue  # 关键：继续收下一条，不断开
                     
         except websockets.ConnectionClosed as e:
