@@ -312,7 +312,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                     event_type = data.get('e', 'unknown')
                     formatted_data = {
                         'exchange': 'binance',
-                        'data_type': event_type.lower(),
+                        'data_type': self._map_binance_event_type(event_type),  # ← 使用映射
                         'timestamp': datetime.now().isoformat(),
                         'data': data
                     }
@@ -339,6 +339,20 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             # 清理探测任务
             if self.probe_task:
                 self.probe_task.cancel()
+    
+    def _map_binance_event_type(self, event_type: str) -> str:
+        """映射币安事件类型到标准类型"""
+        mapping = {
+            'ORDER_TRADE_UPDATE': 'order_update',
+            'ACCOUNT_UPDATE': 'account_update',
+            'ACCOUNT_CONFIG_UPDATE': 'account_config_update',
+            'MARGIN_CALL': 'risk_event',
+            'listenKeyExpired': 'system_event',
+            'balanceUpdate': 'balance_update',
+            'outboundAccountPosition': 'account_update',
+            'executionReport': 'order_update'
+        }
+        return mapping.get(event_type, event_type.lower())
     
     async def disconnect(self):
         """断开连接 - 清理探测任务"""
@@ -575,10 +589,22 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     # 直接解析并推送，不做任何判断和处理
                     data = json.loads(message)
                     
-                    # 🔴【关键修改】使用create_task异步推送，不等待
+                    # 提取 channel 并映射到标准类型
+                    arg = data.get('arg', {})
+                    channel = arg.get('channel', 'unknown')
+                    
+                    channel_mapping = {
+                        'account': 'account_update',
+                        'orders': 'order_update',
+                        'positions': 'position_update',
+                        'balance_and_position': 'account_position_update'
+                    }
+                    data_type = channel_mapping.get(channel, 'unknown')
+                    
+                    # 🔴【关键修改】使用create_task异步推送，不等待，且使用映射后的data_type
                     asyncio.create_task(self.data_callback({
                         'exchange': 'okx',
-                        'data_type': 'private',
+                        'data_type': data_type,  # ← 使用映射后的类型
                         'timestamp': datetime.now().isoformat(),
                         'data': data
                     }))
