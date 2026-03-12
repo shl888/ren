@@ -1,5 +1,5 @@
 """
-私人WebSocket连接池模块
+私人WebSocket连接池模块 - 双连接热备版
 """
 from .pool_manager import PrivateWebSocketPool
 from .connection import (
@@ -8,14 +8,9 @@ from .connection import (
     OKXPrivateConnection
 )
 
-# 🔴 【修改点】删除RawDataCache导入
-# from .raw_data_cache import RawDataCache  # 删除这行
-
-__version__ = '1.0.0'
+__version__ = '2.0.0'  # 升级版本号
 __all__ = [
     'PrivateWebSocketPool',
-    # 🔴 【修改点】删除RawDataCache导出
-    # 'RawDataCache',  # 删除这行
     'PrivateWebSocketConnection',
     'BinancePrivateConnection',
     'OKXPrivateConnection'
