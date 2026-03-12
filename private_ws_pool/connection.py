@@ -390,7 +390,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 self.last_connect_success = datetime.now()
                 self.connection_established_time = datetime.now()
                 self.first_message_received = False
-                logger.info(f"[私人连接池] 欧意私人 连接建立成功")
+                self.connected = True
+                logger.info(f"[私人连接池] 欧意私人连接建立成功")
                 return True
             else:
                 logger.error(f"[私人连接池] 欧意私人 连接失败")
