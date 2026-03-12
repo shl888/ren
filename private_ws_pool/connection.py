@@ -206,7 +206,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             return False
     
     async def _try_multiple_servers(self):
-        """尝试多个服务器"""
+        """币安尝试多个服务器"""
         for server_index, server_url in enumerate(self.backup_servers):
             logger.info(f"私人连接池[币安私人] 尝试服务器 {server_index + 1}/{len(self.backup_servers)}")
             self.ws_url = server_url
@@ -223,7 +223,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         return False
     
     async def _connect_single_server(self):
-        """连接到单个服务器"""
+        """币安连接到单个服务器"""
         ssl_context = ssl.create_default_context()
         ssl_context.check_hostname = False
         ssl_context.verify_mode = ssl.CERT_NONE
@@ -232,7 +232,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             websockets.connect(
                 self.ws_url,
                 ssl=ssl_context,
-                ping_interval=30,
+                _interval=30,
                 ping_timeout=15,
                 close_timeout=8,
                 max_size=5*1024*1024,
@@ -458,8 +458,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             self.ws = await asyncio.wait_for(
                 websockets.connect(
                     self.ws_url,
-                    ping_interval=10,
-                    ping_timeout=5,
+                    ping_interval=None,
+                    ping_timeout=None,
                     close_timeout=5,
                     max_size=10*1024*1024,  # 10MB 单条限制
                     max_queue=None,          # 🔥 队列无限制 - 核心修改
@@ -475,8 +475,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 self.ws = await asyncio.wait_for(
                     websockets.connect(
                         self.backup_url,
-                        ping_interval=10,
-                        ping_timeout=5,
+                        ping_interval=None,
+                        ping_timeout=None,
                         close_timeout=5,
                         max_size=10*1024*1024,
                         max_queue=None,        # 🔥 队列无限制
