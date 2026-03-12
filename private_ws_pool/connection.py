@@ -317,7 +317,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                         'data': data
                     }
                     
-                    # 异步转发，不等待
+                    # 🔴【修改】异步转发，不等待
                     asyncio.create_task(self.data_callback(formatted_data))
                     
                 except json.JSONDecodeError:
@@ -574,13 +574,13 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     # 直接解析并推送，不做任何判断和处理
                     data = json.loads(message)
                     
-                    # 直接推送，不创建任务，不调用其他函数
-                    await self.data_callback({
+                    # 🔴【关键修改】使用create_task异步推送，不等待
+                    asyncio.create_task(self.data_callback({
                         'exchange': 'okx',
                         'data_type': 'private',
                         'timestamp': datetime.now().isoformat(),
                         'data': data
-                    })
+                    }))
                     
                 except json.JSONDecodeError:
                     logger.warning(f"[私人连接池] 欧意私人 无法解析JSON: {message[:100]}")
@@ -591,30 +591,12 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     
         except websockets.ConnectionClosed as e:
             logger.warning(f"[私人连接池] 欧意私人 连接关闭: code={e.code}, reason={e.reason}")
-            logger.warning(f"[私人连接池] 欧意私人 关闭详情: code={e.code}, reason={e.reason}")  # 详细记录关闭原因
-            await self._report_status('connection_closed', {
-                'code': e.code,
-                'reason': e.reason
-            })
             self.connected = False
             self.authenticated = False
-            
-            # 🔴【关键修复】取消接收任务，避免残留
-            if self.receive_task:
-                self.receive_task.cancel()
-                logger.info(f"[私人连接池] 欧意私人 接收任务已取消")
-                
         except Exception as e:
             logger.error(f"[私人连接池] 欧意私人 接收消息错误: {e}")
-            logger.error(f"[私人连接池] 欧意私人 异常详情: {traceback.format_exc()}")
-            await self._report_status('error', {'error': str(e)})
             self.connected = False
             self.authenticated = False
-            
-            # 🔴【关键修复】同样处理异常情况
-            if self.receive_task:
-                self.receive_task.cancel()
-                logger.info(f"[私人连接池] 欧意私人 接收任务已取消")
     
     async def disconnect(self):
         """断开连接"""
