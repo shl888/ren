@@ -232,7 +232,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             websockets.connect(
                 self.ws_url,
                 ssl=ssl_context,
-                _interval=30,
+                ping_interval=30,
                 ping_timeout=15,
                 close_timeout=8,
                 max_size=5*1024*1024,
