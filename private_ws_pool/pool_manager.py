@@ -318,14 +318,20 @@ class PrivateWebSocketPool:
         except Exception as e:
             logger.error(f"❌ [私人连接池] 处理状态事件失败: {e}")
     
+    # ========== 🔥 关键修改：实时推送，绝不等待 ==========
     async def _process_and_forward_data(self, raw_data: Dict[str, Any]):
-        """🔴 【修改点】处理并转发数据 - 硬编码推送到新模块"""
+        """处理并转发数据 - 实时推送，绝不等待"""
         try:
             # 硬编码推送到私人数据处理模块
             try:
                 from private_data_processing.manager import receive_private_data
-                await receive_private_data(raw_data)
-                logger.debug(f"📨 [私人连接池] 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
+                
+                # 🔥 创建异步任务，不等待处理结果
+                asyncio.create_task(receive_private_data(raw_data))
+                
+                # 只记录调试日志，不影响性能
+                logger.debug(f"📨 [私人连接池] 已推送: {raw_data['exchange']}.{raw_data['data_type']}")
+                
             except ImportError as e:
                 logger.error(f"❌ [私人连接池] 无法导入私人数据处理模块: {e}")
             except Exception as e:
@@ -374,7 +380,7 @@ class PrivateWebSocketPool:
                 'binance': '主动探测模式（30秒探测）',
                 'okx': '协议层心跳模式（25秒协议层心跳 + 45秒被动检测）'
             },
-            'data_destination': '私人数据处理模块（硬编码推送）'  # 🔴 【修改点】
+            'data_destination': '私人数据处理模块（异步推送，不等待）'  # 🔴 修改说明
         }
         
         for exchange in ['binance', 'okx']:

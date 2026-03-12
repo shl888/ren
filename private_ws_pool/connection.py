@@ -368,20 +368,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         映射币安事件类型 - 关键修改：直接返回原生事件名
         让数据处理模块做过滤和映射，连接池只负责转发原始数据
         """
-        # 🔴 【修改前】包含映射，会导致数据处理模块收到错误的类型
-        # mapping = {
-        #     'ACCOUNT_UPDATE': 'account_update',
-        #     'ORDER_TRADE_UPDATE': 'order_update',
-        #     'TRADE_LITE': 'trade_update',  # ❌ 错误映射
-        #     'listenKeyExpired': 'system_event',
-        #     'MARGIN_CALL': 'risk_event',
-        #     'balanceUpdate': 'balance_update',
-        #     'outboundAccountPosition': 'account_update',
-        #     'executionReport': 'order_update'
-        # }
-        # return mapping.get(event_type, 'unknown')
-        
-        # 🟢 【修改后】直接返回原生事件名的小写
+        # 🟢 直接返回原生事件名的小写
         # 数据处理模块会基于 event_type 做过滤和映射
         return event_type.lower()
     
@@ -616,9 +603,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         # 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
         
-        # 删除应用层心跳任务（OKX不支持主动ping）
-        # self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        
         # 启动被动健康监控任务
         self.health_check_task = asyncio.create_task(self._active_mode_health_check())
         
@@ -636,7 +620,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 # 超过阈值时仅记录警告，由协议层心跳处理断开
                 if seconds_since_last > self.no_message_threshold:
                     logger.warning(f"私人连接池[欧意私人] {seconds_since_last:.0f}秒未收到消息，依赖协议层心跳维持连接")
-                    # 不再主动发送ping，避免"非法请求"错误
     
     async def _receive_messages(self):
         """接收欧意私人消息"""
