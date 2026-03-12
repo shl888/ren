@@ -22,7 +22,7 @@ class MessageDeduplicator:
         self.window_size = window_size
         self.recent_ids = deque(maxlen=window_size)  # 滑动窗口，自动维护大小
         self.id_set = set()  # 用于快速查找
-        logger.debug(f"[去重器] 初始化，窗口大小: {window_size}")
+        logger.debug(f"【私人连接池】[去重器] 初始化，窗口大小: {window_size}")
     
     def extract_unique_id(self, data: Dict[str, Any]) -> str:
         """
@@ -92,7 +92,7 @@ class MessageDeduplicator:
             return False
             
         except Exception as e:
-            logger.error(f"[去重器] 检查重复失败: {e}")
+            logger.error(f"【私人连接池】[去重器] 检查重复失败: {e}")
             return False  # 出错时假设不重复，宁可多处理也不丢数据
 
 
@@ -123,7 +123,7 @@ class ExchangeConnectionPair:
         self.secondary_messages = 0
         self.last_switch_time = None
         
-        logger.info(f"[{exchange}连接对] 初始化完成")
+        logger.info(f"【私人连接池】[{exchange}连接对] 初始化完成")
     
     def update_health_status(self, conn_name: str, is_healthy: bool):
         """更新连接健康状态"""
@@ -134,7 +134,7 @@ class ExchangeConnectionPair:
         
         # 记录切换时间
         if not is_healthy:
-            logger.warning(f"[{self.exchange}] {conn_name}连接不健康")
+            logger.warning(f"【私人连接池】[{self.exchange}] {conn_name}连接不健康")
     
     async def process_message(self, data: Dict[str, Any], source: str):
         """
@@ -152,14 +152,14 @@ class ExchangeConnectionPair:
             # 去重检查
             if self.deduplicator.is_duplicate(data):
                 self.duplicate_messages += 1
-                logger.debug(f"[{self.exchange}] 丢弃重复消息 from {source}")
+                logger.debug(f"【私人连接池】[{self.exchange}] 丢弃重复消息 from {source}")
                 return
             
             # 非重复消息，转发给上层
             await self.data_callback(data)
             
         except Exception as e:
-            logger.error(f"[{self.exchange}] 处理消息失败: {e}")
+            logger.error(f"【私人连接池】[{self.exchange}] 处理消息失败: {e}")
     
     def get_status(self) -> Dict[str, Any]:
         """获取连接对状态"""
@@ -305,7 +305,7 @@ class PrivateWebSocketPool:
                 )
             
             # ===== 建立主连接 =====
-            logger.info("[币安] 正在建立主连接...")
+            logger.info("【私人连接池】[币安] 正在建立主连接...")
             primary_conn = BinancePrivateConnection(
                 listen_key=listen_key,
                 status_callback=self._handle_connection_status,
@@ -315,11 +315,11 @@ class PrivateWebSocketPool:
             
             primary_success = await primary_conn.connect()
             if not primary_success:
-                logger.error("[币安] 主连接建立失败")
+                logger.error("【私人连接池】[币安] 主连接建立失败")
                 return False
             
             # ===== 建立备连接（使用相同的listenKey）=====
-            logger.info("[币安] 正在建立备连接...")
+            logger.info("【私人连接池】[币安] 正在建立备连接...")
             secondary_conn = BinancePrivateConnection(
                 listen_key=listen_key,  # 同一个listenKey
                 status_callback=self._handle_connection_status,
@@ -329,7 +329,7 @@ class PrivateWebSocketPool:
             
             secondary_success = await secondary_conn.connect()
             if not secondary_success:
-                logger.warning("[币安] 备连接建立失败，但主连接已成功，继续运行")
+                logger.warning("【私人连接池】[币安] 备连接建立失败，但主连接已成功，继续运行")
                 # 不返回False，因为主连接可用
             
             # 保存连接
@@ -343,7 +343,7 @@ class PrivateWebSocketPool:
             # 为了兼容性，也设置原始的connections
             self.connections['binance'] = primary_conn
             
-            logger.info(f"✅ [币安] 双连接建立完成: 主={'✓' if primary_success else '✗'}, 备={'✓' if secondary_success else '✗'}")
+            logger.info(f"✅ 【私人连接池】[币安] 双连接建立完成: 主={'✓' if primary_success else '✗'}, 备={'✓' if secondary_success else '✗'}")
             
             # 更新统计
             self._update_quality_stats('binance', True)
@@ -351,7 +351,7 @@ class PrivateWebSocketPool:
             return True
             
         except Exception as e:
-            logger.error(f"❌ [币安] 建立双连接异常: {e}")
+            logger.error(f"❌ [【私人连接池】币安] 建立双连接异常: {e}")
             self.quality_stats['binance']['last_error'] = str(e)
             return False
     
@@ -376,7 +376,7 @@ class PrivateWebSocketPool:
                 )
             
             # ===== 建立主连接 =====
-            logger.info("[欧意] 正在建立主连接...")
+            logger.info("【私人连接池】[欧意] 正在建立主连接...")
             primary_conn = OKXPrivateConnection(
                 api_key=api_creds['api_key'],
                 api_secret=api_creds['api_secret'],
@@ -388,11 +388,11 @@ class PrivateWebSocketPool:
             
             primary_success = await primary_conn.connect()
             if not primary_success:
-                logger.error("[欧意] 主连接建立失败")
+                logger.error("【私人连接池】[欧意] 主连接建立失败")
                 return False
             
             # ===== 建立备连接 =====
-            logger.info("[欧意] 正在建立备连接...")
+            logger.info("【私人连接池】[欧意] 正在建立备连接...")
             secondary_conn = OKXPrivateConnection(
                 api_key=api_creds['api_key'],
                 api_secret=api_creds['api_secret'],
@@ -404,7 +404,7 @@ class PrivateWebSocketPool:
             
             secondary_success = await secondary_conn.connect()
             if not secondary_success:
-                logger.warning("[欧意] 备连接建立失败，但主连接已成功，继续运行")
+                logger.warning("【私人连接池】[欧意] 备连接建立失败，但主连接已成功，继续运行")
             
             # 保存连接
             self.connection_pairs['okx'].conn_primary = primary_conn
@@ -417,7 +417,7 @@ class PrivateWebSocketPool:
             # 为了兼容性，也设置原始的connections
             self.connections['okx'] = primary_conn
             
-            logger.info(f"✅ [欧意] 双连接建立完成: 主={'✓' if primary_success else '✗'}, 备={'✓' if secondary_success else '✗'}")
+            logger.info(f"✅ [【私人连接池】欧意] 双连接建立完成: 主={'✓' if primary_success else '✗'}, 备={'✓' if secondary_success else '✗'}")
             
             # 更新统计
             self._update_quality_stats('okx', True)
@@ -425,7 +425,7 @@ class PrivateWebSocketPool:
             return True
             
         except Exception as e:
-            logger.error(f"❌ [欧意] 建立双连接异常: {e}")
+            logger.error(f"❌ [【私人连接池】欧意] 建立双连接异常: {e}")
             self.quality_stats['okx']['last_error'] = str(e)
             return False
     
@@ -442,7 +442,7 @@ class PrivateWebSocketPool:
                 if pair:
                     await pair.process_message(data, conn_name)
             except Exception as e:
-                logger.error(f"[{exchange}:{conn_name}] 回调处理失败: {e}")
+                logger.error(f"【私人连接池】[{exchange}:{conn_name}] 回调处理失败: {e}")
         
         return callback
     
@@ -465,7 +465,7 @@ class PrivateWebSocketPool:
                         
                         # 如果从健康变为不健康，立即重建
                         if old_status and not is_healthy:
-                            logger.warning(f"[{exchange}] 主连接变不健康，立即重建")
+                            logger.warning(f"【私人连接池】[{exchange}] 主连接变不健康，立即重建")
                             asyncio.create_task(self._rebuild_single_connection(
                                 exchange, 'primary'
                             ))
@@ -478,14 +478,14 @@ class PrivateWebSocketPool:
                         
                         # 如果从健康变为不健康，立即重建
                         if old_status and not is_healthy:
-                            logger.warning(f"[{exchange}] 备连接变不健康，立即重建")
+                            logger.warning(f"【私人连接池】[{exchange}] 备连接变不健康，立即重建")
                             asyncio.create_task(self._rebuild_single_connection(
                                 exchange, 'secondary'
                             ))
                     
                     # 如果备连接不存在，尝试创建
                     if not pair.conn_secondary and pair.conn_primary:
-                        logger.info(f"[{exchange}] 备连接不存在，尝试创建")
+                        logger.info(f"【私人连接池】[{exchange}] 备连接不存在，尝试创建")
                         asyncio.create_task(self._rebuild_single_connection(
                             exchange, 'secondary'
                         ))
@@ -495,7 +495,7 @@ class PrivateWebSocketPool:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"❌ [健康监控] 异常: {e}")
+                logger.error(f"❌ [【私人连接池】健康监控] 异常: {e}")
                 await asyncio.sleep(10)
     
     async def _check_connection_health(self, connection) -> bool:
@@ -511,7 +511,7 @@ class PrivateWebSocketPool:
             if connection.last_message_time:
                 seconds_since = (datetime.now() - connection.last_message_time).total_seconds()
                 if seconds_since > 20:
-                    logger.debug(f"连接超过{seconds_since:.0f}秒无消息")
+                    logger.debug(f"【私人连接池】连接超过{seconds_since:.0f}秒无消息")
                     return False
             
             # 检查WebSocket底层状态
@@ -522,7 +522,7 @@ class PrivateWebSocketPool:
             return True
             
         except Exception as e:
-            logger.error(f"健康检查异常: {e}")
+            logger.error(f"【私人连接池】健康检查异常: {e}")
             return False
     
     async def _rebuild_single_connection(self, exchange: str, conn_type: str):
@@ -531,11 +531,11 @@ class PrivateWebSocketPool:
         conn_type: 'primary' 或 'secondary'
         """
         try:
-            logger.info(f"[{exchange}] 开始重建{conn_type}连接")
+            logger.info(f"【私人连接池】[{exchange}] 开始重建{conn_type}连接")
             
             pair = self.connection_pairs.get(exchange)
             if not pair:
-                logger.error(f"[{exchange}] 连接对不存在")
+                logger.error(f"【私人连接池】[{exchange}] 连接对不存在")
                 return
             
             # 获取当前健康的连接作为参考
@@ -547,7 +547,7 @@ class PrivateWebSocketPool:
                 # 获取listenKey
                 listen_key = await self.brain_store.get_listen_key('binance')
                 if not listen_key:
-                    logger.error("[币安] 无法获取listenKey")
+                    logger.error("【私人连接池】[币安] 无法获取listenKey")
                     return
                 
                 new_conn = BinancePrivateConnection(
@@ -561,7 +561,7 @@ class PrivateWebSocketPool:
                 # 获取API凭证
                 api_creds = await self.brain_store.get_api_credentials('okx')
                 if not api_creds:
-                    logger.error("[欧意] 无法获取API凭证")
+                    logger.error("【私人连接池】[欧意] 无法获取API凭证")
                     return
                 
                 new_conn = OKXPrivateConnection(
@@ -579,7 +579,7 @@ class PrivateWebSocketPool:
             # 建立连接
             success = await new_conn.connect()
             if not success:
-                logger.error(f"[{exchange}] {conn_type}连接重建失败")
+                logger.error(f"【私人连接池】[{exchange}] {conn_type}连接重建失败")
                 # 稍后重试
                 await asyncio.sleep(10)
                 asyncio.create_task(self._rebuild_single_connection(exchange, conn_type))
@@ -599,10 +599,10 @@ class PrivateWebSocketPool:
             # 更新健康状态
             pair.update_health_status(conn_type, True)
             
-            logger.info(f"✅ [{exchange}] {conn_type}连接重建成功")
+            logger.info(f"✅ 【私人连接池】[{exchange}] {conn_type}连接重建成功")
             
         except Exception as e:
-            logger.error(f"[{exchange}] 重建{conn_type}连接异常: {e}")
+            logger.error(f"【私人连接池】[{exchange}] 重建{conn_type}连接异常: {e}")
             # 异常后重试
             await asyncio.sleep(15)
             asyncio.create_task(self._rebuild_single_connection(exchange, conn_type))
@@ -623,7 +623,7 @@ class PrivateWebSocketPool:
                         
                         # 如果从健康变为不健康，立即重建
                         if old_status and not is_healthy:
-                            logger.warning(f"[{exchange}] 主连接变不健康，立即重建")
+                            logger.warning(f"【私人连接池】[{exchange}] 主连接变不健康，立即重建")
                             asyncio.create_task(self._rebuild_single_connection(
                                 exchange, 'primary'
                             ))
@@ -636,14 +636,14 @@ class PrivateWebSocketPool:
                         
                         # 如果从健康变为不健康，立即重建
                         if old_status and not is_healthy:
-                            logger.warning(f"[{exchange}] 备连接变不健康，立即重建")
+                            logger.warning(f"【私人连接池】[{exchange}] 备连接变不健康，立即重建")
                             asyncio.create_task(self._rebuild_single_connection(
                                 exchange, 'secondary'
                             ))
                     
                     # 如果备连接不存在，尝试创建
                     if not pair.conn_secondary and pair.conn_primary:
-                        logger.info(f"[{exchange}] 备连接不存在，尝试创建")
+                        logger.info(f"【私人连接池】[{exchange}] 备连接不存在，尝试创建")
                         asyncio.create_task(self._rebuild_single_connection(
                             exchange, 'secondary'
                         ))
@@ -653,7 +653,7 @@ class PrivateWebSocketPool:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"❌ [健康监控] 异常: {e}")
+                logger.error(f"❌ [【私人连接池】健康监控] 异常: {e}")
                 await asyncio.sleep(10)
     
     async def _check_connection_health(self, connection) -> bool:
@@ -669,7 +669,7 @@ class PrivateWebSocketPool:
             if connection.last_message_time:
                 seconds_since = (datetime.now() - connection.last_message_time).total_seconds()
                 if seconds_since > 20:
-                    logger.debug(f"连接超过{seconds_since:.0f}秒无消息")
+                    logger.debug(f"【私人连接池】连接超过{seconds_since:.0f}秒无消息")
                     return False
             
             # 检查WebSocket底层状态
@@ -680,7 +680,7 @@ class PrivateWebSocketPool:
             return True
             
         except Exception as e:
-            logger.error(f"健康检查异常: {e}")
+            logger.error(f"【私人连接池】健康检查异常: {e}")
             return False
     
     async def _rebuild_single_connection(self, exchange: str, conn_type: str):
@@ -689,11 +689,11 @@ class PrivateWebSocketPool:
         conn_type: 'primary' 或 'secondary'
         """
         try:
-            logger.info(f"[{exchange}] 开始重建{conn_type}连接")
+            logger.info(f"【私人连接池】[{exchange}] 开始重建{conn_type}连接")
             
             pair = self.connection_pairs.get(exchange)
             if not pair:
-                logger.error(f"[{exchange}] 连接对不存在")
+                logger.error(f"【私人连接池】[{exchange}] 连接对不存在")
                 return
             
             # 获取当前健康的连接作为参考
@@ -705,7 +705,7 @@ class PrivateWebSocketPool:
                 # 获取listenKey
                 listen_key = await self.brain_store.get_listen_key('binance')
                 if not listen_key:
-                    logger.error("[币安] 无法获取listenKey")
+                    logger.error("【私人连接池】[币安] 无法获取listenKey")
                     return
                 
                 new_conn = BinancePrivateConnection(
@@ -719,7 +719,7 @@ class PrivateWebSocketPool:
                 # 获取API凭证
                 api_creds = await self.brain_store.get_api_credentials('okx')
                 if not api_creds:
-                    logger.error("[欧意] 无法获取API凭证")
+                    logger.error("【私人连接池】[欧意] 无法获取API凭证")
                     return
                 
                 new_conn = OKXPrivateConnection(
@@ -737,7 +737,7 @@ class PrivateWebSocketPool:
             # 建立连接
             success = await new_conn.connect()
             if not success:
-                logger.error(f"[{exchange}] {conn_type}连接重建失败")
+                logger.error(f"【私人连接池】[{exchange}] {conn_type}连接重建失败")
                 # 稍后重试
                 await asyncio.sleep(10)
                 asyncio.create_task(self._rebuild_single_connection(exchange, conn_type))
@@ -757,10 +757,10 @@ class PrivateWebSocketPool:
             # 更新健康状态
             pair.update_health_status(conn_type, True)
             
-            logger.info(f"✅ [{exchange}] {conn_type}连接重建成功")
+            logger.info(f"✅ [【私人连接池】{exchange}] {conn_type}连接重建成功")
             
         except Exception as e:
-            logger.error(f"[{exchange}] 重建{conn_type}连接异常: {e}")
+            logger.error(f"【私人连接池】[{exchange}] 重建{conn_type}连接异常: {e}")
             # 异常后重试
             await asyncio.sleep(15)
             asyncio.create_task(self._rebuild_single_connection(exchange, conn_type))
@@ -850,7 +850,7 @@ class PrivateWebSocketPool:
             return success
             
         except Exception as e:
-            logger.error(f"单连接建立异常: {e}")
+            logger.error(f"【私人连接池】单连接建立异常: {e}")
             return False
     
     async def _setup_okx_connection(self) -> bool:
@@ -879,7 +879,7 @@ class PrivateWebSocketPool:
             return success
             
         except Exception as e:
-            logger.error(f"单连接建立异常: {e}")
+            logger.error(f"【私人连接池】单连接建立异常: {e}")
             return False
     
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
@@ -926,7 +926,7 @@ class PrivateWebSocketPool:
             asyncio.create_task(self._push_to_manager(raw_data.copy()))
             
         except Exception as e:
-            logger.error(f"❌ [连接池] 创建推送任务失败: {e}")
+            logger.error(f"❌ [私人连接池] 创建推送任务失败: {e}")
             self.push_stats['total_failed'] += 1
 
     async def _push_to_manager(self, data: Dict[str, Any]):
@@ -936,10 +936,10 @@ class PrivateWebSocketPool:
             await receive_private_data(data)
             self.push_stats['total_success'] += 1
         except ImportError as e:
-            logger.error(f"❌ [连接池] 无法导入manager模块: {e}")
+            logger.error(f"❌ [私人连接池] 无法导入manager模块: {e}")
             self.push_stats['total_failed'] += 1
         except Exception as e:
-            logger.error(f"❌ [连接池] 推送数据失败: {e}")
+            logger.error(f"❌ [私人连接池] 推送数据失败: {e}")
             self.push_stats['total_failed'] += 1
     
     async def shutdown(self):
@@ -983,7 +983,7 @@ class PrivateWebSocketPool:
         self.connection_pairs = {'binance': None, 'okx': None}
         
         # 打印统计
-        logger.info(f"📊 [连接池] 推送统计: 创建{self.push_stats['total_created']}, "
+        logger.info(f"📊 [私人连接池] 推送统计: 创建{self.push_stats['total_created']}, "
                    f"成功{self.push_stats['total_success']}, 失败{self.push_stats['total_failed']}")
         logger.info("✅ [私人连接池] 已关闭")
     
@@ -1013,14 +1013,14 @@ class PrivateWebSocketPool:
                 
                 # 添加告警
                 if not pair_status['primary_healthy']:
-                    status['alerts'].append(f"{exchange}主连接不健康")
+                    status['alerts'].append(f"【私人连接池】{exchange}主连接不健康")
                 if pair.conn_secondary and not pair_status['secondary_healthy']:
-                    status['alerts'].append(f"{exchange}备连接不健康")
+                    status['alerts'].append(f"【私人连接池】{exchange}备连接不健康")
                 if not pair.conn_secondary:
-                    status['alerts'].append(f"{exchange}备连接不存在")
+                    status['alerts'].append(f"【私人连接池】{exchange}备连接不存在")
             else:
                 status['connection_pairs'][exchange] = {'error': 'not_initialized'}
-                status['alerts'].append(f"{exchange}连接对未初始化")
+                status['alerts'].append(f"【私人连接池】{exchange}连接对未初始化")
         
         # 兼容旧的connections状态
         for exchange in ['binance', 'okx']:
