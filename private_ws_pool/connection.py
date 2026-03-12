@@ -589,6 +589,12 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     # 直接解析并推送，不做任何判断和处理
                     data = json.loads(message)
                     
+                    # ===== 过滤系统事件 =====
+                    event = data.get('event', '')
+                    if event in ['channel-conn-count', 'login', 'subscribe', 'error', 'unsubscribe']:
+                        logger.debug(f"[私人连接池] 欧意私人 过滤系统事件: {event}")
+                        continue  # 跳过，不推送
+                    
                     # 提取 channel 并映射到标准类型
                     arg = data.get('arg', {})
                     channel = arg.get('channel', 'unknown')
