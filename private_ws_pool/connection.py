@@ -52,7 +52,7 @@ class PrivateWebSocketConnection:
         self.quick_retry_delays = [2, 4, 8]
         self.slow_retry_delays = [15, 30, 60]
         
-        logger.debug(f"[私人连接池] {connection_id} 初始化 (双模式稳定版)")
+        logger.info(f"[私人连接池] {connection_id} 初始化完成")
     
     async def connect(self):
         """建立连接（由子类实现）"""
@@ -269,7 +269,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                     "id": probe_id
                 }
                 
-                logger.debug(f"[私人连接池] 币安探测 发送探测#{self.probe_counter} (ID={probe_id})")
+                logger.info(f"[私人连接池] 币安探测 发送探测#{self.probe_counter} (ID={probe_id})")
                 self.last_probe_sent = datetime.now()
                 self.waiting_for_probe = True
                 self.probe_ids.add(probe_id)
@@ -305,7 +305,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                         # 🎯 有回音 = 连接活（不管内容是什么）
                         self.waiting_for_probe = False
                         self.probe_ids.discard(msg_id)
-                        logger.debug(f"[私人连接池] 币安探测 收到响应 ID={msg_id}")
+                        logger.info(f"[私人连接池] 币安探测 收到响应 ID={msg_id}")
                         continue  # ⚠️ 重要：不转发探测响应
                     
                     # 正常业务消息
@@ -428,7 +428,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     
     async def _connect_websocket(self):
         """连接WebSocket"""
-        logger.debug("[私人连接池] 欧意私人 正在连接WebSocket...")
+        logger.info("[私人连接池] 欧意私人 正在连接WebSocket...")
         
         try:
             self.ws = await asyncio.wait_for(
@@ -509,7 +509,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 ]
             }
             
-            logger.debug(f"[私人连接池] 欧意私人 发送认证请求")
+            logger.info(f"[私人连接池] 欧意私人 发送认证请求")
             await self.ws.send(json.dumps(auth_msg))
             
             response = await asyncio.wait_for(self.ws.recv(), timeout=10)
@@ -591,17 +591,30 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     
         except websockets.ConnectionClosed as e:
             logger.warning(f"[私人连接池] 欧意私人 连接关闭: code={e.code}, reason={e.reason}")
+            logger.warning(f"[私人连接池] 欧意私人 关闭详情: code={e.code}, reason={e.reason}")  # 详细记录关闭原因
             await self._report_status('connection_closed', {
                 'code': e.code,
                 'reason': e.reason
             })
             self.connected = False
             self.authenticated = False
+            
+            # 🔴【关键修复】取消接收任务，避免残留
+            if self.receive_task:
+                self.receive_task.cancel()
+                logger.info(f"[私人连接池] 欧意私人 接收任务已取消")
+                
         except Exception as e:
             logger.error(f"[私人连接池] 欧意私人 接收消息错误: {e}")
+            logger.error(f"[私人连接池] 欧意私人 异常详情: {traceback.format_exc()}")
             await self._report_status('error', {'error': str(e)})
             self.connected = False
             self.authenticated = False
+            
+            # 🔴【关键修复】同样处理异常情况
+            if self.receive_task:
+                self.receive_task.cancel()
+                logger.info(f"[私人连接池] 欧意私人 接收任务已取消")
     
     async def disconnect(self):
         """断开连接"""
