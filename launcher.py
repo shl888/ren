@@ -86,6 +86,26 @@ async def delayed_ws_init(ws_admin):
     except Exception as e:
         logger.error(f"WebSocket初始化失败: {e}")
 
+async def safe_get_pool_status(pool):
+    """安全获取连接池状态"""
+    try:
+        if not pool:
+            return {'connections': {}}
+        
+        status = pool.get_status()
+        # 确保 status 是字典
+        if not isinstance(status, dict):
+            return {'connections': {}}
+        
+        # 确保有 connections 键
+        if 'connections' not in status:
+            status['connections'] = {}
+        
+        return status
+    except Exception as e:
+        logger.error(f"获取连接池状态失败: {e}")
+        return {'connections': {}}
+
 async def main():
     """主启动函数"""
     logging.basicConfig(
@@ -252,7 +272,7 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安资产获取任务失败: {e}")
         
-        logger.info("✅ 第14步完成，准备进入第15步")  # ← 确认执行到这里
+        logger.info("✅ 第14步完成，准备进入第15步")
         
         # ==================== 15. 启动数据完成模块 ====================
         logger.info("【📦】========== 开始启动数据完成模块 ==========")
@@ -338,15 +358,20 @@ async def main():
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # 输出状态
+        # 🔥 修复：安全输出连接池状态
         if brain.private_pool:
-            pool_status = brain.private_pool.get_status()
+            pool_status = await safe_get_pool_status(brain.private_pool)
+            connections = pool_status.get('connections', {})
+            
             logger.info(f"🔗 私人连接池状态: 运行中")
-            for exchange, status in pool_status['connections'].items():
-                if status['connected']:
-                    logger.info(f"  • {exchange}: ✅ 已连接")
-                else:
-                    logger.info(f"  • {exchange}: ⏳ 连接中...")
+            if connections:
+                for exchange, status in connections.items():
+                    if status.get('connected', False):
+                        logger.info(f"  • {exchange}: ✅ 已连接")
+                    else:
+                        logger.info(f"  • {exchange}: ⏳ 连接中...")
+            else:
+                logger.info(f"  • 连接池正在初始化中，稍后查看状态")
         
         # ==================== 16. 运行大脑 ====================
         logger.info("🚀 大脑核心运行中...")
