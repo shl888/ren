@@ -632,11 +632,11 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     try:
                         asyncio.create_task(self._process_okx_message(data))
                     except Exception as task_error:
-                        logger.error(f"[私人连接池] 欧意私人 创建处理任务失败: {task_error}")
-                        logger.error(f"[私人连接池] 欧意私人 错误详情: {traceback.format_exc()}")
+                        logger.info(f"[私人连接池] 欧意私人 创建处理任务失败: {task_error}")
+                        logger.info(f"[私人连接池] 欧意私人 错误详情: {traceback.format_exc()}")
                     
                 except json.JSONDecodeError:
-                    logger.warning(f"[私人连接池] 欧意私人 无法解析JSON消息: {message[:100]}")
+                    logger.info(f"[私人连接池] 欧意私人 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
                     # 捕获所有异常，但继续接收下一条消息
                     logger.info(f"[私人连接池] 欧意私人 ❌❌❌ 处理消息错误: {e}")
@@ -653,8 +653,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             self.connected = False
             self.authenticated = False
         except Exception as e:
-            logger.error(f"[私人连接池] 欧意私人 接收消息错误: {e}")
-            logger.error(f"[私人连接池] 欧意私人 错误详情: {traceback.format_exc()}")
+            logger.info(f"[私人连接池] 欧意私人 接收消息错误: {e}")
+            logger.info(f"[私人连接池] 欧意私人 错误详情: {traceback.format_exc()}")
             await self._report_status('error', {'error': str(e)})
             self.connected = False
             self.authenticated = False
