@@ -1,7 +1,7 @@
 """
 私人WebSocket连接实现 - 双模式稳定版
-币安：主动探测模式（3秒探测，2次失败重连）
-欧意：官方心跳模式（5秒检测，ping-pong机制）
+币安：主动探测模式 | 欧意：心跳+间隔模式
+简化版：只保留原始数据，不添加额外包装
 """
 import asyncio
 import json
@@ -118,11 +118,11 @@ class PrivateWebSocketConnection:
         # 快速重试
         for attempt in range(max_quick_retries):
             try:
-                logger.info(f"【私人连接池】[{self.connection_id}] 快速重试第{attempt + 1}次")
+                logger.info(f"私人连接池[{self.connection_id}] 快速重试第{attempt + 1}次")
                 await connect_func()
                 return True
             except Exception as e:
-                logger.warning(f"【私人连接池】[{self.connection_id}] 快速重试失败: {type(e).__name__}")
+                logger.warning(f"私人连接池[{self.connection_id}] 快速重试失败: {type(e).__name__}")
                 if attempt == max_quick_retries - 1:
                     break
                 wait_time = self.quick_retry_delays[attempt] if attempt < len(self.quick_retry_delays) else 8
@@ -131,11 +131,11 @@ class PrivateWebSocketConnection:
         # 慢速重试
         for attempt in range(max_slow_retries):
             try:
-                logger.info(f"【私人连接池】[{self.connection_id}] 慢速重试第{attempt + 1}次")
+                logger.info(f"私人连接池[{self.connection_id}] 慢速重试第{attempt + 1}次")
                 await connect_func()
                 return True
             except Exception as e:
-                logger.warning(f"【私人连接池】[{self.connection_id}] 慢速重试失败: {type(e).__name__}")
+                logger.warning(f"[{self.connection_id}] 慢速重试失败: {type(e).__name__}")
                 if attempt == max_slow_retries - 1:
                     break
                 wait_time = self.slow_retry_delays[attempt] if attempt < len(self.slow_retry_delays) else 60
@@ -145,22 +145,22 @@ class PrivateWebSocketConnection:
 
 
 class BinancePrivateConnection(PrivateWebSocketConnection):
-    """币安私人连接 - 主动探测模式（3秒探测，2次失败重连）"""
+    """币安私人连接 - 主动探测模式"""
     
     def __init__(self, listen_key: str, **kwargs):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
         
-        # 主动探测参数 - 3秒探测，2次失败
-        self.probe_interval = 3   # 3秒探测一次
-        self.probe_timeout = 2     # 2秒等待响应
-        self.max_consecutive_failures = 2  # 连续2次失败断开
+        # 主动探测参数
+        self.probe_interval = 30  # 30秒探测一次（保守）
+        self.probe_timeout = 10   # 10秒等待响应
+        self.max_consecutive_failures = 3  # 连续3次失败断开
         
         # 探测状态
         self.probe_task = None
         self.probe_counter = 0
-        self.probe_ids: Set[int] = set()
-        self.probe_response_received = True
+        self.probe_ids: Set[int] = set()  # 已发送的探测ID
+        self.probe_response_received = True  # 初始为True
         self.consecutive_probe_failures = 0
         self.last_probe_sent = None
         self.waiting_for_probe = False
@@ -173,12 +173,12 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         ]
         self.current_server_index = 0
         
-        logger.info(f"【私人连接池】[币安私人] 初始化完成（主动探测模式，间隔{self.probe_interval}秒，{self.max_consecutive_failures}次失败重连）")
+        logger.info(f"私人连接池[币安私人] 初始化完成（主动探测模式，间隔{self.probe_interval}秒）")
     
     async def connect(self):
         """建立连接并启动主动探测"""
         try:
-            logger.info(f"【私人连接池】[币安私人] 正在连接，listenKey: {self.listen_key[:8]}...")
+            logger.info(f"私人连接池[币安私人] 正在连接，listenKey: {self.listen_key[:8]}...")
             
             self.continuous_failure_count += 1
             success = await self._try_multiple_servers()
@@ -194,21 +194,21 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 # 启动主动探测任务
                 self.probe_task = asyncio.create_task(self._active_probe_loop())
                 
-                logger.info(f"【私人连接池】[币安私人] 连接成功，主动探测已启动")
+                logger.info(f"私人连接池[币安私人] 连接成功，主动探测已启动")
                 return True
             else:
-                logger.error(f"【私人连接池】[币安私人] 所有服务器连接失败")
+                logger.error(f"私人连接池[币安私人] 所有服务器连接失败")
                 return False
                 
         except Exception as e:
-            logger.error(f"【私人连接池】[币安私人] 连接异常: {e}")
+            logger.error(f"私人连接池[币安私人] 连接异常: {e}")
             await self._report_status('connection_failed', {'error': str(e)})
             return False
     
     async def _try_multiple_servers(self):
         """尝试多个服务器"""
         for server_index, server_url in enumerate(self.backup_servers):
-            logger.info(f"【私人连接池】[币安私人] 尝试服务器 {server_index + 1}/{len(self.backup_servers)}")
+            logger.info(f"私人连接池[币安私人] 尝试服务器 {server_index + 1}/{len(self.backup_servers)}")
             self.ws_url = server_url
             
             success = await self._connect_with_retry(self._connect_single_server)
@@ -217,7 +217,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.current_server_index = server_index
                 return True
             else:
-                logger.warning(f"【私人连接池】[币安私人] 服务器{server_index + 1}连接失败")
+                logger.warning(f"私人连接池[币安私人] 服务器{server_index + 1}连接失败")
                 await asyncio.sleep(3)
         
         return False
@@ -248,58 +248,53 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         self.receive_task = asyncio.create_task(self._receive_messages())
         
         await self._report_status('connection_established')
-        logger.info(f"【私人连接池】[币安私人] 服务器连接成功")
+        logger.info(f"私人连接池[币安私人] 服务器连接成功")
     
     async def _active_probe_loop(self):
-        """主动探测循环 - 快速检测版（3秒探测，2次失败重连）"""
+        """主动探测循环 - 核心检测逻辑"""
         while self.connected:
             try:
-                await asyncio.sleep(self.probe_interval)  # 3秒
+                await asyncio.sleep(self.probe_interval)
                 
                 # 检查上次探测是否收到响应
                 if self.waiting_for_probe:
                     self.consecutive_probe_failures += 1
-                    logger.warning(f"【私人连接池】[币安探测] 探测#{self.probe_counter}未响应，连续失败: {self.consecutive_probe_failures}")
+                    logger.warning(f"私人连接池[币安探测] 探测#{self.probe_counter}未响应，连续失败: {self.consecutive_probe_failures}")
                     
-                    # 达到最大失败次数，立即断开
                     if self.consecutive_probe_failures >= self.max_consecutive_failures:
-                        logger.error(f"【私人连接池】[币安探测] 连续{self.consecutive_probe_failures}次探测失败，断开连接")
+                        logger.error(f"私人连接池[币安探测] 连续{self.consecutive_probe_failures}次探测失败，断开连接")
                         self.connected = False
-                        await self._report_status('probe_failed', {
-                            'failures': self.consecutive_probe_failures
-                        })
                         break
                 else:
                     # 重置连续失败计数
                     if self.consecutive_probe_failures > 0:
-                        logger.info(f"【私人连接池】[币安探测] 探测恢复，重置失败计数")
+                        logger.info(f"私人连接池[币安探测] 探测恢复，重置失败计数")
                         self.consecutive_probe_failures = 0
                 
                 # 发送探测消息
                 self.probe_counter += 1
                 probe_id = 99900 + (self.probe_counter % 100)
                 
-                # 使用LIST_SUBSCRIPTIONS（币安必响应）
+                # ✅ 关键：使用LIST_SUBSCRIPTIONS（币安必响应）
                 probe_msg = {
                     "method": "LIST_SUBSCRIPTIONS",
                     "id": probe_id
                 }
                 
-                logger.debug(f"【私人连接池】[币安探测] 发送探测#{self.probe_counter} (ID={probe_id})")
+                logger.debug(f"私人连接池[币安探测] 发送探测#{self.probe_counter} (ID={probe_id})")
                 self.last_probe_sent = datetime.now()
                 self.waiting_for_probe = True
                 self.probe_ids.add(probe_id)
                 
-                # 发送失败 = 连接已死
+                # 🔥 发送失败 = 连接已死
                 await self.ws.send(json.dumps(probe_msg))
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 # 发送异常 = 连接已死
-                logger.error(f"【私人连接池】[币安探测] 发送失败: {e}")
+                logger.error(f"私人连接池[币安探测] 发送失败: {e}")
                 self.connected = False
-                await self._report_status('probe_error', {'error': str(e)})
                 break
     
     async def _receive_messages(self):
@@ -311,36 +306,36 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 
                 if not self.first_message_received:
                     self.first_message_received = True
-                    logger.info(f"【私人连接池】[币安私人] 收到第一条消息")
+                    logger.info(f"私人连接池[币安私人] 收到第一条消息")
                 
                 try:
                     data = json.loads(message)
                     
-                    # 核心逻辑：只检查ID，不问内容
+                    # ✅ 核心逻辑：只检查ID，不问内容
                     msg_id = data.get('id')
                     if msg_id and msg_id in self.probe_ids:
-                        # 有回音 = 连接活（不管内容是什么）
+                        # 🎯 有回音 = 连接活（不管内容是什么）
                         self.waiting_for_probe = False
                         self.probe_ids.discard(msg_id)
-                        logger.debug(f"【私人连接池】[币安探测] 收到响应 ID={msg_id}")
-                        continue  # 重要：不转发探测响应
+                        logger.debug(f"私人连接池[币安探测] 收到响应 ID={msg_id}")
+                        continue  # ⚠️ 重要：不转发探测响应
                     
                     # 正常业务消息
                     await self._process_binance_message(data)
                     
                 except json.JSONDecodeError:
-                    logger.warning(f"【私人连接池】[币安私人] 无法解析JSON消息: {message[:100]}")
+                    logger.warning(f"私人连接池[币安私人] 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
-                    logger.error(f"【私人连接池】[币安私人] 处理消息错误: {e}")
+                    logger.error(f"私人连接池[币安私人] 处理消息错误: {e}")
                     
         except websockets.ConnectionClosed as e:
-            logger.warning(f"【私人连接池】[币安私人] 连接关闭: code={e.code}, reason={e.reason}")
+            logger.warning(f"私人连接池[币安私人] 连接关闭: code={e.code}, reason={e.reason}")
             await self._report_status('connection_closed', {
                 'code': e.code,
                 'reason': e.reason
             })
         except Exception as e:
-            logger.error(f"【私人连接池】[币安私人] 接收消息错误: {e}")
+            logger.error(f"私人连接池[币安私人] 接收消息错误: {e}")
             await self._report_status('error', {'error': str(e)})
         finally:
             self.connected = False
@@ -358,18 +353,36 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
             # 直接转发原始数据，只添加最基本元数据
             formatted_data = {
                 'exchange': 'binance',
-                'data_type': self._map_binance_event_type(event_type),
+                'data_type': self._map_binance_event_type(event_type),  # 使用映射函数
                 'timestamp': datetime.now().isoformat(),
-                'data': data
+                'data': data  # 直接使用原始数据，不加包装
             }
             
             await self.data_callback(formatted_data)
             
         except Exception as e:
-            logger.error(f"【私人连接池】[币安私人] 传递给大脑失败: {e}")
+            logger.error(f"私人连接池[币安私人] 传递给大脑失败: {e}")
     
     def _map_binance_event_type(self, event_type: str) -> str:
-        """映射币安事件类型 - 直接返回原生事件名"""
+        """
+        映射币安事件类型 - 关键修改：直接返回原生事件名
+        让数据处理模块做过滤和映射，连接池只负责转发原始数据
+        """
+        # 🔴 【修改前】包含映射，会导致数据处理模块收到错误的类型
+        # mapping = {
+        #     'ACCOUNT_UPDATE': 'account_update',
+        #     'ORDER_TRADE_UPDATE': 'order_update',
+        #     'TRADE_LITE': 'trade_update',  # ❌ 错误映射
+        #     'listenKeyExpired': 'system_event',
+        #     'MARGIN_CALL': 'risk_event',
+        #     'balanceUpdate': 'balance_update',
+        #     'outboundAccountPosition': 'account_update',
+        #     'executionReport': 'order_update'
+        # }
+        # return mapping.get(event_type, 'unknown')
+        
+        # 🟢 【修改后】直接返回原生事件名的小写
+        # 数据处理模块会基于 event_type 做过滤和映射
         return event_type.lower()
     
     async def disconnect(self):
@@ -384,7 +397,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
 
 
 class OKXPrivateConnection(PrivateWebSocketConnection):
-    """欧意私人连接 - 官方心跳模式（5秒检测，ping-pong机制）"""
+    """欧意私人连接 - 心跳+间隔模式"""
     
     def __init__(self, api_key: str, api_secret: str, passphrase: str = '', **kwargs):
         super().__init__('okx', 'okx_private', **kwargs)
@@ -392,28 +405,23 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_secret = api_secret
         self.passphrase = passphrase
         
-        # 欧意交易地址
+        # 欧意模拟交易地址
         self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
         self.broker_id = "9999"
         self.backup_url = "wss://ws.okx.com:8443/ws/v5/private"
         
-        # 认证状态
+        # 主动模式参数
         self.authenticated = False
+        self.last_heartbeat_time = None
+        self.heartbeat_interval = 25  # 25秒心跳间隔
+        self.no_message_threshold = 45  # 45秒无消息报警
         
-        # ===== 官方心跳机制参数 =====
-        self.data_timeout = 5        # 5秒无数据就发送ping
-        self.pong_timeout = 5        # 发送ping后等待pong或新数据5秒
-        self.heartbeat_task = None
-        self.waiting_for_response = False  # 是否在等待pong或新数据
-        self.last_ping_time = None
-        self.last_data_time = None   # 最后收到数据的时间
-        
-        logger.info(f"【私人连接池】[欧意私人] 初始化完成（官方心跳模式：{self.data_timeout}秒无数据ping，再{self.pong_timeout}秒无响应重连）")
+        logger.info(f"私人连接池[欧意私人] 初始化完成（心跳模式，间隔{self.no_message_threshold}秒）")
     
     async def connect(self):
         """建立欧意连接"""
         try:
-            logger.info(f"【私人连接池】[欧意私人] 正在连接")
+            logger.info(f"私人连接池[欧意私人] 正在连接")
             
             self.continuous_failure_count += 1
             success = await self._triple_connect_flow()
@@ -423,15 +431,14 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 self.last_connect_success = datetime.now()
                 self.connection_established_time = datetime.now()
                 self.first_message_received = False
-                self.last_data_time = datetime.now()  # 初始化最后数据时间
-                logger.info(f"【私人连接池】[欧意私人] 连接建立成功")
+                logger.info(f"私人连接池[欧意私人] 连接建立成功")
                 return True
             else:
-                logger.error(f"【私人连接池】[欧意私人] 连接失败")
+                logger.error(f"私人连接池[欧意私人] 连接失败")
                 return False
                 
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 连接异常: {e}")
+            logger.error(f"私人连接池[欧意私人] 连接异常: {e}")
             await self._report_status('connection_failed', {'error': str(e)})
             return False
     
@@ -453,16 +460,16 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         # 3. 智能订阅
         subscribe_success = await self._smart_subscribe()
         if not subscribe_success:
-            logger.warning("【私人连接池】[欧意私人] 订阅部分失败，但连接已建立")
+            logger.warning("[欧意私人] 订阅部分失败，但连接已建立")
         
-        # 4. 启动心跳任务
+        # 4. 启动维护任务
         await self._start_maintenance_tasks()
         
         return True
     
     async def _connect_websocket(self):
         """连接WebSocket"""
-        logger.debug("【私人连接池】[欧意私人] 正在连接WebSocket...")
+        logger.debug("[欧意私人] 正在连接WebSocket...")
         
         try:
             self.ws = await asyncio.wait_for(
@@ -476,7 +483,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 timeout=15
             )
         except Exception as e:
-            logger.warning(f"【私人连接池】[欧意私人] 主URL连接失败，尝试备用URL: {e}")
+            logger.warning(f"私人连接池[欧意私人] 主URL连接失败，尝试备用URL: {e}")
             try:
                 self.ws = await asyncio.wait_for(
                     websockets.connect(
@@ -488,13 +495,13 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     ),
                     timeout=15
                 )
-                logger.info("【私人连接池】[欧意私人] 备用URL连接成功")
+                logger.info("私人连接池[欧意私人] 备用URL连接成功")
             except Exception as e2:
-                logger.error(f"【私人连接池】[欧意私人] 备用URL连接失败: {e2}")
+                logger.error(f"私人连接池[欧意私人] 备用URL连接失败: {e2}")
                 raise
         
         self.connected = True
-        logger.info("【私人连接池】[欧意私人] WebSocket连接成功")
+        logger.info("[欧意私人] WebSocket连接成功")
     
     async def _authenticate_with_fallback(self):
         """双重认证保障"""
@@ -503,17 +510,17 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             if await self._authenticate():
                 return True
         except Exception as e:
-            logger.warning(f"【私人连接池】[欧意私人] 主认证失败: {e}")
+            logger.warning(f"私人连接池[欧意私人] 主认证失败: {e}")
         
         # 等待1秒后重试
         await asyncio.sleep(1)
         
         # 备认证
-        logger.info("【私人连接池】[欧意私人] 尝试备认证方案")
+        logger.info("[欧意私人] 尝试备认证方案")
         try:
             return await self._authenticate_with_new_timestamp()
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 备认证失败: {e}")
+            logger.error(f"私人连接池[欧意私人] 备认证失败: {e}")
             return False
     
     async def _authenticate(self) -> bool:
@@ -551,21 +558,21 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 ]
             }
             
-            logger.debug(f"【私人连接池】[欧意私人] 发送认证请求")
+            logger.debug(f"私人连接池[欧意私人] 发送认证请求")
             await self.ws.send(json.dumps(auth_msg))
             
             response = await asyncio.wait_for(self.ws.recv(), timeout=10)
             response_data = json.loads(response)
             
             if response_data.get('event') == 'login' and response_data.get('code') == '0':
-                logger.info("【私人连接池】[欧意私人] 认证成功")
+                logger.info("[欧意私人] 认证成功")
                 return True
             else:
-                logger.error(f"【私人连接池】[欧意私人] 认证失败: {response_data}")
+                logger.error(f"私人连接池[欧意私人] 认证失败: {response_data}")
                 return False
                 
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 认证异常: {e}")
+            logger.error(f"私人连接池[欧意私人] 认证异常: {e}")
             return False
     
     async def _smart_subscribe(self) -> bool:
@@ -581,7 +588,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 "args": primary_channels
             }))
             
-            logger.info("【私人连接池】[欧意私人] 已发送主频道订阅请求")
+            logger.info("[欧意私人] 已发送主频道订阅请求")
             
             await asyncio.sleep(0.5)
             
@@ -596,127 +603,68 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 "args": secondary_channels
             }))
             
-            logger.info("【私人连接池】[欧意私人] 已发送次要频道订阅请求")
+            logger.info("[欧意私人] 已发送次要频道订阅请求")
             
             return True
             
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 订阅失败: {e}")
+            logger.error(f"私人连接池[欧意私人] 订阅失败: {e}")
             return False
     
     async def _start_maintenance_tasks(self):
-        """启动心跳任务"""
+        """启动维护任务"""
         # 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
         
-        # 启动心跳循环
-        self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # 删除应用层心跳任务（OKX不支持主动ping）
+        # self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         
-        logger.info(f"【私人连接池】[欧意私人] 心跳任务已启动（{self.data_timeout}秒无数据ping，再{self.pong_timeout}秒无响应重连）")
+        # 启动被动健康监控任务
+        self.health_check_task = asyncio.create_task(self._active_mode_health_check())
+        
+        logger.info("[欧意私人] 维护任务已启动")
     
-    async def _heartbeat_loop(self):
-        """心跳循环：基于最后数据时间的动态检查"""
+    async def _active_mode_health_check(self):
+        """主动模式健康检查 - 消息间隔法（被动监控）"""
         while self.connected and self.authenticated:
-            try:
-                # 每秒检查一次，保证精度
-                await asyncio.sleep(1)
+            await asyncio.sleep(12)  # 12秒检查一次
+            
+            # 检查最后消息时间
+            if self.last_message_time:
+                seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
                 
-                now = datetime.now()
-                
-                # 如果没有收到过数据，跳过
-                if not self.last_data_time:
-                    continue
-                
-                seconds_since_data = (now - self.last_data_time).total_seconds()
-                
-                # 情况1：已经在等待响应（已发送ping）
-                if self.waiting_for_response:
-                    seconds_since_ping = (now - self.last_ping_time).total_seconds()
-                    
-                    # 如果等待超过5秒，且没有收到任何响应（pong或新数据）
-                    if seconds_since_ping > self.pong_timeout:
-                        logger.warning(f"【私人连接池】[欧意私人] ping后{seconds_since_ping:.0f}秒无任何响应，触发重连")
-                        self.connected = False
-                        await self._report_status('heartbeat_timeout', {
-                            'seconds_since_ping': seconds_since_ping
-                        })
-                        break
-                    
-                    # 还在等待期内，继续等待
-                    continue
-                
-                # 情况2：无数据超过5秒，需要发送ping
-                if seconds_since_data > self.data_timeout:
-                    logger.info(f"【私人连接池】[欧意私人] {seconds_since_data:.0f}秒无数据，发送ping")
-                    try:
-                        await self.ws.send(json.dumps({"op": "ping"}))
-                        self.last_ping_time = now
-                        self.waiting_for_response = True  # 进入等待响应状态
-                        logger.debug("【私人连接池】[欧意私人] ping已发送，等待响应")
-                    except Exception as e:
-                        logger.error(f"【私人连接池】[欧意私人] 发送ping失败: {e}")
-                        self.connected = False
-                        break
-                
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"【私人连接池】[欧意私人] 心跳异常: {e}")
-                self.connected = False
-                break
+                # 超过阈值时仅记录警告，由协议层心跳处理断开
+                if seconds_since_last > self.no_message_threshold:
+                    logger.warning(f"私人连接池[欧意私人] {seconds_since_last:.0f}秒未收到消息，依赖协议层心跳维持连接")
+                    # 不再主动发送ping，避免"非法请求"错误
     
     async def _receive_messages(self):
         """接收欧意私人消息"""
         try:
             async for message in self.ws:
-                now = datetime.now()
-                self.last_message_time = now
-                self.last_data_time = now  # 更新最后数据时间，重置定时器
+                self.last_message_time = datetime.now()
                 self.message_counter += 1
                 
                 if not self.first_message_received:
                     self.first_message_received = True
-                    logger.info(f"【私人连接池】[欧意私人] 收到第一条消息")
+                    logger.info(f"私人连接池[欧意私人] 收到第一条消息")
                 
                 try:
                     data = json.loads(message)
-                    
-                    # 无论收到什么消息（pong或业务数据），都说明连接正常
-                    if self.waiting_for_response:
-                        logger.debug("【私人连接池】[欧意私人] 等待期间收到消息，连接正常，重置定时器")
-                        self.waiting_for_response = False  # 退出等待状态
-                    
-                    # 检查是否是pong响应
-                    if data.get('event') == 'pong':
-                        logger.debug("【私人连接池】[欧意私人] 收到pong响应")
-                        continue
-                    
-                    # 检查是否是事件消息（登录、订阅等）
-                    if data.get('event'):
-                        if data.get('event') == 'error':
-                            logger.error(f"【私人连接池】[欧意私人] 错误事件: {data}")
-                        elif data.get('event') == 'login':
-                            logger.debug(f"【私人连接池】[欧意私人] 登录事件: {data.get('code')}")
-                        elif data.get('event') == 'subscribe':
-                            logger.debug(f"【私人连接池】[欧意私人] 订阅事件: {data.get('arg')}")
-                        continue
-                    
-                    # 正常业务消息
                     await self._process_okx_message(data)
-                    
                 except json.JSONDecodeError:
-                    logger.warning(f"【私人连接池】[欧意私人] 无法解析JSON消息: {message[:100]}")
+                    logger.warning(f"私人连接池[欧意私人] 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
-                    logger.error(f"【私人连接池】[欧意私人] 处理消息错误: {e}")
+                    logger.error(f"私人连接池[欧意私人] 处理消息错误: {e}")
                     
         except websockets.ConnectionClosed as e:
-            logger.warning(f"【私人连接池】[欧意私人] 连接关闭: code={e.code}, reason={e.reason}")
+            logger.warning(f"私人连接池[欧意私人] 连接关闭: code={e.code}, reason={e.reason}")
             await self._report_status('connection_closed', {
                 'code': e.code,
                 'reason': e.reason
             })
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 接收消息错误: {e}")
+            logger.error(f"私人连接池[欧意私人] 接收消息错误: {e}")
             await self._report_status('error', {'error': str(e)})
         finally:
             self.connected = False
@@ -724,6 +672,17 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     
     async def _process_okx_message(self, data: Dict[str, Any]):
         """处理欧意私人消息 - 简化版，只保留原始数据"""
+        # 检查是否是事件消息（登录、订阅等）
+        if data.get('event'):
+            event = data['event']
+            if event == 'login':
+                logger.debug(f"私人连接池[欧意私人] 登录事件: {data.get('code')}")
+            elif event == 'subscribe':
+                logger.debug(f"私人连接池[欧意私人] 订阅事件: {data.get('arg')}")
+            elif event == 'error':
+                logger.error(f"私人连接池[欧意私人] 错误事件: {data}")
+            return
+        
         # 保存原始数据到缓存（可选）
         arg = data.get('arg', {})
         channel = arg.get('channel', 'unknown')
@@ -734,13 +693,13 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             'exchange': 'okx',
             'data_type': self._map_okx_channel_type(channel),
             'timestamp': datetime.now().isoformat(),
-            'data': data
+            'data': data  # 直接使用原始数据，不加包装
         }
         
         try:
             await self.data_callback(formatted_data)
         except Exception as e:
-            logger.error(f"【私人连接池】[欧意私人] 传递给大脑失败: {e}")
+            logger.error(f"私人连接池[欧意私人] 传递给大脑失败: {e}")
     
     def _map_okx_channel_type(self, channel: str) -> str:
         """映射欧意频道到标准类型"""
