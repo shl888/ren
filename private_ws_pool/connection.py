@@ -617,7 +617,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     logger.debug(f"⏱️ {seconds_since:.0f}秒未收到消息")
     
     async def _receive_messages(self):
-        """接收欧意私人消息 - 无阻塞模式"""
+        """接收欧意私人消息 - 无阻塞模式 + 增强健壮性"""
         try:
             async for message in self.ws:
                 self.last_message_time = datetime.now()
@@ -640,12 +640,17 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     data = json.loads(message)
                     
                     # 异步处理，绝不阻塞接收循环
-                    asyncio.create_task(self._process_okx_message(data))
+                    try:
+                        asyncio.create_task(self._process_okx_message(data))
+                    except Exception as task_error:
+                        logger.error(f"私人连接池[欧意私人] 创建处理任务失败: {task_error}")
                     
                 except json.JSONDecodeError:
                     logger.warning(f"私人连接池[欧意私人] 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
-                    logger.error(f"私人连接池[欧意私人] 处理消息错误: {e}")
+                    # 捕获所有异常，但继续接收下一条消息
+                    logger.error(f"私人连接池[欧意私人] 处理消息错误: {e}", exc_info=True)
+                    continue  # 关键：继续收下一条，不断开
                     
         except websockets.ConnectionClosed as e:
             logger.warning(f"私人连接池[欧意私人] 连接关闭: code={e.code}, reason={e.reason}")
@@ -653,43 +658,52 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 'code': e.code,
                 'reason': e.reason
             })
+            self.connected = False
+            self.authenticated = False
         except Exception as e:
             logger.error(f"私人连接池[欧意私人] 接收消息错误: {e}")
             await self._report_status('error', {'error': str(e)})
-        finally:
             self.connected = False
             self.authenticated = False
     
     async def _process_okx_message(self, data: Dict[str, Any]):
         """处理欧意私人消息 - 纯转发，不阻塞"""
-        # 检查是否是事件消息（登录、订阅等）
-        if data.get('event'):
-            event = data['event']
-            if event == 'login':
-                logger.debug(f"私人连接池[欧意私人] 登录事件: {data.get('code')}")
-            elif event == 'subscribe':
-                logger.debug(f"私人连接池[欧意私人] 订阅事件: {data.get('arg')}")
-            elif event == 'error':
-                logger.error(f"私人连接池[欧意私人] 错误事件: {data}")
-            return
-        
-        # 确定数据类型
-        arg = data.get('arg', {})
-        channel = arg.get('channel', 'unknown')
-        
-        # 保存原始数据到缓存（可选）
-        await self._save_raw_data(channel, data)
-        
-        # 直接转发原始数据，只添加最基本元数据
-        formatted_data = {
-            'exchange': 'okx',
-            'data_type': channel,
-            'timestamp': datetime.now().isoformat(),
-            'data': data
-        }
-        
         try:
-            # 🔥 异步转发，绝不等待
-            asyncio.create_task(self.data_callback(formatted_data))
+            # 检查是否是事件消息（登录、订阅等）
+            if data.get('event'):
+                event = data['event']
+                if event == 'login':
+                    logger.debug(f"私人连接池[欧意私人] 登录事件: {data.get('code')}")
+                elif event == 'subscribe':
+                    logger.debug(f"私人连接池[欧意私人] 订阅事件: {data.get('arg')}")
+                elif event == 'error':
+                    logger.error(f"私人连接池[欧意私人] 错误事件: {data}")
+                return
+            
+            # 确定数据类型
+            arg = data.get('arg', {})
+            channel = arg.get('channel', 'unknown')
+            
+            # 保存原始数据到缓存（可选）
+            await self._save_raw_data(channel, data)
+            
+            # 直接转发原始数据，只添加最基本元数据
+            formatted_data = {
+                'exchange': 'okx',
+                'data_type': channel,
+                'timestamp': datetime.now().isoformat(),
+                'data': data
+            }
+            
+            try:
+                # 🔥 异步转发，绝不等待
+                asyncio.create_task(self.data_callback(formatted_data))
+            except Exception as e:
+                logger.error(f"私人连接池[欧意私人] 创建转发任务失败: {e}")
+        
         except Exception as e:
-            logger.error(f"私人连接池[欧意私人] 创建转发任务失败: {e}")
+            logger.error(f"私人连接池[欧意私人] _process_okx_message 异常: {e}", exc_info=True)
+    
+    async def disconnect(self):
+        """断开连接"""
+        await super().disconnect()
