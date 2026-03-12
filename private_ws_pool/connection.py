@@ -1,7 +1,7 @@
 """
 私人WebSocket连接实现 - 双模式稳定版
 币安：主动探测模式（3秒探测，2次失败重连）
-欧意：数据流模式（依赖健康检查）
+欧意：官方心跳模式（5秒检测，ping-pong机制）
 """
 import asyncio
 import json
@@ -151,16 +151,16 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         super().__init__('binance', 'binance_private', **kwargs)
         self.listen_key = listen_key
         
-        # ===== 修改：主动探测参数 - 3秒探测，2次失败 =====
-        self.probe_interval = 3   # 3秒探测一次（原30秒）
-        self.probe_timeout = 2     # 2秒等待响应（原10秒）
-        self.max_consecutive_failures = 2  # 连续2次失败断开（原3次）
+        # 主动探测参数 - 3秒探测，2次失败
+        self.probe_interval = 3   # 3秒探测一次
+        self.probe_timeout = 2     # 2秒等待响应
+        self.max_consecutive_failures = 2  # 连续2次失败断开
         
         # 探测状态
         self.probe_task = None
         self.probe_counter = 0
-        self.probe_ids: Set[int] = set()  # 已发送的探测ID
-        self.probe_response_received = True  # 初始为True
+        self.probe_ids: Set[int] = set()
+        self.probe_response_received = True
         self.consecutive_probe_failures = 0
         self.last_probe_sent = None
         self.waiting_for_probe = False
@@ -384,7 +384,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
 
 
 class OKXPrivateConnection(PrivateWebSocketConnection):
-    """欧意私人连接 - 纯数据流模式（移除应用层心跳）"""
+    """欧意私人连接 - 官方心跳模式（5秒检测，ping-pong机制）"""
     
     def __init__(self, api_key: str, api_secret: str, passphrase: str = '', **kwargs):
         super().__init__('okx', 'okx_private', **kwargs)
@@ -392,19 +392,23 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         self.api_secret = api_secret
         self.passphrase = passphrase
         
-        # 欧意模拟交易地址
+        # 欧意交易地址
         self.ws_url = "wss://wspap.okx.com:8443/ws/v5/private?brokerId=9999"
         self.broker_id = "9999"
         self.backup_url = "wss://ws.okx.com:8443/ws/v5/private"
         
-        # 主动模式参数
+        # 认证状态
         self.authenticated = False
-        self.last_heartbeat_time = None
-        # ===== 移除：不再需要应用层心跳 =====
-        # self.heartbeat_interval = 30
-        self.no_message_threshold = 45  # 保留用于日志告警
         
-        logger.info(f"【私人连接池】[欧意私人] 初始化完成（纯数据流模式，依赖健康检查）")
+        # ===== 官方心跳机制参数 =====
+        self.data_timeout = 5        # 5秒无数据就发送ping
+        self.pong_timeout = 5        # 发送ping后等待pong或新数据5秒
+        self.heartbeat_task = None
+        self.waiting_for_response = False  # 是否在等待pong或新数据
+        self.last_ping_time = None
+        self.last_data_time = None   # 最后收到数据的时间
+        
+        logger.info(f"【私人连接池】[欧意私人] 初始化完成（官方心跳模式：{self.data_timeout}秒无数据ping，再{self.pong_timeout}秒无响应重连）")
     
     async def connect(self):
         """建立欧意连接"""
@@ -419,6 +423,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 self.last_connect_success = datetime.now()
                 self.connection_established_time = datetime.now()
                 self.first_message_received = False
+                self.last_data_time = datetime.now()  # 初始化最后数据时间
                 logger.info(f"【私人连接池】[欧意私人] 连接建立成功")
                 return True
             else:
@@ -448,22 +453,22 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         # 3. 智能订阅
         subscribe_success = await self._smart_subscribe()
         if not subscribe_success:
-            logger.warning("[欧意私人] 订阅部分失败，但连接已建立")
+            logger.warning("【私人连接池】[欧意私人] 订阅部分失败，但连接已建立")
         
-        # 4. 启动维护任务（移除应用层心跳）
+        # 4. 启动心跳任务
         await self._start_maintenance_tasks()
         
         return True
     
     async def _connect_websocket(self):
         """连接WebSocket"""
-        logger.debug("[欧意私人] 正在连接WebSocket...")
+        logger.debug("【私人连接池】[欧意私人] 正在连接WebSocket...")
         
         try:
             self.ws = await asyncio.wait_for(
                 websockets.connect(
                     self.ws_url,
-                    ping_interval=10,  # 依赖底层WebSocket ping
+                    ping_interval=10,
                     ping_timeout=5,
                     close_timeout=5,
                     max_size=5*1024*1024,
@@ -483,13 +488,13 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     ),
                     timeout=15
                 )
-                logger.info("[欧意私人] 备用URL连接成功")
+                logger.info("【私人连接池】[欧意私人] 备用URL连接成功")
             except Exception as e2:
                 logger.error(f"【私人连接池】[欧意私人] 备用URL连接失败: {e2}")
                 raise
         
         self.connected = True
-        logger.info("[欧意私人] WebSocket连接成功")
+        logger.info("【私人连接池】[欧意私人] WebSocket连接成功")
     
     async def _authenticate_with_fallback(self):
         """双重认证保障"""
@@ -504,7 +509,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         await asyncio.sleep(1)
         
         # 备认证
-        logger.info("[欧意私人] 尝试备认证方案")
+        logger.info("【私人连接池】[欧意私人] 尝试备认证方案")
         try:
             return await self._authenticate_with_new_timestamp()
         except Exception as e:
@@ -553,7 +558,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             response_data = json.loads(response)
             
             if response_data.get('event') == 'login' and response_data.get('code') == '0':
-                logger.info("[欧意私人] 认证成功")
+                logger.info("【私人连接池】[欧意私人] 认证成功")
                 return True
             else:
                 logger.error(f"【私人连接池】[欧意私人] 认证失败: {response_data}")
@@ -576,7 +581,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 "args": primary_channels
             }))
             
-            logger.info("[欧意私人] 已发送主频道订阅请求")
+            logger.info("【私人连接池】[欧意私人] 已发送主频道订阅请求")
             
             await asyncio.sleep(0.5)
             
@@ -591,7 +596,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 "args": secondary_channels
             }))
             
-            logger.info("[欧意私人] 已发送次要频道订阅请求")
+            logger.info("【私人连接池】[欧意私人] 已发送次要频道订阅请求")
             
             return True
             
@@ -600,38 +605,73 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             return False
     
     async def _start_maintenance_tasks(self):
-        """启动维护任务（移除应用层心跳）"""
+        """启动心跳任务"""
         # 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
         
-        # ===== 移除：不再发送应用层心跳 =====
-        # self.heartbeat_task = asyncio.create_task(self._okx_heartbeat_loop())
+        # 启动心跳循环
+        self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         
-        # 启动被动健康监控任务（仅用于日志告警）
-        self.health_check_task = asyncio.create_task(self._passive_health_check())
-        
-        logger.info("[欧意私人] 维护任务已启动（依赖底层WebSocket ping，由pool_manager进行5秒健康检查）")
+        logger.info(f"【私人连接池】[欧意私人] 心跳任务已启动（{self.data_timeout}秒无数据ping，再{self.pong_timeout}秒无响应重连）")
     
-    # ===== 删除 _okx_heartbeat_loop 整个函数 =====
-    
-    async def _passive_health_check(self):
-        """被动健康检查 - 仅记录日志，不触发重连"""
+    async def _heartbeat_loop(self):
+        """心跳循环：基于最后数据时间的动态检查"""
         while self.connected and self.authenticated:
-            await asyncio.sleep(12)  # 12秒检查一次
-            
-            # 检查最后消息时间
-            if self.last_message_time:
-                seconds_since_last = (datetime.now() - self.last_message_time).total_seconds()
+            try:
+                # 每秒检查一次，保证精度
+                await asyncio.sleep(1)
                 
-                # 超过阈值时仅记录警告，由pool_manager的健康检查处理重连
-                if seconds_since_last > self.no_message_threshold:
-                    logger.warning(f"【私人连接池】[欧意私人] {seconds_since_last:.0f}秒未收到消息")
+                now = datetime.now()
+                
+                # 如果没有收到过数据，跳过
+                if not self.last_data_time:
+                    continue
+                
+                seconds_since_data = (now - self.last_data_time).total_seconds()
+                
+                # 情况1：已经在等待响应（已发送ping）
+                if self.waiting_for_response:
+                    seconds_since_ping = (now - self.last_ping_time).total_seconds()
+                    
+                    # 如果等待超过5秒，且没有收到任何响应（pong或新数据）
+                    if seconds_since_ping > self.pong_timeout:
+                        logger.warning(f"【私人连接池】[欧意私人] ping后{seconds_since_ping:.0f}秒无任何响应，触发重连")
+                        self.connected = False
+                        await self._report_status('heartbeat_timeout', {
+                            'seconds_since_ping': seconds_since_ping
+                        })
+                        break
+                    
+                    # 还在等待期内，继续等待
+                    continue
+                
+                # 情况2：无数据超过5秒，需要发送ping
+                if seconds_since_data > self.data_timeout:
+                    logger.info(f"【私人连接池】[欧意私人] {seconds_since_data:.0f}秒无数据，发送ping")
+                    try:
+                        await self.ws.send(json.dumps({"op": "ping"}))
+                        self.last_ping_time = now
+                        self.waiting_for_response = True  # 进入等待响应状态
+                        logger.debug("【私人连接池】[欧意私人] ping已发送，等待响应")
+                    except Exception as e:
+                        logger.error(f"【私人连接池】[欧意私人] 发送ping失败: {e}")
+                        self.connected = False
+                        break
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"【私人连接池】[欧意私人] 心跳异常: {e}")
+                self.connected = False
+                break
     
     async def _receive_messages(self):
         """接收欧意私人消息"""
         try:
             async for message in self.ws:
-                self.last_message_time = datetime.now()
+                now = datetime.now()
+                self.last_message_time = now
+                self.last_data_time = now  # 更新最后数据时间，重置定时器
                 self.message_counter += 1
                 
                 if not self.first_message_received:
@@ -640,7 +680,30 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                 
                 try:
                     data = json.loads(message)
+                    
+                    # 无论收到什么消息（pong或业务数据），都说明连接正常
+                    if self.waiting_for_response:
+                        logger.debug("【私人连接池】[欧意私人] 等待期间收到消息，连接正常，重置定时器")
+                        self.waiting_for_response = False  # 退出等待状态
+                    
+                    # 检查是否是pong响应
+                    if data.get('event') == 'pong':
+                        logger.debug("【私人连接池】[欧意私人] 收到pong响应")
+                        continue
+                    
+                    # 检查是否是事件消息（登录、订阅等）
+                    if data.get('event'):
+                        if data.get('event') == 'error':
+                            logger.error(f"【私人连接池】[欧意私人] 错误事件: {data}")
+                        elif data.get('event') == 'login':
+                            logger.debug(f"【私人连接池】[欧意私人] 登录事件: {data.get('code')}")
+                        elif data.get('event') == 'subscribe':
+                            logger.debug(f"【私人连接池】[欧意私人] 订阅事件: {data.get('arg')}")
+                        continue
+                    
+                    # 正常业务消息
                     await self._process_okx_message(data)
+                    
                 except json.JSONDecodeError:
                     logger.warning(f"【私人连接池】[欧意私人] 无法解析JSON消息: {message[:100]}")
                 except Exception as e:
@@ -661,19 +724,6 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
     
     async def _process_okx_message(self, data: Dict[str, Any]):
         """处理欧意私人消息 - 简化版，只保留原始数据"""
-        # 检查是否是事件消息（登录、订阅等）
-        if data.get('event'):
-            event = data['event']
-            if event == 'login':
-                logger.debug(f"【私人连接池】[欧意私人] 登录事件: {data.get('code')}")
-            elif event == 'subscribe':
-                logger.debug(f"【私人连接池】[欧意私人] 订阅事件: {data.get('arg')}")
-            elif event == 'error':
-                logger.error(f"【私人连接池】[欧意私人] 错误事件: {data}")
-            elif event == 'pong':
-                logger.debug(f"【私人连接池】[欧意私人] 收到pong响应")
-            return
-        
         # 保存原始数据到缓存（可选）
         arg = data.get('arg', {})
         channel = arg.get('channel', 'unknown')
