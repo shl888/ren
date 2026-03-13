@@ -184,7 +184,7 @@ class PrivateDataProcessor:
                 
                 # 分类
                 category = classify_binance_order(private_data)
-                logger.debug(f"🔍【私人数据处理】 [币安订单] 分类结果: {category}")
+                logger.info(f"🔍【私人数据处理】 [币安订单] 分类结果: {category}")
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
@@ -270,7 +270,7 @@ class PrivateDataProcessor:
             # ========== OKX订单更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
-                logger.debug(f"📥【私人数据处理】 [OKX订单] 收到订单更新")
+                logger.info(f"📥【私人数据处理】 [OKX订单] 收到订单更新")
                 
                 try:
                     if 'data' not in raw_data:
