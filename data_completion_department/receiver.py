@@ -93,7 +93,7 @@ class DataCompletionReceiver:
             self.subscribers = []
             
             self._initialized = True
-            logger.info("✅ 数据完成接收器初始化完成")
+            logger.info("✅【接收存储区】 数据完成接收器初始化完成")
     
     # ==================== 订阅管理 ====================
     
@@ -116,7 +116,7 @@ class DataCompletionReceiver:
         """
         if callback not in self.subscribers:
             self.subscribers.append(callback)
-            logger.info(f"✅ 新增订阅者，当前共 {len(self.subscribers)} 个订阅者")
+            logger.info(f"✅【接收存储区】 新增订阅者，当前共 {len(self.subscribers)} 个订阅者")
             
             # 订阅后立即推送一次当前数据
             asyncio.create_task(self._push_to_subscriber(callback))
@@ -130,7 +130,7 @@ class DataCompletionReceiver:
         """
         if callback in self.subscribers:
             self.subscribers.remove(callback)
-            logger.info(f"✅ 移除订阅者，当前共 {len(self.subscribers)} 个订阅者")
+            logger.info(f"✅【接收存储区】 移除订阅者，当前共 {len(self.subscribers)} 个订阅者")
     
     # ==================== 数据接收入口 ====================
     
@@ -162,7 +162,7 @@ class DataCompletionReceiver:
             exchange = private_data.get('exchange', 'unknown')
             data_type = private_data.get('data_type', 'unknown')
             
-            logger.info(f"📨 收到私人数据: {exchange}.{data_type}")
+            logger.info(f"📨【接收存储区】 收到私人数据: {exchange}.{data_type}")
             
             now = datetime.now()
             
@@ -179,13 +179,13 @@ class DataCompletionReceiver:
             }
             
             self.last_account_time = now
-            logger.info(f"✅ 私人数据已更新: {exchange}")
+            logger.debug(f"✅ 【接收存储区】私人数据已更新: {exchange}")
             
             # ===== 推送整个存储区给所有订阅者 =====
             await self._push_full_store()
             
         except Exception as e:
-            logger.error(f"❌ 接收私人数据失败: {e}", exc_info=True)
+            logger.error(f"❌ 【接收存储区】接收私人数据失败: {e}", exc_info=True)
     
     async def receive_market_data(self, market_data: Union[List, Dict]):
         """
@@ -209,7 +209,7 @@ class DataCompletionReceiver:
                 self.last_market_count = len(market_data)
                 await self._store_market_data(market_data)
             else:
-                logger.warning(f"⚠️ 收到非列表市场数据: {type(market_data)}")
+                logger.warning(f"⚠️【接收存储区】 收到非列表市场数据: {type(market_data)}")
                 self.last_market_count = 0
             
             self.last_market_time = datetime.now()
@@ -218,7 +218,7 @@ class DataCompletionReceiver:
             await self._push_full_store()
             
         except Exception as e:
-            logger.error(f"❌ 接收市场数据失败: {e}", exc_info=True)
+            logger.error(f"❌ 【接收存储区】接收市场数据失败: {e}", exc_info=True)
     
     async def _store_market_data(self, data_list: List):
         """
@@ -246,11 +246,11 @@ class DataCompletionReceiver:
                 self.memory_store['market_data'][symbol] = simplified_data
                 stored_count += 1
             
-            logger.info(f"✅ 市场数据已更新: {stored_count} 条")
+            logger.debug(f"✅ 【接收存储区】市场数据已更新: {stored_count} 条")
             return stored_count
             
         except Exception as e:
-            logger.error(f"❌ 存储市场数据失败: {e}")
+            logger.error(f"❌【接收存储区】 存储市场数据失败: {e}")
             return 0
     
     def _create_simplified_market_data(self, raw_data: Dict) -> Dict:
@@ -303,7 +303,7 @@ class DataCompletionReceiver:
                 'source': metadata.get('source', 'step5_cross_calc')
             }
         except Exception as e:
-            logger.error(f"❌ 创建简化市场数据失败: {e}")
+            logger.error(f"❌【接收存储区】 创建简化市场数据失败: {e}")
             return {'symbol': raw_data.get('symbol', 'unknown')}
     
     # ==================== 推送逻辑 ====================
@@ -365,7 +365,7 @@ class DataCompletionReceiver:
             asyncio.create_task(callback(snapshot))
             
         except Exception as e:
-            logger.error(f"推送数据给订阅者失败: {e}")
+            logger.error(f"【接收存储区】推送数据给订阅者失败: {e}")
     
     # ==================== 查询接口 ====================
     # 以下接口供其他模块（如前端）查询当前数据状态
