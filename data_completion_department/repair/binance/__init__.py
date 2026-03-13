@@ -81,7 +81,7 @@ class BinanceRepairArea:
         # ===== 门外存储区快照（两个修复文件共用）=====
         self.latest_snapshot = None
         
-        logger.info("✅ 币安修复区初始化完成")
+        logger.info("✅ 【币安修复区】初始化完成")
     
     async def handle_store_snapshot(self, snapshot: Dict):
         """
@@ -98,7 +98,7 @@ class BinanceRepairArea:
         ==================================================
         """
         if not snapshot:
-            logger.warning("⚠️ 收到空快照")
+            logger.warning("⚠️ 【币安修复区】收到空快照")
             return
             
         self.latest_snapshot = snapshot
@@ -122,7 +122,7 @@ class BinanceRepairArea:
         ==================================================
         """
         if not info:
-            logger.warning("⚠️ 收到空标签")
+            logger.warning("⚠️【币安修复区】 收到空标签")
             return
             
         logger.info(f"📨 币安修复区收到标签: {info}")
