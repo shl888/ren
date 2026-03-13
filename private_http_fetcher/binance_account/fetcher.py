@@ -109,13 +109,13 @@ class PrivateHTTPFetcher:
         # 创建统一的调度任务，严格控制时序
         self.scheduler_task = asyncio.create_task(self._controlled_scheduler())
 
-        logger.info("✅ [HTTP获取器] 调度器已启动，等待4分钟后执行账户获取")
+        logger.info("✅ [HTTP获取器] 调度器已启动，等待2分钟后执行账户获取")
         return True
 
     async def _controlled_scheduler(self):
         """
         受控调度器 - 严格按照时间顺序执行
-        1. 等待4分钟（让其他模块先运行）
+        1. 等待2分钟（让其他模块先运行）
         2. 尝试获取账户资产（5次指数退避重试）
         3. 账户成功后启动自适应频率的账户数据获取任务
         """
@@ -124,17 +124,17 @@ class PrivateHTTPFetcher:
                 # 重置重启冷却标志
                 self.in_restart_cooldown = False
                 
-                # ========== 第一阶段：等待4分钟 ==========
-                logger.info("⏳ [HTTP获取器] 第一阶段：等待4分钟，让其他模块先运行...")
-                for i in range(240):  # 240秒 = 4分钟
+                # ========== 第一阶段：等待2分钟 ==========
+                logger.info("⏳ [HTTP获取器] 第一阶段：等待2分钟，让其他模块先运行...")
+                for i in range(120):  # 120秒 = 2分钟
                     if not self.running or self.in_restart_cooldown:
                         return
                     if i % 60 == 0:  # 每分钟记录一次
-                        remaining = 240 - i
+                        remaining = 120 - i
                         logger.info(f"⏳ [HTTP获取器] 等待中...剩余{remaining}秒")
                     await asyncio.sleep(1)
 
-                logger.info("✅ [HTTP获取器] 4分钟等待完成，开始账户获取（5次尝试）")
+                logger.info("✅ [HTTP获取器] 2分钟等待完成，开始账户获取（5次尝试）")
 
                 # ========== 第二阶段：获取账户资产（5次指数退避重试） ==========
                 self.account_fetch_success = await self._fetch_account_with_retry()
@@ -510,7 +510,7 @@ class PrivateHTTPFetcher:
         self.has_position = False
         self.account_check_interval = 1
         
-        logger.info(f"✅ [HTTP获取器] 重启完成，准备重新执行调度流程（将等待4分钟）")
+        logger.info(f"✅ [HTTP获取器] 重启完成，准备重新执行调度流程（将等待2分钟）")
 
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
         """接收listenKey更新（保留权限，以备不时之需）"""
@@ -620,7 +620,7 @@ class PrivateHTTPFetcher:
                 'session_reuse': True
             },
             'schedule': {
-                'account': '启动后4分钟开始，5次指数退避重试，然后自适应频率',
+                'account': '启动后2分钟开始，5次指数退避重试，然后自适应频率',
                 'data_type': '仅获取账户数据（包含持仓信息）',
                 'auto_restart': '遇到418/401错误立即重启（无限次）',
                 'rate_limit': '429错误等待建议时间后继续（无需特殊处理）'
