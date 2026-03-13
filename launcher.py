@@ -274,9 +274,9 @@ async def main():
         
         logger.info("✅ 第14步完成，准备进入第15步")
         
-        # ==================== 15. 启动数据完成模块 ====================
-        logger.info("【📦】========== 开始启动数据完成模块 ==========")
-        logger.info("【📦】尝试导入数据完成模块...")
+        # ==================== 15. 启动数据完成部门模块 ====================
+        logger.info("【启动文件】========== 开始启动【数据完成部门】模块 ==========")
+        logger.info("【启动文件】尝试导入【数据完成部门】模块...")
         
         try:
             # 尝试导入
@@ -288,50 +288,50 @@ async def main():
                 BinanceRepairArea,
                 OkxMissingRepair,
             )
-            logger.info("✅ 成功导入数据完成模块")
+            logger.info("✅ 成功导入数据完成部门模块")
             
-            # 1. 获取接收器实例
-            logger.info("【📦】获取接收器实例...")
+            # 1. 创建接收器实例
+            logger.debug("【启动文件】创建【数据完成部门】的接收存储区实例...")
             data_receiver = get_receiver()
-            logger.info("✅ 数据接收器已获取")
+            logger.info("✅ 【启动文件】【数据完成部门】接收存储区已初始化")
             
             # 2. 创建数据库实例
-            logger.info("【📦】创建数据库实例...")
+            logger.debug("【启动文件】创建【数据完成部门】的数据库区实例...")
             database = Database()
-            logger.info("✅ 数据库存储区已初始化")
+            logger.info("✅ 【启动文件】【数据完成部门】数据库区已初始化")
             
             # 3. 创建调度器
-            logger.info("【📦】创建调度器...")
+            logger.debug("【启动文件】创建【数据完成部门】调度区...")
             scheduler = Scheduler(brain.data_manager)
-            logger.info("✅ 调度区已初始化")
+            logger.info("✅ 【启动文件】【数据完成部门】调度区已初始化")
             
             # 4. 创建检测区
-            logger.info("【📦】创建检测区...")
+            logger.debug("【启动文件】创建【数据完成部门】检测区...")
             detector = DataDetector(scheduler)
-            logger.info("✅ 检测区已初始化")
+            logger.info("✅ 【启动文件】【数据完成部门】检测区已初始化")
             
             # 5. 创建修复区实例
-            logger.info("【📦】创建币安修复区...")
+            logger.debug("【启动文件】创建【数据完成部门】币安修复区...")
             binance_repair = BinanceRepairArea(scheduler)
-            logger.info("✅ 币安修复区已初始化")
+            logger.info("✅【启动文件】【数据完成部门】 币安修复区已初始化")
             
-            logger.info("【📦】创建欧易修复区...")
+            logger.debug("【启动文件】创建【数据完成部门】欧易修复区...")
             okx_repair = OkxMissingRepair(scheduler)
-            logger.info("✅ 欧易修复区已初始化")
+            logger.info("✅【启动文件】【数据完成部门】 欧易修复区已初始化")
             
             # 6. 建立连接
-            logger.info("【📦】建立接收器连接...")
+            logger.debug("【启动文件】建立【数据完成部门】接收存储区连接...")
             data_receiver.subscribe(detector.handle_store_snapshot)
             data_receiver.subscribe(binance_repair.handle_store_snapshot)
             data_receiver.subscribe(okx_repair.handle_store_snapshot)
-            logger.info("✅ 接收器已连接检测区和修复区")
+            logger.info("✅【启动文件】【数据完成部门】 接收存储区已连接检测区和修复区")
             
             # 7. 调度器连接下游模块
-            logger.info("【📦】调度器连接下游...")
+            logger.debug("【启动文件】建立【数据完成部门】调度器连接下游...")
             scheduler.set_database(database)
             scheduler.set_repair_binance(binance_repair)
             scheduler.set_repair_okx(okx_repair)
-            logger.info("✅ 调度器已连接数据库和修复区")
+            logger.info("✅【启动文件】【数据完成部门】 调度区已连接数据库和修复区")
             
             # 8. 保存到brain实例
             brain.data_receiver = data_receiver
@@ -341,8 +341,8 @@ async def main():
             brain.binance_repair = binance_repair
             brain.okx_repair = okx_repair
             
-            logger.info("✅ 数据完成模块全部启动完成")
-            logger.info("【📦】========== 数据完成模块启动结束 ==========")
+            logger.info("✅【启动文件】 数据完成部门模块全部启动完成")
+            logger.info("【启动文件】========== 数据完成部门模块启动结束 ==========")
             
         except ImportError as e:
             logger.error(f"❌ 无法导入数据完成模块: {e}")
