@@ -30,7 +30,7 @@ async def _startup_auto_fetch(app: web.Application):
             if _manager.is_auto_fetched:
                 return
             
-            await asyncio.sleep(180)
+            await asyncio.sleep(60)
             result = await _manager.fetch_funding_settlement()
             
             if result["success"]:
