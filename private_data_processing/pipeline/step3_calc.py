@@ -54,7 +54,7 @@ class Step3Calc:
         elif exchange == "okx":
             self._process_okx(container)
         else:
-            logger.warning(f"⚠️【Step3】未知交易所: {exchange}")
+            logger.warning(f"⚠️【私人step3】未知交易所: {exchange}")
     
     # ========== 币安房间（原有代码，原封不动）==========
     def _process_binance(self, container: Dict[str, Any]):
