@@ -38,7 +38,7 @@ class Step4Funding:
         # 清理倒计时秒数
         self.reset_countdown = 5
         
-        logger.info("✅【step4】资金费缓存已创建: binance, okx")
+        logger.info("✅【私人step4】资金费缓存已创建: binance, okx")
     
     def _round_4(self, value):
         """四舍五入保留4位小数"""
@@ -68,7 +68,7 @@ class Step4Funding:
             
             return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
         except Exception as e:
-            logger.error(f"❌【step4】时间转换失败: {e}")
+            logger.error(f"❌【私人step4】时间转换失败: {e}")
             return datetime.now().strftime("%Y.%m.%d %H:%M:%S")
     
     def _delayed_reset_sync(self, exchange: str):
@@ -79,10 +79,10 @@ class Step4Funding:
             with self._lock:
                 if self.cache[exchange] is not None:
                     self._reset_container(self.cache[exchange])
-                    logger.info(f"✨【{exchange}】平仓清理完成，容器已重置")
+                    logger.info(f"✨【私人step4】【{exchange}】平仓清理完成，容器已重置")
             
         except Exception as e:
-            logger.error(f"❌【{exchange}】延迟重置失败: {e}")
+            logger.error(f"❌【私人step4】【{exchange}】延迟重置失败: {e}")
         finally:
             self.reset_threads[exchange] = None
     
@@ -93,7 +93,7 @@ class Step4Funding:
         thread.daemon = True
         thread.start()
         self.reset_threads[exchange] = thread
-        logger.info(f"⏰【{exchange}】清理线程已启动: {self.reset_countdown}秒后重置")
+        logger.info(f"⏰【私人step4】【{exchange}】清理线程已启动: {self.reset_countdown}秒后重置")
     
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -107,7 +107,7 @@ class Step4Funding:
         elif exchange == "okx":
             return self._process_okx(container)
         else:
-            logger.warning(f"⚠️【step4】未知交易所: {exchange}")
+            logger.warning(f"⚠️【私人step4】未知交易所: {exchange}")
             return container
     
     # ========== 币安房间 ==========
@@ -124,7 +124,7 @@ class Step4Funding:
             
             # ===== 第一次收到数据 =====
             if cached is None:
-                logger.debug(f"💰【{exchange}】首次收到数据，直接缓存")
+                logger.debug(f"💰【私人step4】【{exchange}】首次收到数据，直接缓存")
                 self.cache[exchange] = container.copy()
                 # 注意：时间已经在Step1转换好了，这里不再转换
                 result = container.copy()
@@ -136,12 +136,12 @@ class Step4Funding:
             if cache_time is None and cached is not None:
                 # 场景1a：新时间也为空
                 if new_time is None:
-                    logger.debug(f"💰【{exchange}】场景1a：无结算，全字段覆盖缓存")
+                    logger.debug(f"💰【私人step4】【{exchange}】场景1a：无结算，全字段覆盖缓存")
                     self.cache[exchange] = container.copy()
                     
                 # 场景1b：新时间有值（首次结算）
                 else:
-                    logger.debug(f"💰【{exchange}】场景1b：首次结算，时间={new_time}")
+                    logger.debug(f"💰【私人step4】【{exchange}】场景1b：首次结算，时间={new_time}")
                     # 先缓存新数据
                     self.cache[exchange] = container.copy()
                     # 更新5个资金费字段（累加）
@@ -151,14 +151,14 @@ class Step4Funding:
             elif cache_time is not None and cached is not None:
                 # 场景2c：时间相同
                 if cache_time == new_time:
-                    logger.debug(f"💰【{exchange}】场景2c：同次结算，资金费字段保持")
+                    logger.debug(f"💰【私人step4】【{exchange}】场景2c：同次结算，资金费字段保持")
                     # 其他字段覆盖缓存
                     self._update_other_fields(cached, container)
                     self.cache[exchange] = cached
                 
                 # 场景2d：时间不同（新结算）
                 elif new_time is not None:
-                    logger.debug(f"💰【{exchange}】场景2d：新结算，时间={new_time}")
+                    logger.debug(f"💰【私人step4】【{exchange}】场景2d：新结算，时间={new_time}")
                     # 先缓存新数据
                     self.cache[exchange] = container.copy()
                     # 更新5个资金费字段（累加）
@@ -216,7 +216,7 @@ class Step4Funding:
             
             # ===== 第一次收到数据 =====
             if cached is None:
-                logger.debug(f"💰【{exchange}】首次收到数据，初始化缓存")
+                logger.debug(f"💰【私人step4】【{exchange}】首次收到数据，初始化缓存")
                 # 缓存 = 新数据
                 self.cache[exchange] = container.copy()
                 # 初始化5个资金费字段
@@ -252,7 +252,7 @@ class Step4Funding:
                         
                         # 判断是否不同（有新结算）
                         if abs(new_total_float - old_total_float) >= 0.000001:
-                            logger.info(f"💰【{exchange}】检测到资金费结算: {old_total_float} -> {new_total_float}")
+                            logger.info(f"💰【私人step4】【{exchange}】检测到资金费结算: {old_total_float} -> {new_total_float}")
                             
                             # 2.1 本次资金费 = 新累计 - 旧累计
                             this_fee = new_total_float - old_total_float
@@ -299,7 +299,7 @@ class Step4Funding:
         cache_entry["资金费结算次数"] = 0
         cache_entry["平均资金费率"] = None
         cache_entry["本次资金费结算时间"] = None
-        logger.debug(f"💰 资金费数据已重置")
+        logger.info(f"💰 资金费数据已重置")
     
     def _update_other_fields(self, cached: Dict, new_data: Dict):
         """更新非资金费字段 - 直接覆盖，空值也覆盖"""
