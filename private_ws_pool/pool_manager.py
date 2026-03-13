@@ -92,11 +92,11 @@ class PrivateWebSocketPool:
         
         # 失败的安排重连
         if not binance_success:
-            logger.info("🔁 [私人连接池] 币安连接失败，10秒后重试")
+            logger.error("🔁 [私人连接池] 币安连接失败，10秒后重试")
             await self._schedule_reconnect('binance', 10)
         
         if not okx_success:
-            logger.info("🔁 [私人连接池] 欧意连接失败，10秒后重试")
+            logger.error("🔁 [私人连接池] 欧意连接失败，10秒后重试")
             await self._schedule_reconnect('okx', 10)
     
     async def _connection_monitor_loop(self):
@@ -105,7 +105,7 @@ class PrivateWebSocketPool:
             try:
                 # 记录当前时间，方便追踪
                 check_time = datetime.now().strftime('%H:%M:%S')
-                logger.info(f"[私人连接池] 🔍 监控检查开始 at {check_time}")
+                logger.debug(f"[私人连接池] 🔍 监控检查开始 at {check_time}")
                 
                 for exchange in ['binance', 'okx']:
                     connection = self.connections[exchange]
@@ -121,7 +121,7 @@ class PrivateWebSocketPool:
                         
                         # 检查是否有last_error属性
                         if hasattr(connection, 'last_error') and connection.last_error:
-                            logger.info(f"[私人连接池] ⚠️ {exchange}最后错误: {connection.last_error}")
+                            logger.error(f"[私人连接池] ⚠️ {exchange}最后错误: {connection.last_error}")
                         
                         if not connection.connected:
                             # 连接已断开，触发重连
@@ -130,13 +130,13 @@ class PrivateWebSocketPool:
                             logger.warning(f"[私人连接池] 📋 {exchange}断开详情: 连续失败={connection.continuous_failure_count}, 总消息={connection.message_counter}, 最后消息时间={last_msg}")
                             await self._smart_reconnect(exchange)
                     else:
-                        logger.info(f"[私人连接池] ⚪ {exchange}连接对象不存在")
+                        logger.error(f"[私人连接池] ⚪ {exchange}连接对象不存在")
                 
                 logger.info(f"[私人连接池] 💤 监控检查完成，等待10秒")
                 await asyncio.sleep(10)  # 10秒检查一次
                 
             except asyncio.CancelledError:
-                logger.info("[私人连接池] 🛑 监控循环被取消")
+                logger.error("[私人连接池] 🛑 监控循环被取消")
                 break
             except Exception as e:
                 logger.error(f"[私人连接池] ❌ 监控循环异常: {e}")
@@ -147,36 +147,36 @@ class PrivateWebSocketPool:
         """智能重连算法 - 增强日志"""
         connection = self.connections[exchange]
         if not connection:
-            logger.info(f"[私人连接池] ⚠️ {exchange}重连时连接对象不存在")
+            logger.error(f"[私人连接池] ⚠️ {exchange}重连时连接对象不存在")
             return
         
         consecutive_failures = connection.continuous_failure_count
-        logger.info(f"[私人连接池] 📊 {exchange}重连决策: 当前连续失败={consecutive_failures}")
+        logger.error(f"[私人连接池] 📊 {exchange}重连决策: 当前连续失败={consecutive_failures}")
         
         # 根据连续失败次数计算延迟
         if consecutive_failures == 0:
             delay = 5
-            logger.info(f"[私人连接池] 📝 {exchange}首次失败，采用5秒延迟")
+            logger.error(f"[私人连接池] 📝 {exchange}首次失败，采用5秒延迟")
         elif consecutive_failures == 1:
             delay = 10
-            logger.info(f"[私人连接池] 📝 {exchange}连续2次失败，采用10秒延迟")
+            logger.error(f"[私人连接池] 📝 {exchange}连续2次失败，采用10秒延迟")
         elif consecutive_failures == 2:
             delay = 20
-            logger.info(f"[私人连接池] 📝 {exchange}连续3次失败，采用20秒延迟")
+            logger.error(f"[私人连接池] 📝 {exchange}连续3次失败，采用20秒延迟")
         elif consecutive_failures == 3:
             delay = 40
-            logger.info(f"[私人连接池] 📝 {exchange}连续4次失败，采用40秒延迟")
+            logger.error(f"[私人连接池] 📝 {exchange}连续4次失败，采用40秒延迟")
         else:
             delay = 60
-            logger.info(f"[私人连接池] 📝 {exchange}连续{consecutive_failures}次失败，采用60秒最大延迟")
+            logger.error(f"[私人连接池] 📝 {exchange}连续{consecutive_failures}次失败，采用60秒最大延迟")
         
-        logger.info(f"[私人连接池] 🔁 {exchange} {delay}秒后重连 (连续失败{consecutive_failures}次)")
+        logger.error(f"[私人连接池] 🔁 {exchange} {delay}秒后重连 (连续失败{consecutive_failures}次)")
         await self._schedule_reconnect(exchange, delay)
     
     async def _schedule_reconnect(self, exchange: str, delay: int = 5):
         """安排重连 - 增强日志"""
         if exchange in self.reconnect_tasks:
-            logger.info(f"[私人连接池] 🚫 取消{exchange}现有重连任务")
+            logger.error(f"[私人连接池] 🚫 取消{exchange}现有重连任务")
             try:
                 self.reconnect_tasks[exchange].cancel()
             except:
@@ -184,17 +184,17 @@ class PrivateWebSocketPool:
         
         async def reconnect_task():
             try:
-                logger.info(f"[私人连接池] ⏰ {exchange}等待{delay}秒后重连...")
+                logger.error(f"[私人连接池] ⏰ {exchange}等待{delay}秒后重连...")
                 await asyncio.sleep(delay)
                 if self.running:
-                    logger.info(f"[私人连接池] 🔁 执行{exchange}重连...")
+                    logger.error(f"[私人连接池] 🔁 执行{exchange}重连...")
                     success = False
                     
                     if exchange == 'binance':
-                        logger.info("[私人连接池] 📡 开始币安重连流程")
+                        logger.error("[私人连接池] 📡 开始币安重连流程")
                         success = await self._setup_binance_connection()
                     elif exchange == 'okx':
-                        logger.info("[私人连接池] 📡 开始欧意重连流程")
+                        logger.error("[私人连接池] 📡 开始欧意重连流程")
                         success = await self._setup_okx_connection()
                     
                     logger.info(f"[私人连接池] 📊 {exchange}重连结果: {'✅成功' if success else '❌失败'}")
@@ -202,10 +202,10 @@ class PrivateWebSocketPool:
                     
                     if not success:
                         next_delay = min(delay * 2, 120)
-                        logger.info(f"[私人连接池] 🔄 {exchange}重连失败，{next_delay}秒后再次尝试")
+                        logger.error(f"[私人连接池] 🔄 {exchange}重连失败，{next_delay}秒后再次尝试")
                         await self._schedule_reconnect(exchange, next_delay)
             except asyncio.CancelledError:
-                logger.info(f"[私人连接池] 🚫 {exchange}重连任务被取消")
+                logger.error(f"[私人连接池] 🚫 {exchange}重连任务被取消")
                 pass
             except Exception as e:
                 logger.error(f"[私人连接池] ❌ 重连任务异常: {e}")
@@ -224,10 +224,10 @@ class PrivateWebSocketPool:
             stats['consecutive_failures'] = 0
             stats['last_success'] = datetime.now()
             stats['last_error'] = None
-            logger.info(f"[私人连接池] 📈 {exchange}质量统计: 成功，总尝试={stats['total_attempts']}, 成功率={stats['success_rate']:.1f}%")
+            logger.debug(f"[私人连接池] 📈 {exchange}质量统计: 成功，总尝试={stats['total_attempts']}, 成功率={stats['success_rate']:.1f}%")
         else:
             stats['consecutive_failures'] += 1
-            logger.info(f"[私人连接池] 📉 {exchange}质量统计: 失败，连续失败={stats['consecutive_failures']}, 总尝试={stats['total_attempts']}")
+            logger.debug(f"[私人连接池] 📉 {exchange}质量统计: 失败，连续失败={stats['consecutive_failures']}, 总尝试={stats['total_attempts']}")
         
         if stats['total_attempts'] > 0:
             stats['success_rate'] = (stats['success_attempts'] / stats['total_attempts']) * 100
@@ -377,7 +377,6 @@ class PrivateWebSocketPool:
             # 硬编码推送到私人数据处理模块
             try:
                 from private_data_processing.manager import receive_private_data
-#                 await receive_private_data(raw_data)   # 最初版本，推送数据会等待
                 asyncio.create_task(receive_private_data(raw_data))  # ← 不等待
                 logger.debug(f"[私人连接池] 📨 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
             except ImportError as e:
@@ -397,14 +396,14 @@ class PrivateWebSocketPool:
         # 取消重连任务
         for exchange, task in self.reconnect_tasks.items():
             if task:
-                logger.info(f"[私人连接池] 🚫 取消{exchange}重连任务")
+                logger.error(f"[私人连接池] 🚫 取消{exchange}重连任务")
                 task.cancel()
         
         # 关闭所有连接
         shutdown_tasks = []
         for exchange, connection in self.connections.items():
             if connection:
-                logger.info(f"[私人连接池] 🔌 正在断开{exchange}连接...")
+                logger.error(f"[私人连接池] 🔌 正在断开{exchange}连接...")
                 shutdown_tasks.append(
                     asyncio.wait_for(connection.disconnect(), timeout=5)
                 )
@@ -416,7 +415,7 @@ class PrivateWebSocketPool:
                 pass
         
         self.connections = {'binance': None, 'okx': None}
-        logger.info("[私人连接池] ✅ 已关闭")
+        logger.error("[私人连接池] ✅ 已关闭")
     
     def get_status(self) -> Dict[str, Any]:
         """获取连接池状态"""
