@@ -88,7 +88,7 @@ class PipelineManager:
             }
         }
         
-        logger.info("✅【数据处理管理员】初始化完成（已集成Step0限流器）")
+        logger.info("✅【 公开数据处理管理员】初始化完成（已集成Step0限流器）")
         self._initialized = True
     
     # ==================== 管理员核心功能 ====================
@@ -96,10 +96,10 @@ class PipelineManager:
     async def start(self):
         """启动整个系统（已集成Step0）"""
         if self.system_running:
-            logger.warning("⚠️【数据处理管理员】系统已经在运行中")
+            logger.warning("⚠️【 公开数据处理管理员】系统已经在运行中")
             return
         
-        logger.info("🚀【数据处理管理员】开始启动系统...")
+        logger.info("🚀【 公开数据处理管理员】开始启动系统...")
         self.system_running = True
         self._last_hourly_reset = time.time()  # 重置计时器
         
@@ -107,29 +107,29 @@ class PipelineManager:
             # 1. 把规则发给DataStore
             from shared_data.data_store import data_store
             await data_store.receive_rules(self.rules)
-            logger.info("📋【数据处理管理员】规则已下达给DataStore")
+            logger.info("📋【 公开数据处理管理员】规则已下达给DataStore")
             
             # 2. 启动DataStore的市场数据放水系统
             await data_store.start_flowing(self._receive_water_callback)
-            logger.info("🚰【数据处理管理员】DataStore市场数据放水系统已启动")
+            logger.info("🚰【 公开数据处理管理员】DataStore市场数据放水系统已启动")
             
             # 3. 流水线工人已就绪（步骤0-5）
-            logger.info("🔧【数据处理管理员】流水线工人已就位（步骤0-5）")
+            logger.info("🔧【 公开数据处理管理员】流水线工人已就位（步骤0-5）")
             
             # 4. 系统运行中
-            logger.info("🎉【数据处理管理员】系统启动完成，开始自动运行")
+            logger.info("🎉【 公开数据处理管理员】系统启动完成，开始自动运行")
             
             # 5. 启动状态监控（包含每小时重置检查）
             self._monitor_task = asyncio.create_task(self._monitor_system())
             
         except Exception as e:
-            logger.error(f"❌【数据处理管理员】系统启动失败: {e}")
+            logger.error(f"❌【 公开数据处理管理员】系统启动失败: {e}")
             self.system_running = False
             raise
     
     async def stop(self):
         """停止系统"""
-        logger.info("🛑【数据处理管理员】正在停止系统...")
+        logger.error("🛑【 公开数据处理管理员】正在停止系统...")
         self.system_running = False
         
         # 停止DataStore放水
@@ -140,7 +140,7 @@ class PipelineManager:
         if hasattr(self, '_monitor_task'):
             self._monitor_task.cancel()
         
-        logger.info("✅【数据处理管理员】系统已停止")
+        logger.error("✅【 公开数据处理管理员】系统已停止")
     
     async def update_rule(self, rule_key: str, rule_value: Any):
         """更新规则（动态调整）"""
@@ -148,21 +148,21 @@ class PipelineManager:
             old_value = self.rules[rule_key]
             self.rules[rule_key] = rule_value
             
-            logger.info(f"📝【数据处理管理员】规则更新: {rule_key} = {rule_value}")
+            logger.debug(f"📝【 公开数据处理管理员】规则更新: {rule_key} = {rule_value}")
             
             # 特殊处理：更新Step0限流次数
             if rule_key == "step0_limit" and "binance_funding_settlement_limit" in rule_value:
                 new_limit = rule_value["binance_funding_settlement_limit"]
                 self.step0.update_limit(new_limit)
-                logger.info(f"🔧【数据处理管理员】Step0限流次数已更新为: {new_limit}")
+                logger.debug(f"🔧【 公开数据处理管理员】Step0限流次数已更新为: {new_limit}")
             
             # 通知DataStore规则更新
             from shared_data.data_store import data_store
             await data_store.receive_rule_update(rule_key, rule_value)
         else:
-            logger.warning(f"⚠️【数据处理管理员】未知规则: {rule_key}")
+            logger.warning(f"⚠️【 公开数据处理管理员】未知规则: {rule_key}")
     
-    # ==================== 市场数据处理回调（已集成Step0） ====================
+    # ==================== 市场 公开数据处理回调（已集成Step0） ====================
     
     async def _receive_water_callback(self, water_data: list):
         """
@@ -188,7 +188,7 @@ class PipelineManager:
             
             if not step0_results:
                 # 如果Step0过滤后没有数据了，直接返回
-                logger.debug("🔄【数据处理管理员】Step0过滤后无数据，跳过本次处理")
+                logger.debug("🔄【 公开数据处理管理员】Step0过滤后无数据，跳过本次处理")
                 return
             
             # ✅ 步骤1：过滤提取（接收Step0的输出！）
@@ -233,12 +233,12 @@ class PipelineManager:
                 market_data_list = [result.__dict__ for result in step5_results]
                 await receive_market_data(market_data_list)
                 
-                logger.info(f"📤【数据处理管理员】已推送 {len(market_data_list)} 个合约的行情数据到数据完成部门")
+                logger.debug(f"📤【 公开数据处理管理员】已推送 {len(market_data_list)} 个合约的行情数据到数据完成部门")
             except Exception as e:
-                logger.error(f"❌【数据处理管理员】推送行情数据到数据完成部门失败: {e}")
+                logger.error(f"❌【 公开数据处理管理员】推送行情数据到数据完成部门失败: {e}")
             
         except Exception as e:
-            logger.error(f"❌【数据处理管理员】流水线处理失败: {e}")
+            logger.error(f"❌【 公开数据处理管理员】流水线处理失败: {e}")
             self.stats["errors"] += 1
     
     # ==================== 每小时重置方法 ====================
@@ -254,7 +254,7 @@ class PipelineManager:
     
     def _reset_hourly_stats(self):
         """每小时重置统计计数"""
-        logger.info("🕐【数据处理管理员】每小时统计重置开始")
+        logger.debug("🕐【 公开数据处理管理员】每小时统计重置开始")
         
         # 重置所有统计计数
         self.stats["total_processed"] = 0
@@ -270,7 +270,7 @@ class PipelineManager:
         if hasattr(self, 'step0') and hasattr(self.step0, 'reset_counters'):
             self.step0.reset_counters()
         
-        logger.info("✅【数据处理管理员】每小时统计重置完成")
+        logger.debug("✅【 公开数据处理管理员】每小时统计重置完成")
     
     # ==================== 系统监控 ====================
     
@@ -293,7 +293,7 @@ class PipelineManager:
                 step0_out = self.stats["step0_stats"]["total_out"]
                 step0_blocked = step0_in - step0_out
                 
-                logger.info(f"📈【数据处理管理员】系统运行报告 - "
+                logger.debug(f"📈【 公开数据处理管理员】系统运行报告 - "
                           f"运行时间: {uptime_str}, "
                           f"Step0: 输入{step0_in}/输出{step0_out}/拦截{step0_blocked}, "
                           f"市场处理: {market_total}条")
@@ -301,7 +301,7 @@ class PipelineManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"❌【数据处理管理员】监控错误: {e}")
+                logger.error(f"❌【 公开数据处理管理员】监控错误: {e}")
                 await asyncio.sleep(10)
     
     def _format_uptime(self, seconds: float) -> str:
@@ -369,7 +369,7 @@ class PipelineManager:
     def set_brain_callback(self, callback: Callable):
         """设置市场数据大脑回调"""
         self.brain_callback = callback
-        logger.info("✅【数据处理管理员】市场数据大脑回调已设置")
+        logger.debug("✅【 公开数据处理管理员】市场数据大脑回调已设置")
     
     # ==================== Step0相关方法 ====================
     
@@ -377,7 +377,7 @@ class PipelineManager:
         """重置Step0限流器（用于测试）"""
         if hasattr(self, 'step0'):
             self.step0.reset_limit()
-            logger.info("🔄【数据处理管理员】Step0限流器已重置")
+            logger.debug("🔄【 公开数据处理管理员】Step0限流器已重置")
     
     def get_step0_status(self) -> Dict[str, Any]:
         """获取Step0状态"""
@@ -397,7 +397,7 @@ async def main():
     # 大脑回调函数（仅市场数据）
     async def brain_callback(data):
         """处理市场数据"""
-        print(f"📈【数据处理管理员】 收到市场数据: {len(data)}条")
+        print(f"📈【 公开数据处理管理员】 收到市场数据: {len(data)}条")
     
     # 获取管理员实例
     manager = PipelineManager.instance()
