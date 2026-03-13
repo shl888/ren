@@ -78,7 +78,7 @@ class PrivateWebSocketConnection:
                 await self.ws.close()
                 self.ws = None
             
-            logger.info(f"[私人连接池] {self.connection_id} 已断开")
+            logger.error(f"[私人连接池] {self.connection_id} 已断开")
             
         except Exception as e:
             logger.error(f"[私人连接池] 断开连接失败: {e}")
@@ -106,7 +106,7 @@ class PrivateWebSocketConnection:
         # 快速重试
         for attempt in range(max_quick_retries):
             try:
-                logger.info(f"[私人连接池] {self.connection_id} 快速重试第{attempt + 1}次")
+                logger.error(f"[私人连接池] {self.connection_id} 快速重试第{attempt + 1}次")
                 await connect_func()
                 return True
             except Exception as e:
@@ -119,7 +119,7 @@ class PrivateWebSocketConnection:
         # 慢速重试
         for attempt in range(max_slow_retries):
             try:
-                logger.info(f"[私人连接池] {self.connection_id} 慢速重试第{attempt + 1}次")
+                logger.error(f"[私人连接池] {self.connection_id} 慢速重试第{attempt + 1}次")
                 await connect_func()
                 return True
             except Exception as e:
@@ -269,7 +269,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                     "id": probe_id
                 }
                 
-                logger.info(f"[私人连接池] 币安探测 发送探测#{self.probe_counter} (ID={probe_id})")
+                logger.debug(f"[私人连接池] 币安探测 发送探测#{self.probe_counter} (ID={probe_id})")
                 self.last_probe_sent = datetime.now()
                 self.waiting_for_probe = True
                 self.probe_ids.add(probe_id)
@@ -305,7 +305,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                         # 🎯 有回音 = 连接活（不管内容是什么）
                         self.waiting_for_probe = False
                         self.probe_ids.discard(msg_id)
-                        logger.info(f"[私人连接池] 币安探测 收到响应 ID={msg_id}")
+                        logger.debug(f"[私人连接池] 币安探测 收到响应 ID={msg_id}")
                         continue  # ⚠️ 重要：不转发探测响应
                     
                     # 正常业务消息
