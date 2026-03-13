@@ -55,8 +55,8 @@ class Step1Extract:
         # 线程池执行器（用于同步提取函数）
         self._executor = None
         
-        logger.info("✅【Step1】字段提取器已创建（并行优化版）")
-        logger.info(f"📋【Step1】币安有效订单事件: {self.BINANCE_VALID_ORDER_EVENTS}")
+        logger.info("✅【私人step1】字段提取器已创建（并行优化版）")
+        logger.debug(f"📋【私人step1】币安有效订单事件: {self.BINANCE_VALID_ORDER_EVENTS}")
 
     def _get_executor(self):
         """懒加载线程池执行器"""
@@ -95,16 +95,16 @@ class Step1Extract:
         :return: 提取结果列表，每个元素是一条提取的数据
         ==================================================
         """
-        logger.info(f"🎯【Step1】收到完整存储区数据")
+        logger.info(f"🎯【私人step1】收到完整存储区数据")
         
         try:
             # 获取完整存储区
             full_storage = full_storage_item.get('full_storage', {})
             if not full_storage:
-                logger.warning(f"⚠️【Step1】收到空存储区")
+                logger.warning(f"⚠️【私人step1】收到空存储区")
                 return []
                 
-            logger.info(f"📦【Step1】存储区包含 {len(full_storage)} 个数据项: {list(full_storage.keys())}")
+            logger.debug(f"📦【私人step1】存储区包含 {len(full_storage)} 个数据项: {list(full_storage.keys())}")
             
             # ===== 并行处理所有key =====
             # 为每个key创建独立异步任务
@@ -121,20 +121,20 @@ class Step1Extract:
             for i, results in enumerate(results_lists):
                 if isinstance(results, Exception):
                     # 记录异常但继续处理其他结果
-                    logger.error(f"❌【Step1】处理key失败: {results}")
+                    logger.error(f"❌【私人step1】处理key失败: {results}")
                 elif results:
                     all_results.extend(results)
             
-            logger.info(f"📊【Step1】并行处理完成，共提取 {len(all_results)} 条结果")
+            logger.debug(f"📊【私人step1】并行处理完成，共提取 {len(all_results)} 条结果")
             
             # 如果有大量结果，可以抽样日志
             if len(all_results) > 10:
-                logger.info(f"📊【Step1】结果预览: {all_results[:3]} ... (共{len(all_results)}条)")
+                logger.debug(f"📊【私人step1】结果预览: {all_results[:3]} ... (共{len(all_results)}条)")
             
             return all_results
             
         except Exception as e:
-            logger.error(f"❌【Step1】处理失败: {e}")
+            logger.error(f"❌【私人step1】处理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return []
@@ -151,7 +151,7 @@ class Step1Extract:
         ==================================================
         """
         try:
-            logger.debug(f"🔍【Step1】开始处理key: {key}")
+            logger.debug(f"🔍【私人step1】开始处理key: {key}")
             
             # 获取线程池执行器
             executor = self._get_executor()
@@ -171,7 +171,7 @@ class Step1Extract:
                     pseudo_item
                 )
                 if results:
-                    logger.debug(f"✅【Step1】从 {key} 提取了 {len(results)} 条订单结果")
+                    logger.debug(f"✅【私人step1】从 {key} 提取了 {len(results)} 条订单结果")
                 return results or []
             
             # ========== 币安HTTP账户 ==========
@@ -234,7 +234,7 @@ class Step1Extract:
                         symbol = r.get('开仓合约名')
                         if symbol:
                             r['合约面值'] = self.okx_contract_cache.get(symbol)
-                    logger.debug(f"✅【Step1】从 {key} 提取了 {len(results)} 条订单结果，并添加面值")
+                    logger.debug(f"✅【私人step1】从 {key} 提取了 {len(results)} 条订单结果，并添加面值")
                 
                 return results or []
             
@@ -249,11 +249,11 @@ class Step1Extract:
             
             # ========== 其他未处理的key ==========
             else:
-                logger.debug(f"⏭️【Step1】跳过未处理的key: {key}")
+                logger.debug(f"⏭️【私人step1】跳过未处理的key: {key}")
                 return []
                 
         except Exception as e:
-            logger.error(f"❌【Step1】处理key {key} 异常: {e}")
+            logger.error(f"❌【私人step1】处理key {key} 异常: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return []
@@ -324,10 +324,10 @@ class Step1Extract:
         """提取币安订单数据"""
         classified = item.get('classified', {})
         if not classified:
-            logger.warning(f"⚠️【Step1】币安order_update无classified数据")
+            logger.warning(f"⚠️【私人step1】币安order_update无classified数据")
             return []
 
-        logger.debug(f"🔍【Step1】币安classified keys: {list(classified.keys())}")
+        logger.debug(f"🔍【私人step1】币安classified keys: {list(classified.keys())}")
 
         results = []
         for event_key, event_list in classified.items():
@@ -338,7 +338,7 @@ class Step1Extract:
             event_type = f"_{parts[1]}"
             
             if event_type not in self.BINANCE_VALID_ORDER_EVENTS:
-                logger.debug(f"⏭️【Step1】跳过非白名单事件: {event_type}")
+                logger.debug(f"⏭️【私人step1】跳过非白名单事件: {event_type}")
                 continue
 
             for event in event_list:
@@ -395,7 +395,7 @@ class Step1Extract:
 
                 results.append(result)
 
-        logger.debug(f"📊【Step1】币安订单提取完成，共 {len(results)} 条")
+        logger.debug(f"📊【私人step1】币安订单提取完成，共 {len(results)} 条")
         return results
 
     # ========== 欧易工具函数 ==========
@@ -425,105 +425,105 @@ class Step1Extract:
                         self.okx_contract_cache[symbol] = ct_val
             
             self.okx_contract_loaded = True
-            logger.info(f"📦【Step1】缓存了 {len(self.okx_contract_cache)} 个欧易合约面值")
-            logger.debug(f"📦【Step1】缓存内容: {self.okx_contract_cache}")
+            logger.info(f"📦【私人step1】缓存了 {len(self.okx_contract_cache)} 个欧易合约面值")
+            logger.debug(f"📦【私人step1】缓存内容: {self.okx_contract_cache}")
         except Exception as e:
-            logger.error(f"❌【Step1】提取欧易合约面值失败: {e}")
+            logger.error(f"❌【私人step1】提取欧易合约面值失败: {e}")
 
     def _extract_okx_account(self, item: Dict) -> Optional[Dict[str, Any]]:
         """提取欧易账户数据"""
         try:
             data = item.get('data', {})
-            logger.debug(f"🔍【Step1-欧易账户】原始数据: {data}")
+            logger.debug(f"🔍【私人step1-欧易账户】原始数据: {data}")
             
             if not data.get('data'):
-                logger.debug(f"⚠️【Step1-欧易账户】data.data 不存在")
+                logger.debug(f"⚠️【私人step1-欧易账户】data.data 不存在")
                 return None
             
             first_level = data['data']
             if not isinstance(first_level, list) or len(first_level) == 0:
-                logger.debug(f"⚠️【Step1-欧易账户】data.data 不是数组或为空")
+                logger.debug(f"⚠️【私人step1-欧易账户】data.data 不是数组或为空")
                 return None
             
             details_list = first_level[0].get('details', [])
             if not isinstance(details_list, list) or len(details_list) == 0:
-                logger.debug(f"⚠️【Step1-欧易账户】details 不存在或为空")
+                logger.debug(f"⚠️【私人step1-欧易账户】details 不存在或为空")
                 return None
             
             details = details_list[0]
-            logger.debug(f"🔍【Step1-欧易账户】details内容: {details}")
+            logger.debug(f"🔍【私人step1-欧易账户】details内容: {details}")
             
             result = {"交易所": "okx", "data_type": "account_update"}
             
             eq = details.get('eq')
             if eq is not None and eq != '':
                 result["账户资产额"] = eq
-                logger.debug(f"🔍【Step1-欧易账户】提取到账户资产额: {eq}")
+                logger.debug(f"🔍【私人step1-欧易账户】提取到账户资产额: {eq}")
             
             ccy = details.get('ccy')
             if ccy:
                 result["资产币种"] = ccy
-                logger.debug(f"🔍【Step1-欧易账户】提取到资产币种: {ccy}")
+                logger.debug(f"🔍【私人step1-欧易账户】提取到资产币种: {ccy}")
             
-            logger.debug(f"📤【Step1-欧易账户】提取结果: {result}")
+            logger.debug(f"📤【私人step1-欧易账户】提取结果: {result}")
             return result if len(result) > 2 else None
             
         except Exception as e:
-            logger.debug(f"⚠️【Step1】提取欧易账户数据异常: {e}")
+            logger.debug(f"⚠️【私人step1】提取欧易账户数据异常: {e}")
             return None
 
     def _extract_okx_orders(self, item: Dict) -> List[Dict[str, Any]]:
         """提取欧易订单数据"""
         try:
             classified = item.get('classified', {})
-            logger.debug(f"🔍【Step1-欧易订单】classified内容: {classified}")
+            logger.debug(f"🔍【私人step1-欧易订单】classified内容: {classified}")
             
             if not classified:
-                logger.debug(f"⚠️【Step1-欧易订单】classified为空")
+                logger.debug(f"⚠️【私人step1-欧易订单】classified为空")
                 return []
             
             results = []
             for event_key, event_list in classified.items():
-                logger.debug(f"🔍【Step1-欧易订单】处理事件: {event_key}, 数量: {len(event_list)}")
+                logger.debug(f"🔍【私人step1-欧易订单】处理事件: {event_key}, 数量: {len(event_list)}")
                 
                 if '03_开仓(全部成交)' in event_key:
                     for i, event in enumerate(event_list):
                         result = self._extract_okx_open_order(event)
                         if result:
                             results.append(result)
-                            logger.debug(f"✅【Step1-欧易订单】开仓事件提取成功")
+                            logger.debug(f"✅【私人step1-欧易订单】开仓事件提取成功")
                             
                 elif '05_平仓(全部成交)' in event_key:
                     for i, event in enumerate(event_list):
                         result = self._extract_okx_close_order(event)
                         if result:
                             results.append(result)
-                            logger.debug(f"✅【Step1-欧易订单】平仓事件提取成功")
+                            logger.debug(f"✅【私人step1-欧易订单】平仓事件提取成功")
             
-            logger.debug(f"📊【Step1-欧易订单】共提取 {len(results)} 条订单")
+            logger.debug(f"📊【私人step1-欧易订单】共提取 {len(results)} 条订单")
             return results
             
         except Exception as e:
-            logger.debug(f"⚠️【Step1】提取欧易订单数据异常: {e}")
+            logger.debug(f"⚠️【私人step1】提取欧易订单数据异常: {e}")
             return []
 
     def _extract_okx_open_order(self, event: Dict) -> Optional[Dict[str, Any]]:
         """提取欧易开仓订单字段"""
         try:
             data = event.get('data', {})
-            logger.debug(f"🔍【Step1-欧易开仓】event data: {data}")
+            logger.debug(f"🔍【私人step1-欧易开仓】event data: {data}")
             
             if not data.get('data'):
-                logger.debug(f"⚠️【Step1-欧易开仓】data.data 不存在")
+                logger.debug(f"⚠️【私人step1-欧易开仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
-                logger.debug(f"⚠️【Step1-欧易开仓】data.data 不是数组或为空")
+                logger.debug(f"⚠️【私人step1-欧易开仓】data.data 不是数组或为空")
                 return None
             
             order_data = data_list[0]
-            logger.debug(f"🔍【Step1-欧易开仓】order_data: {order_data}")
+            logger.debug(f"🔍【私人step1-欧易开仓】order_data: {order_data}")
             
             result = {"交易所": "okx", "data_type": "order_update"}
             
@@ -581,30 +581,30 @@ class Step1Extract:
             if c_time is not None and c_time != '':
                 result["开仓时间"] = self._convert_timestamp(c_time)
             
-            logger.debug(f"📤【Step1-欧易开仓】提取结果: {result}")
+            logger.debug(f"📤【私人step1-欧易开仓】提取结果: {result}")
             return result if len(result) > 2 else None
             
         except Exception as e:
-            logger.debug(f"⚠️【Step1】提取欧易开仓订单异常: {e}")
+            logger.debug(f"⚠️【私人step1】提取欧易开仓订单异常: {e}")
             return None
 
     def _extract_okx_close_order(self, event: Dict) -> Optional[Dict[str, Any]]:
         """提取欧易平仓订单字段"""
         try:
             data = event.get('data', {})
-            logger.debug(f"🔍【Step1-欧易平仓】event data: {data}")
+            logger.debug(f"🔍【私人step1-欧易平仓】event data: {data}")
             
             if not data.get('data'):
-                logger.debug(f"⚠️【Step1-欧易平仓】data.data 不存在")
+                logger.debug(f"⚠️【私人step1-欧易平仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
-                logger.debug(f"⚠️【Step1-欧易平仓】data.data 不是数组或为空")
+                logger.debug(f"⚠️【私人step1-欧易平仓】data.data 不是数组或为空")
                 return None
             
             order_data = data_list[0]
-            logger.debug(f"🔍【Step1-欧易平仓】order_data: {order_data}")
+            logger.debug(f"🔍【私人step1-欧易平仓】order_data: {order_data}")
             
             result = {"交易所": "okx", "data_type": "order_update"}
             
@@ -637,36 +637,36 @@ class Step1Extract:
             if order_data.get('instId'):
                 result["开仓合约名"] = self._normalize_okx_symbol(order_data['instId'])
             
-            logger.debug(f"📤【Step1-欧易平仓】提取结果: {result}")
+            logger.debug(f"📤【私人step1-欧易平仓】提取结果: {result}")
             return result if len(result) > 2 else None
             
         except Exception as e:
-            logger.debug(f"⚠️【Step1】提取欧易平仓订单异常: {e}")
+            logger.debug(f"⚠️【私人step1】提取欧易平仓订单异常: {e}")
             return None
 
     def _extract_okx_position(self, item: Dict) -> Optional[Dict[str, Any]]:
         """提取欧易持仓数据"""
         try:
             data = item.get('data', {})
-            logger.debug(f"🔍【Step1-欧易持仓】原始数据: {data}")
+            logger.debug(f"🔍【私人step1-欧易持仓】原始数据: {data}")
             
             if not data.get('data'):
-                logger.debug(f"⚠️【Step1-欧易持仓】data.data 不存在")
+                logger.debug(f"⚠️【私人step1-欧易持仓】data.data 不存在")
                 return None
             
             data_list = data['data']
             if not isinstance(data_list, list) or len(data_list) == 0:
-                logger.debug(f"⚠️【Step1-欧易持仓】data.data 不是数组或为空")
+                logger.debug(f"⚠️【私人step1-欧易持仓】data.data 不是数组或为空")
                 return None
             
             pos_data = data_list[0]
-            logger.debug(f"🔍【Step1-欧易持仓】pos_data: {pos_data}")
+            logger.debug(f"🔍【私人step1-欧易持仓】pos_data: {pos_data}")
             
             pos = pos_data.get('pos')
-            logger.debug(f"🔍【Step1-欧易持仓】pos值: {pos}")
+            logger.debug(f"🔍【私人step1-欧易持仓】pos值: {pos}")
             
             if pos is None or pos == '' or float(pos) == 0:
-                logger.debug(f"⏭️【Step1-欧易持仓】空仓，跳过提取")
+                logger.debug(f"⏭️【私人step1-欧易持仓】空仓，跳过提取")
                 return None
             
             result = {"交易所": "okx", "data_type": "position_update"}
@@ -726,9 +726,9 @@ class Step1Extract:
             if funding_fee is not None and funding_fee != '':
                 result["累计资金费"] = funding_fee
             
-            logger.debug(f"📤【Step1-欧易持仓】提取结果: {result}")
+            logger.debug(f"📤【私人step1-欧易持仓】提取结果: {result}")
             return result if len(result) > 2 else None
             
         except Exception as e:
-            logger.debug(f"⚠️【Step1】提取欧易持仓数据异常: {e}")
+            logger.debug(f"⚠️【私人step1】提取欧易持仓数据异常: {e}")
             return None
