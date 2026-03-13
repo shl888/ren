@@ -18,17 +18,17 @@
 
 2. 信息标签（纯标签） - 独立推送，不带数据
    - 币安半成品：触发币安半成品修复
-   - 币安持仓缺失：触发币安缺失修复  
+   - 币安持仓缺失：触发币安持仓缺失修复  
    - 币安已平仓：关闭所有币安修复流程
-   - 欧意持仓缺失：触发欧意缺失修复
+   - 欧意持仓缺失：触发欧意持仓缺失修复
    - 欧意已平仓：关闭欧意修复流程
 
 【使用示例】
     from .constants import TAG_CLOSED, INFO_BINANCE_SEMI
-    
+
     # 推送数据标签
     await scheduler.handle({'tag': TAG_CLOSED, 'data': data})
-    
+
     # 推送信息标签  
     await scheduler.handle({'info': INFO_BINANCE_SEMI})
 ==================================================
@@ -124,7 +124,7 @@ FIELD_EXCHANGE = "交易所"              # 交易所名称
 # ----- 开仓信息 -----
 FIELD_OPEN_CONTRACT = "开仓合约名"      # 开仓合约名，如 BTCUSDT
 FIELD_OPEN_PRICE = "开仓价"             # 开仓价格
-FIELD_OPEN_DIRECTION = "开仓方向"       # 开仓方向：LONG/SHORT  ← 新增！
+FIELD_OPEN_DIRECTION = "开仓方向"       # 开仓方向：LONG/SHORT
 FIELD_POSITION_SIZE = "持仓币数"        # 持仓数量（币）
 FIELD_POSITION_CONTRACTS = "持仓张数"   # 持仓数量（张）
 FIELD_CONTRACT_VALUE = "合约面值"       # 每张合约的面值
@@ -137,18 +137,18 @@ FIELD_MARK_PRICE = "标记价"             # 当前标记价格
 FIELD_MARK_POSITION_VALUE = "标记价仓位价值"  # 标记价 * 持仓币数
 FIELD_MARK_MARGIN = "标记价保证金"       # 基于标记价计算的保证金
 FIELD_MARK_PNL = "标记价浮盈"           # 基于标记价的浮动盈亏
-FIELD_MARK_PNL_PERCENT = "标记价浮盈百分比"  # 基于标记价的盈亏百分比
+FIELD_MARK_PNL_PERCENT_OF_MARGIN = "标记价浮盈百分比"  # 基于保证金的盈亏百分比
 
 # ----- 最新价相关 -----
 FIELD_LATEST_PRICE = "最新价"           # 当前最新成交价
 FIELD_LATEST_POSITION_VALUE = "最新价仓位价值"  # 最新价 * 持仓币数
 FIELD_LATEST_MARGIN = "最新价保证金"    # 基于最新价计算的保证金
 FIELD_LATEST_PNL = "最新价浮盈"         # 基于最新价的浮动盈亏
-FIELD_LATEST_PNL_PERCENT = "最新价浮盈百分比"  # 基于最新价的盈亏百分比
+FIELD_LATEST_PNL_PERCENT_OF_MARGIN = "最新价浮盈百分比"  # 基于保证金的盈亏百分比
 
-# ----- 涨跌盈亏幅 -----
-FIELD_MARK_PNL_PERCENT = "标记价涨跌盈亏幅"    # 基于标记价的盈亏百分比
-FIELD_LATEST_PNL_PERCENT = "最新价涨跌盈亏幅"  # 基于最新价的盈亏百分比
+# ----- 涨跌盈亏幅（相对开仓价）-----
+FIELD_MARK_PNL_PERCENT = "标记价涨跌盈亏幅"    # (标记价-开仓价)/开仓价*100
+FIELD_LATEST_PNL_PERCENT = "最新价涨跌盈亏幅"  # (最新价-开仓价)/开仓价*100
 
 # ----- 资金费相关 -----
 FIELD_FUNDING_THIS = "本次资金费"        # 最近一次资金费
@@ -159,6 +159,7 @@ FIELD_AVG_FUNDING_RATE = "平均资金费率"  # 平均资金费率
 
 # ----- 平仓信息 -----
 FIELD_CLOSE_TIME = "平仓时间"           # 平仓时间，有值表示已平仓
+
 
 # ========== 扩展字段（可根据需要添加）==========
 """
