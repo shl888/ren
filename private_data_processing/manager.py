@@ -71,17 +71,17 @@ class PrivateDataProcessor:
                     del classified[k]
                 
                 if current_keys:
-                    logger.info(f"🧹 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
+                    logger.info(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
                 
         except Exception as e:
-            logger.error(f"❌ [币安订单] 延迟清理失败: {e}")
+            logger.error(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}")
     
     def _binance_delayed_delete(self, keys: List[str], symbol: str):
         """启动独立线程执行清理"""
         thread = threading.Thread(target=self._binance_delayed_delete_sync, args=(keys, symbol))
         thread.daemon = True
         thread.start()
-        logger.info(f"⏰ [币安订单] 清理线程已启动: {symbol} 将在5秒后清理")
+        logger.info(f"⏰【私人数据处理】 [币安订单] 清理线程已启动: {symbol} 将在5秒后清理")
     
     # ========== OKX清理（同步线程版）==========
     def _okx_delayed_delete_sync(self, symbol: str):
@@ -102,7 +102,7 @@ class PrivateDataProcessor:
                         del classified[k]
                     
                     if order_keys:
-                        logger.info(f"🧹 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(order_keys)}个订单分类")
+                        logger.debug(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(order_keys)}个订单分类")
                 
                 # ===== 清理持仓数据 =====
                 pos_key = 'okx_position_update'
@@ -116,12 +116,12 @@ class PrivateDataProcessor:
                         
                         if pos_symbol == symbol:
                             del self.memory_store['private_data'][pos_key]
-                            logger.info(f"🧹 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})")
+                            logger.debug(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})")
                 
-                logger.info(f"✅ [OKX清理] {symbol} 所有相关数据清理完成")
+                logger.info(f"✅ [【私人数据处理】OKX订单清理] {symbol} 所有相关数据清理完成")
                 
         except Exception as e:
-            logger.error(f"❌ [OKX订单] 延迟清理失败: {e}")
+            logger.error(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
     
@@ -130,7 +130,7 @@ class PrivateDataProcessor:
         thread = threading.Thread(target=self._okx_delayed_delete_sync, args=(symbol,))
         thread.daemon = True
         thread.start()
-        logger.info(f"⏰ [OKX订单] 清理线程已启动: {symbol} 将在5秒后清理")
+        logger.info(f"⏰ 【私人数据处理】[OKX订单] 清理线程已启动: {symbol} 将在5秒后清理")
     
     # ===== 将完整存储区喂给Step1 =====
     async def _feed_full_storage_to_step1(self):
@@ -140,9 +140,9 @@ class PrivateDataProcessor:
                 'full_storage': self.memory_store['private_data'].copy()
             }
             await self.scheduler.feed_step1(full_storage_item) # ✅ 加上 await
-            logger.info(f"📤【Manager】已将完整存储区喂给Step1，包含 {len(self.memory_store['private_data'])} 个数据项")
+            logger.debug(f"📤【私人数据处理】【Manager】已将完整存储区喂给Step1，包含 {len(self.memory_store['private_data'])} 个数据项")
         except Exception as e:
-            logger.error(f"❌【Manager】喂给Step1完整存储区失败: {e}")
+            logger.error(f"❌【私人数据处理】【Manager】喂给Step1完整存储区失败: {e}")
     
     async def receive_private_data(self, private_data):
         """
@@ -162,7 +162,7 @@ class PrivateDataProcessor:
             source = private_data.get('source', '')
             data_type = private_data.get('data_type', 'unknown')
             event_type = raw_data.get('e', 'unknown') if isinstance(raw_data, dict) else 'unknown'
-            logger.info(f"🎯【Manager】收到数据！exchange={exchange}, data_type={data_type}, event={event_type}")
+            logger.debug(f"🎯【私人数据处理】【Manager】收到数据！exchange={exchange}, data_type={data_type}, event={event_type}")
             
             # 初始化存储格式数据
             stored_item_base = {
@@ -179,12 +179,12 @@ class PrivateDataProcessor:
                 
                 # 过滤市价单未成交中间状态
                 if o.get('o') == 'MARKET' and o.get('ot') == 'MARKET' and o.get('X') == 'NEW' and o.get('l') == '0' and o.get('z') == '0':
-                    logger.debug(f"⏭️ [币安订单] 过滤市价单未成交中间状态: {o.get('i')}")
+                    logger.debug(f"⏭️【私人数据处理】 [币安订单] 过滤市价单未成交中间状态: {o.get('i')}")
                     return
                 
                 # 分类
                 category = classify_binance_order(private_data)
-                logger.debug(f"🔍 [币安订单] 分类结果: {category}")
+                logger.debug(f"🔍【私人数据处理】 [币安订单] 分类结果: {category}")
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
@@ -206,7 +206,7 @@ class PrivateDataProcessor:
                         stop_loss_key = f"{symbol}_03_设置止损"
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
-                            logger.info(f"🗑️ [币安订单] {symbol} 取消止损，已删除设置止损记录")
+                            logger.info(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
                         await self._feed_full_storage_to_step1()
                         return
                     
@@ -214,14 +214,14 @@ class PrivateDataProcessor:
                         take_profit_key = f"{symbol}_04_设置止盈"
                         if take_profit_key in classified:
                             del classified[take_profit_key]
-                            logger.info(f"🗑️ [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
+                            logger.info(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
                         await self._feed_full_storage_to_step1()
                         return
                     
                     # 过期事件不保存
                     if category in ['13_止损过期(被触发)', '14_止损过期(被取消)', 
                                     '15_止盈过期(被触发)', '16_止盈过期(被取消)']:
-                        logger.debug(f"⏭️ [币安订单] 过期事件不缓存: {category}")
+                        logger.debug(f"⏭️【私人数据处理】 [币安订单] 过期事件不缓存: {category}")
                         await self._feed_full_storage_to_step1()
                         return
                     
@@ -232,7 +232,7 @@ class PrivateDataProcessor:
                     # 止盈止损的设置事件只保留最新一条
                     if category in ['03_设置止损', '04_设置止盈']:
                         classified[classified_key] = []
-                        logger.debug(f"🔄 [币安订单] {symbol} {category} 已清空旧记录")
+                        logger.debug(f"🔄【私人数据处理】 [币安订单] {symbol} {category} 已清空旧记录")
                     
                     # 去重追加
                     order_id = raw_data['o'].get('i')
@@ -241,7 +241,7 @@ class PrivateDataProcessor:
                         for item in classified[classified_key]:
                             if item['data']['o'].get('i') == order_id:
                                 existing = True
-                                logger.debug(f"🔄 [币安订单] 跳过重复订单: {order_id}")
+                                logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
                                 break
                         
                         if not existing:
@@ -261,7 +261,7 @@ class PrivateDataProcessor:
                     if is_binance_closing(category):
                         keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                         self._binance_delayed_delete(keys_to_delayed_delete, symbol)
-                        logger.info(f"⏰ [币安订单] 平仓标记: {symbol} 清理线程已启动")
+                        logger.info(f"⏰【私人数据处理】 [币安订单] 平仓全部成交标记: {symbol} 清理线程已启动")
                 
                 # 保存后，将完整存储区喂给Step1
                 await self._feed_full_storage_to_step1()
@@ -270,33 +270,33 @@ class PrivateDataProcessor:
             # ========== OKX订单更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
-                logger.info(f"📥 [OKX订单] 收到订单更新")
+                logger.debug(f"📥【私人数据处理】 [OKX订单] 收到订单更新")
                 
                 try:
                     if 'data' not in raw_data:
-                        logger.error(f"❌ [OKX订单] 缺少data字段: {list(raw_data.keys())}")
+                        logger.error(f"❌【私人数据处理】 [OKX订单] 缺少data字段: {list(raw_data.keys())}")
                         return
                     
                     if not isinstance(raw_data['data'], list):
-                        logger.error(f"❌ [OKX订单] data不是数组: {type(raw_data['data'])}")
+                        logger.error(f"❌【私人数据处理】 [OKX订单] data不是数组: {type(raw_data['data'])}")
                         return
                     
                     if len(raw_data['data']) == 0:
-                        logger.error(f"❌ [OKX订单] data数组为空")
+                        logger.error(f"❌【私人数据处理】 [OKX订单] data数组为空")
                         return
                     
                     order_data = raw_data['data'][0]
                     
                     if not isinstance(order_data, dict):
-                        logger.error(f"❌ [OKX订单] 订单数据不是字典: {type(order_data)}")
+                        logger.error(f"❌【私人数据处理】 [OKX订单] 订单数据不是字典: {type(order_data)}")
                         return
                     
                     order_id = order_data.get('ordId', 'unknown')
                     state = order_data.get('state', 'unknown')
-                    logger.info(f"✅ [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
+                    logger.debug(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
                     
                     category = classify_okx_order(raw_data['data'])
-                    logger.info(f"🔍 [OKX订单] 分类结果: {category}")
+                    logger.debug(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
                     
                     # 过滤不需要保存的分类
                     filtered_categories = [
@@ -306,7 +306,7 @@ class PrivateDataProcessor:
                     ]
                     
                     if category in filtered_categories:
-                        logger.info(f"⏭️ [OKX订单] 过滤 {category}: {order_id}, 不保存")
+                        logger.debug(f"⏭️【私人数据处理】 [OKX订单] 过滤 {category}: {order_id}, 不保存")
                         return
                     
                     symbol = order_data.get('instId', 'unknown')
@@ -329,7 +329,7 @@ class PrivateDataProcessor:
                         classified = self.memory_store['private_data']['okx_order_update']['classified']
                         
                         if category == '06_已取消':
-                            logger.info(f"🗑️ [OKX订单] {symbol} 订单取消，等待后续清理")
+                            logger.debug(f"🗑️【私人数据处理】 [OKX订单] {symbol} 订单取消，等待后续清理")
                             return
                         
                         if classified_key not in classified:
@@ -337,7 +337,7 @@ class PrivateDataProcessor:
                         
                         if category in ['03_开仓(全部成交)', '05_平仓(全部成交)']:
                             classified[classified_key] = []
-                            logger.debug(f"🔄 [OKX订单] {symbol} {category} 已清空旧记录")
+                            logger.debug(f"🔄【私人数据处理】 [OKX订单] {symbol} {category} 已清空旧记录")
                         
                         if order_id and order_id != 'unknown':
                             existing = False
@@ -346,7 +346,7 @@ class PrivateDataProcessor:
                                 if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
                                     if item_data['data'][0].get('ordId') == order_id:
                                         existing = True
-                                        logger.debug(f"🔄 [OKX订单] 跳过重复订单: {order_id}")
+                                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单: {order_id}")
                                         break
                             
                             if not existing:
@@ -355,25 +355,25 @@ class PrivateDataProcessor:
                                     'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                     'data': raw_data
                                 })
-                                logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
+                                logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         else:
                             classified[classified_key].append({
                                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
-                            logger.info(f"📦 [OKX订单] {symbol} {category} 已保存")
+                            logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         
                         # ===== 平仓全部成交：启动独立线程清理 =====
                         if is_okx_closing(category):
                             self._okx_delayed_delete(symbol)
-                            logger.info(f"⏰ [OKX订单] 平仓全部成交标记: {symbol} 清理线程已启动")
+                            logger.info(f"⏰【私人数据处理】 [OKX订单] 平仓全部成交标记: {symbol} 清理线程已启动")
                     
                     await self._feed_full_storage_to_step1()
                     return
                     
                 except Exception as e:
-                    logger.error(f"❌ [OKX订单] 处理失败: {e}")
+                    logger.error(f"❌【私人数据处理】 [OKX订单] 处理失败: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
                     return
@@ -381,7 +381,7 @@ class PrivateDataProcessor:
             # ========== OKX持仓更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'position_update':
                 
-                logger.debug(f"📥 [OKX持仓] 收到持仓更新")
+                logger.debug(f"📥【私人数据处理】 [OKX持仓] 收到持仓更新")
                 
                 try:
                     storage_key = f"{exchange}_position_update"
@@ -395,11 +395,11 @@ class PrivateDataProcessor:
                             'received_at': private_data.get('received_at', datetime.now().isoformat())
                         }
                     
-                    logger.debug(f"✅ [OKX持仓] 已保存: {storage_key}")
+                    logger.debug(f"✅【私人数据处理】 [OKX持仓] 已保存: {storage_key}")
                     await self._feed_full_storage_to_step1()
                     
                 except Exception as e:
-                    logger.error(f"❌ [OKX持仓] 处理失败: {e}")
+                    logger.error(f"❌【私人数据处理】 [OKX持仓] 处理失败: {e}")
                 
                 return
             
@@ -411,7 +411,7 @@ class PrivateDataProcessor:
                 
                 if exchange == 'binance':
                     if event_type == 'TRADE_LITE':
-                        logger.debug(f"📨 [私人数据处理] 过滤掉 TRADE_LITE 事件")
+                        logger.debug(f"📨【私人数据处理】 [私人数据处理] 过滤掉 TRADE_LITE 事件")
                         return
                     
                     binance_mapping = {
@@ -446,7 +446,7 @@ class PrivateDataProcessor:
             await self._feed_full_storage_to_step1()
             
         except Exception as e:
-            logger.error(f"❌【Manager】接收数据失败: {e}")
+            logger.error(f"❌【私人数据处理】【Manager】接收数据失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
     
