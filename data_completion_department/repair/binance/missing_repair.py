@@ -141,7 +141,7 @@ class BinanceMissingRepair:
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
 
-        logger.info("✅ 币安持仓缺失修复区初始化完成")
+        logger.info("✅【币安修复区】【持仓缺失修复】 修复区初始化完成")
 
     # ==================== 对外入口 ====================
 
@@ -172,11 +172,11 @@ class BinanceMissingRepair:
         :param snapshot: 完整的存储区快照
         """
         if not snapshot:
-            logger.warning("⚠️ 收到空快照")
+            logger.warning("⚠️ 【币安修复区】【持仓缺失修复】收到空快照")
             return
 
         self.latest_snapshot = snapshot
-        logger.debug(f"📦 币安持仓缺失修复收到存储区快照，时间戳: {snapshot.get('timestamp')}")
+        logger.debug(f"📦【币安修复区】【持仓缺失修复】 收到存储区快照，时间戳: {snapshot.get('timestamp')}")
 
     async def handle_info(self, info: str):
         """
@@ -194,32 +194,32 @@ class BinanceMissingRepair:
         :param info: 信息标签
         """
         if not info:
-            logger.warning("⚠️ 收到空标签")
+            logger.warning("⚠️【币安修复区】【持仓缺失修复】 收到空标签")
             return
 
         old_info = self.current_info
         self.current_info = info
 
-        logger.info(f"📨 币安持仓缺失修复门外标签更新: {old_info} → {info}")
+        logger.debug(f"📨【币安修复区】【持仓缺失修复】 门外标签更新: {old_info} → {info}")
 
         if info == INFO_BINANCE_MISSING:
             await self._start_repair()
         elif info == INFO_BINANCE_CLOSED:
             await self._stop_repair()
         else:
-            logger.warning(f"⚠️ 币安持仓缺失修复收到未知标签: {info}")
+            logger.warning(f"⚠️ 【币安修复区】【持仓缺失修复】收到未知标签: {info}")
 
     # ==================== 修复循环控制 ====================
 
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.debug("修复流程已在运行中")
+            logger.debug("【币安修复区】【持仓缺失修复】修复流程已在运行中")
             return
 
         self.is_running = True
         self.repair_task = asyncio.create_task(self._repair_loop())
-        logger.info("🚀 币安持仓缺失修复流程已启动（循环运行）")
+        logger.info("🚀【币安修复区】【持仓缺失修复】 修复流程已启动（循环运行）")
 
     async def _stop_repair(self):
         """停止修复流程"""
@@ -234,7 +234,7 @@ class BinanceMissingRepair:
             except asyncio.CancelledError:
                 pass
             self.repair_task = None
-        logger.info("🛑 币安持仓缺失修复流程已停止")
+        logger.info("🛑 【币安修复区】【持仓缺失修复】修复流程已停止")
 
     async def _repair_loop(self):
         """
@@ -249,12 +249,12 @@ class BinanceMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄 币安持仓缺失修复循环开始")
+        logger.info("🔄【币安修复区】【持仓缺失修复】 修复循环开始")
 
         while self.is_running:
             try:
                 if self.current_info != INFO_BINANCE_MISSING:
-                    logger.info("门外标签已不是币安持仓缺失，停止修复循环")
+                    logger.info("【币安修复区】【持仓缺失修复】门外标签已不是币安持仓缺失，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -262,13 +262,13 @@ class BinanceMissingRepair:
                 await asyncio.sleep(1)
 
             except asyncio.CancelledError:
-                logger.info("修复循环被取消")
+                logger.info("【币安修复区】【持仓缺失修复】修复循环被取消")
                 break
             except Exception as e:
-                logger.error(f"❌ 修复循环出错: {e}", exc_info=True)
+                logger.error(f"❌ 【币安修复区】【持仓缺失修复】修复循环出错: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
-        logger.info("🔄 币安持仓缺失修复循环结束")
+        logger.info("🔄【币安修复区】【持仓缺失修复】 修复循环结束")
 
     async def _repair_once(self):
         """
@@ -283,33 +283,33 @@ class BinanceMissingRepair:
             第6步：提取3个特定字段并推送
         ==================================================
         """
-        logger.debug("执行一次币安持仓缺失修复")
+        logger.debug("【币安修复区】【持仓缺失修复】执行一次修复流程")
 
         # 检查门外是否有存储区数据
         if not self.latest_snapshot:
-            logger.warning("⚠️ 门外还没有存储区数据，等待下次循环")
+            logger.warning("⚠️【币安修复区】【持仓缺失修复】 门外还没有存储区数据，等待下次循环")
             return
 
         if not await self._step1_get_cache():
-            logger.error("❌ 第1步失败：无法获取缓存数据，本次修复终止")
+            logger.error("❌【币安修复区】【持仓缺失修复】 第1步失败：无法获取缓存数据，本次修复终止")
             return
 
         funding_action = await self._step2_check_funding()
         if funding_action is None:
-            logger.error("❌ 第2步失败：检测资金费状态出错，本次修复终止")
+            logger.error("❌【币安修复区】【持仓缺失修复】 第2步失败：检测资金费状态出错，本次修复终止")
             return
 
         if funding_action == 'do_fusion':
             await self._step3_funding_fusion()
 
         if not await self._step4_get_prices():
-            logger.error("❌ 第4步失败：无法获取行情数据，本次修复终止")
+            logger.error("❌【币安修复区】【持仓缺失修复】 第4步失败：无法获取行情数据，本次修复终止")
             return
 
         await self._step5_calc_fields()
         await self._step6_extract_and_push()
 
-        logger.debug("一次币安持仓缺失修复执行完成")
+        logger.debug("【币安修复区】【持仓缺失修复】一次修复流程执行完成")
 
     # ==================== 6步修复流程 ====================
 
@@ -329,13 +329,13 @@ class BinanceMissingRepair:
         ==================================================
         """
         if self.cache is not None:
-            logger.debug("✅ 第1步：使用现有缓存")
+            logger.debug("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
             return True
 
-        logger.info("第1步：缓存为空，从数据库读取币安持仓数据")
+        logger.info("第1步：【币安修复区】【持仓缺失修复】缓存为空，从数据库读取币安持仓数据")
 
         if not self.db_url or not self.db_token:
-            logger.error("❌ 数据库连接信息不完整，无法读取")
+            logger.error("❌【币安修复区】【持仓缺失修复】 数据库连接信息不完整，无法读取")
             return False
 
         try:
@@ -343,23 +343,23 @@ class BinanceMissingRepair:
             result = self._query_database(sql)
 
             if not result:
-                logger.warning("⚠️ 数据库查询失败或无数据")
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库查询失败或无数据")
                 return False
 
             rows = result.get('rows', [])
             if not rows:
-                logger.warning("⚠️ 数据库中没有币安持仓数据")
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库中没有币安持仓数据")
                 return False
 
             cols = result.get('cols', [])
             row = rows[0]
             self.cache = self._row_to_dict(row, cols)
 
-            logger.info(f"✅ 第1步：从数据库读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.debug(f"✅【币安修复区】【持仓缺失修复】 第1步：从数据库读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
             return True
 
         except Exception as e:
-            logger.error(f"❌ 第1步：读取数据库失败: {e}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 第1步：读取数据库失败: {e}")
             return False
 
     async def _step2_check_funding(self) -> Optional[str]:
@@ -377,12 +377,12 @@ class BinanceMissingRepair:
             D. 有历史 + 有新结算 → 返回 'do_fusion'
         ==================================================
         """
-        logger.info("第2步：检测资金费状态")
+        logger.debug("【币安修复区】【持仓缺失修复】第2步：检测资金费状态")
 
         # 从门外存储区快照获取最新的币安数据
         snapshot_data = self._get_binance_from_snapshot()
         if not snapshot_data:
-            logger.error("❌ 门外存储区中没有币安数据")
+            logger.error("❌【币安修复区】【持仓缺失修复】 门外存储区中没有币安数据")
             return None
 
         # 判断有无历史（缓存本次资金费是否为0）
@@ -397,31 +397,31 @@ class BinanceMissingRepair:
             snapshot_funding = 0
         has_new = (snapshot_funding != 0)
 
-        logger.info(f"   缓存本次资金费: {cache_funding}, 存储区本次资金费: {snapshot_funding}")
-        logger.info(f"   有无历史: {has_history}, 有无新结算: {has_new}")
+        logger.debug(f" 【币安修复区】【持仓缺失修复】  缓存本次资金费: {cache_funding}, 存储区本次资金费: {snapshot_funding}")
+        logger.debug(f"  【币安修复区】【持仓缺失修复】 有无历史: {has_history}, 有无新结算: {has_new}")
 
         # 保存门外数据供后续步骤使用
         self._snapshot_data = snapshot_data
 
         if not has_history and not has_new:
             # 情况A：无历史 + 无新结算
-            logger.info("   情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         elif not has_history and has_new:
             # 情况B：无历史 + 有新结算
-            logger.info("   情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
 
         elif has_history and not has_new:
             # 情况C：有历史 + 无新结算
-            logger.info("   情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         else:  # has_history and has_new
             # 情况D：有历史 + 有新结算
-            logger.info("   情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.debug("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -436,7 +436,7 @@ class BinanceMissingRepair:
             3. 资金费结算次数 = 存储区次数 + 缓存次数
         ==================================================
         """
-        logger.info("第3步：执行资金费融合")
+        logger.debug("【币安修复区】【持仓缺失修复】第3步：执行资金费融合")
 
         snapshot = self._snapshot_data
         cache = self.cache
@@ -461,7 +461,7 @@ class BinanceMissingRepair:
         # 3. 资金费结算次数相加
         cache[FIELD_FUNDING_COUNT] = snapshot_funding_count + cache_funding_count
 
-        logger.info(f"   融合后 - 本次资金费: {cache[FIELD_FUNDING_THIS]}, "
+        logger.debug(f" 【币安修复区】【持仓缺失修复】  融合后 - 本次资金费: {cache[FIELD_FUNDING_THIS]}, "
                    f"累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
                    f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
 
@@ -476,17 +476,17 @@ class BinanceMissingRepair:
         把这两个值覆盖到缓存中
         ==================================================
         """
-        logger.info("第4步：从行情数据提取最新价和标记价")
+        logger.debug("第4步：【币安修复区】【持仓缺失修复】从行情数据提取最新价和标记价")
 
         contract = self.cache.get(FIELD_OPEN_CONTRACT)
         if not contract:
-            logger.error("❌ 缓存中没有开仓合约名")
+            logger.error("❌【币安修复区】【持仓缺失修复】 缓存中没有开仓合约名")
             return False
 
         # 从门外存储区获取行情数据
         market_data = self._get_market_data_from_snapshot(contract)
         if not market_data:
-            logger.error(f"❌ 无法获取合约 {contract} 的行情数据")
+            logger.error(f"❌ 【币安修复区】【持仓缺失修复】无法获取合约 {contract} 的行情数据")
             return False
 
         # 提取币安的行情字段
@@ -494,7 +494,7 @@ class BinanceMissingRepair:
         mark_price = market_data.get('binance_mark_price')
 
         if latest_price is None or mark_price is None:
-            logger.error(f"❌ 行情数据中缺少必要字段: latest_price={latest_price}, mark_price={mark_price}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 行情数据中缺少必要字段: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
         # 转换为float（如果是字符串）
@@ -502,14 +502,14 @@ class BinanceMissingRepair:
             latest_price = float(latest_price)
             mark_price = float(mark_price)
         except (TypeError, ValueError):
-            logger.error(f"❌ 行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
         # 覆盖到缓存
         self.cache[FIELD_LATEST_PRICE] = latest_price
         self.cache[FIELD_MARK_PRICE] = mark_price
 
-        logger.info(f"✅ 第4步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
+        logger.debug(f"✅ 【币安修复区】【持仓缺失修复】第4步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
         return True
 
     async def _step5_calc_fields(self):
@@ -551,7 +551,7 @@ class BinanceMissingRepair:
             平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
         ==================================================
         """
-        logger.info("第5步：计算8个固定字段（严格按照原始方案，独立计算）")
+        logger.debug("【币安修复区】【持仓缺失修复】第5步：计算8个固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -632,7 +632,7 @@ class BinanceMissingRepair:
         cache[FIELD_MARK_PNL_PERCENT_OF_MARGIN] = mark_pnl_percent_of_margin    # 7. 标记价浮盈百分比
         cache[FIELD_AVG_FUNDING_RATE] = avg_funding_rate                   # 8. 平均资金费率
 
-        logger.info(f"   计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
+        logger.debug(f" 【币安修复区】【持仓缺失修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
                    f"最新价涨跌盈亏幅: {latest_pnl_percent:.2f}%, "
                    f"最新价保证金: {latest_margin:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
@@ -658,12 +658,12 @@ class BinanceMissingRepair:
             - 标记价浮盈
         ==================================================
         """
-        logger.info("第6步：提取3个特定字段并推送")
+        logger.debug("【币安修复区】【持仓缺失修复】第6步：提取3个特定字段并推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
         if not latest_binance:
-            logger.warning("⚠️ 无法获取最新的币安数据，跳过字段提取")
+            logger.warning("⚠️【币安修复区】【持仓缺失修复】 无法获取最新的币安数据，跳过字段提取")
         else:
             # 要提取的3个字段
             fields_to_extract = [
@@ -679,9 +679,9 @@ class BinanceMissingRepair:
                     self.cache[field] = latest_binance[field]
                     extract_count += 1
                 else:
-                    logger.debug(f"   字段 {field} 提取不到或为空值，保留原缓存值")
+                    logger.debug(f"【币安修复区】【持仓缺失修复】   字段 {field} 提取不到或为空值，保留原缓存值")
 
-            logger.info(f"   成功提取 {extract_count} 个字段")
+            logger.debug(f"【币安修复区】【持仓缺失修复】   成功提取 {extract_count} 个字段")
 
         # 创建缓存副本
         data_copy = self.cache.copy()
@@ -693,7 +693,7 @@ class BinanceMissingRepair:
         })
 
         contract = data_copy.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.info(f"✅ 【币安修复区】【持仓缺失修复】已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 
@@ -713,7 +713,7 @@ class BinanceMissingRepair:
         ==================================================
         """
         if not self.latest_snapshot:
-            logger.debug("门外还没有存储区数据")
+            logger.debug("【币安修复区】【持仓缺失修复】门外还没有存储区数据")
             return None
 
         user_data = self.latest_snapshot.get('user_data', {})
@@ -721,7 +721,7 @@ class BinanceMissingRepair:
         binance_item = user_data.get(binance_key, {})
 
         if not binance_item:
-            logger.debug("存储区中没有币安用户数据")
+            logger.debug("【币安修复区】【持仓缺失修复】存储区中没有币安用户数据")
             return None
 
         return binance_item.get('data')
@@ -747,12 +747,12 @@ class BinanceMissingRepair:
         :return: 该合约的行情数据，或None
         """
         if not self.latest_snapshot:
-            logger.debug("门外还没有存储区数据")
+            logger.debug("【币安修复区】【持仓缺失修复】门外还没有存储区数据")
             return None
 
         market_data = self.latest_snapshot.get('market_data', {})
         if not market_data:
-            logger.debug("存储区中没有行情数据")
+            logger.debug("【币安修复区】【持仓缺失修复】存储区中没有行情数据")
             return None
 
         return market_data.get(contract)
@@ -807,13 +807,13 @@ class BinanceMissingRepair:
             return None
 
         except requests.exceptions.Timeout:
-            logger.error(f"❌ 数据库查询超时: {sql[:50]}...")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库查询超时: {sql[:50]}...")
             return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ 数据库请求失败: {e}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库请求失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"❌ 数据库查询未知错误: {e}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库查询未知错误: {e}")
             return None
 
     def _row_to_dict(self, row: List, cols: List) -> Dict:
@@ -857,15 +857,15 @@ class BinanceMissingRepair:
                 self.cache[field] = snapshot_data[field]
                 update_count += 1
 
-        logger.debug(f"   已更新 {update_count} 个资金费字段")
+        logger.debug(f" 【币安修复区】【持仓缺失修复】  已更新 {update_count} 个资金费字段")
 
     def _test_database_connection(self):
         """测试数据库连接是否正常"""
         try:
             result = self._query_database("SELECT 1")
             if result:
-                logger.info("✅ 数据库连接测试成功")
+                logger.info("✅【币安修复区】【持仓缺失修复】 数据库连接测试成功")
             else:
-                logger.warning("⚠️ 数据库连接测试返回空结果")
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库连接测试返回空结果")
         except Exception as e:
-            logger.error(f"❌ 数据库连接测试失败: {e}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库连接测试失败: {e}")
