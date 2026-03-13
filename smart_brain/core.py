@@ -54,7 +54,7 @@ class SmartBrain:
     
     async def initialize(self):
         """初始化大脑核心"""
-        logger.info("🧠 大脑核心初始化中...")
+        logger.info("🧠 【智能大脑】大脑核心初始化中...")
         
         try:
             # 1. 初始化其他管理器
@@ -68,14 +68,14 @@ class SmartBrain:
                 self.http_module = HTTPModuleService()
                 http_init_success = await self.http_module.initialize(self)
                 if not http_init_success:
-                    logger.error("❌ HTTP模块服务初始化失败")
+                    logger.error("❌【智能大脑】 HTTP模块服务初始化失败")
                     return False
-                logger.info("✅ HTTP模块服务初始化成功（仅用于执行交易）")
+                logger.info("✅【智能大脑】 HTTP模块服务初始化成功（仅用于执行交易）")
             except ImportError as e:
-                logger.error(f"❌ 无法导入HTTP模块服务: {e}")
+                logger.error(f"❌【智能大脑】 无法导入HTTP模块服务: {e}")
                 return False
             except Exception as e:
-                logger.error(f"❌ HTTP模块服务初始化异常: {e}")
+                logger.error(f"❌【智能大脑】 HTTP模块服务初始化异常: {e}")
                 return False
             
             # 3. 🔴【已删除】启动私人连接池
@@ -92,17 +92,17 @@ class SmartBrain:
             
             # 6. 完成初始化
             self.running = True
-            logger.info("✅ 大脑核心初始化完成")
+            logger.info("✅【智能大脑】 大脑核心初始化完成")
             
             # 输出HTTP模块状态
             if self.http_module:
                 http_status = self.http_module.get_status()
-                logger.info(f"📊 HTTP模块状态: {http_status}")
+                logger.info(f"📊【智能大脑】 HTTP模块状态: {http_status}")
             
             return True
             
         except Exception as e:
-            logger.error(f"🚨 大脑初始化失败: {e}")
+            logger.error(f"🚨 【智能大脑】大脑初始化失败: {e}")
             logger.error(traceback.format_exc())
             return False
     
@@ -121,29 +121,29 @@ class SmartBrain:
     async def run(self):
         """运行大脑核心"""
         try:
-            logger.info("🧠 大脑核心运行中...")
+            logger.info("🧠 【智能大脑】大脑核心运行中...")
             
             # 主循环
             while self.running:
                 await asyncio.sleep(1)
         
         except KeyboardInterrupt:
-            logger.info("收到键盘中断")
+            logger.info("🚫【智能大脑】收到键盘中断")
         except Exception as e:
-            logger.error(f"运行错误: {e}")
+            logger.error(f"🚫【智能大脑】运行错误: {e}")
             logger.error(traceback.format_exc())
         finally:
             await self.shutdown()
     
     def handle_signal(self, signum, frame):
         """处理系统信号"""
-        logger.info(f"收到信号 {signum}，开始关闭...")
+        logger.info(f"☑️【智能大脑】收到信号 {signum}，开始关闭...")
         self.running = False
     
     async def shutdown(self):
         """关闭大脑核心"""
         self.running = False
-        logger.info("正在关闭大脑核心...")
+        logger.info("☑️【智能大脑】正在关闭大脑核心...")
         
         try:
             # 1. 关闭HTTP模块服务
@@ -170,7 +170,7 @@ class SmartBrain:
             # if self.ws_admin:
             #     await self.ws_admin.stop()
             
-            logger.info("✅ 大脑核心已关闭")
+            logger.info("✅ 【智能大脑】大脑核心已关闭")
         except Exception as e:
-            logger.error(f"关闭出错: {e}")
+            logger.error(f"❌【智能大脑】关闭出错: {e}")
             
