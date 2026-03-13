@@ -91,7 +91,7 @@ class Step2Fusion:
             "okx": None
         }
         
-        logger.info("✅【step2】容器缓存已创建: binance, okx")
+        logger.info("✅【私人step2】容器缓存已创建: binance, okx")
     
     def _delayed_reset_sync(self, exchange: str):
         """同步版：5秒后重置容器"""
@@ -101,10 +101,10 @@ class Step2Fusion:
             with self._lock:
                 container = self.containers[exchange]
                 self._reset_container(container)
-                logger.info(f"🔄【{exchange}】5秒倒计时结束，容器已完全重置")
+                logger.info(f"🔄【私人step2】【{exchange}】5秒倒计时结束，容器已完全重置")
             
         except Exception as e:
-            logger.error(f"❌【{exchange}】延迟重置失败: {e}")
+            logger.error(f"❌【【私人step2】{exchange}】延迟重置失败: {e}")
         finally:
             self.reset_threads[exchange] = None
     
@@ -115,7 +115,7 @@ class Step2Fusion:
         thread.daemon = True
         thread.start()
         self.reset_threads[exchange] = thread
-        logger.info(f"⏰【{exchange}】重置线程已启动，将在5秒后清理")
+        logger.info(f"⏰【私人step2】【{exchange}】重置线程已启动，将在5秒后清理")
     
     def process(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -130,10 +130,10 @@ class Step2Fusion:
         exchange = extracted_data.get('交易所')
         data_type = extracted_data.get('data_type', 'unknown')
         
-        logger.info(f"🔍【step2】收到数据: 交易所={exchange}, 类型={data_type}")
+        logger.debug(f"🔍【私人step2】收到数据: 交易所={exchange}, 类型={data_type}")
         
         if not exchange or exchange not in self.containers:
-            logger.warning(f"⚠️【step2】未知交易所: {exchange}")
+            logger.warning(f"⚠️【私人step2】未知交易所: {exchange}")
             return None
         
         # 获取对应交易所的容器
@@ -150,7 +150,7 @@ class Step2Fusion:
         # 如果有平仓字段，启动独立线程重置
         if has_close_field:
             self._start_reset_thread(exchange)
-            logger.info(f"⏰【{exchange}】检测到平仓字段，启动重置线程")
+            logger.info(f"⏰【私人step2】【{exchange}】检测到平仓字段，启动重置线程")
         
         # 检查平仓事件（币安专用）
         event_type = extracted_data.get('event_type', '')
@@ -159,7 +159,7 @@ class Step2Fusion:
                 self._clear_trade_data(self.containers[exchange])
             # 平仓事件也会启动重置线程
             self._start_reset_thread(exchange)
-            logger.info(f"⏰【{exchange}】检测到平仓事件，启动重置线程")
+            logger.info(f"⏰【私人step2】【{exchange}】检测到平仓事件，启动重置线程")
         
         # ===== 覆盖式更新原始容器 =====
         with self._lock:
@@ -170,9 +170,9 @@ class Step2Fusion:
                     self.containers[exchange][key] = value
                     update_count += 1
                     if exchange == 'okx':
-                        logger.info(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
+                        logger.debug(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
             
-            logger.info(f"📊【step2-{exchange}】更新了 {update_count} 个字段")
+            logger.debug(f"📊【私人step2-{exchange}】更新了 {update_count} 个字段")
             
             # 返回副本
             return self.containers[exchange].copy()
@@ -201,7 +201,7 @@ class Step2Fusion:
                 else:
                     container[field] = None
         
-        logger.info(f"🧹【{container['交易所']}】平仓清空交易数据")
+        logger.debug(f"🧹【私人step2】【{container['交易所']}】平仓清空交易数据")
     
     def _reset_container(self, container: Dict):
         """
@@ -218,7 +218,7 @@ class Step2Fusion:
         container.clear()
         container.update(new_container)
         
-        logger.info(f"✨【{exchange}】容器已完全重置为初始状态")
+        logger.debug(f"✨【私人step2】【{exchange}】容器已完全重置为初始状态")
     
     def get_container(self, exchange: str) -> Optional[Dict]:
         """获取指定交易所的容器副本（调试用）"""
