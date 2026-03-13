@@ -83,7 +83,7 @@ class Scheduler:
         :param database: Database实例，必须有 handle_data(tag, data) 方法
         """
         self.database = database
-        logger.info("✅ 调度区已连接数据库")
+        logger.info("✅ 调度区已连接数据库区")
 
     def set_repair_binance(self, repair):
         """
@@ -130,10 +130,10 @@ class Scheduler:
                 await self._handle_info(message)
 
             else:
-                logger.warning(f"⚠️ 收到未知格式消息: {message}")
+                logger.warning(f"⚠️【调度区】 收到未知格式消息: {message}")
 
         except Exception as e:
-            logger.error(f"❌ 调度处理失败: {e}", exc_info=True)
+            logger.error(f"❌ 【调度区】调度处理失败: {e}", exc_info=True)
 
     async def _handle_tag(self, message: Dict[str, Any]):
         """
@@ -155,7 +155,7 @@ class Scheduler:
         # 提取交易所信息（用于日志）
         exchange = data.get('交易所', 'unknown')
 
-        logger.info(f"📨 调度收到数据标签: {tag} - {exchange}")
+        logger.info(f"📨【调度区】 收到数据标签: {tag} - {exchange}")
 
         # ===== 根据标签处理 =====
         if tag in [TAG_CLOSED, TAG_COMPLETE]:
@@ -170,16 +170,16 @@ class Scheduler:
                     # 数据库的 handle_data 方法接收 tag 和 data
                     await self.database.handle_data(tag, data)
                 except Exception as e:
-                    logger.error(f"❌ 推送到数据库失败: {e}")
+                    logger.error(f"❌【调度区】 推送到数据库失败: {e}")
             else:
-                logger.warning("⚠️ 数据库未就绪，无法保存数据")
+                logger.warning("⚠️【调度区】 数据库未就绪，无法保存数据")
 
         elif tag == TAG_EMPTY:
             # 空仓：只推大脑（不带标签）
             await self._push_to_brain(exchange, data)
 
         else:
-            logger.warning(f"⚠️ 未知数据标签: {tag}")
+            logger.warning(f"⚠️ 【调度区】未知数据标签: {tag}")
 
     async def _handle_info(self, message: Dict[str, Any]):
         """
@@ -195,7 +195,7 @@ class Scheduler:
         ==================================================
         """
         info = message['info']
-        logger.info(f"📨 调度收到信息标签: {info}")
+        logger.info(f"📨 【调度区】收到信息标签: {info}")
 
         # ===== 币安相关信息标签 =====
         if info in [INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED]:
@@ -204,9 +204,9 @@ class Scheduler:
                     # 币安修复区入口的 handle_info 方法
                     await self.repair_binance.handle_info(info)
                 except Exception as e:
-                    logger.error(f"❌ 推送到币安修复区失败: {e}")
+                    logger.error(f"❌【调度区】 推送到币安修复区失败: {e}")
             else:
-                logger.warning(f"⚠️ 币安修复区未就绪，无法处理: {info}")
+                logger.warning(f"⚠️【调度区】 币安修复区未就绪，无法处理: {info}")
 
         # ===== 欧意相关信息标签 =====
         elif info in [INFO_OKX_MISSING, INFO_OKX_CLOSED]:
@@ -215,12 +215,12 @@ class Scheduler:
                     # 欧易修复文件的 handle_info 方法
                     await self.repair_okx.handle_info(info)
                 except Exception as e:
-                    logger.error(f"❌ 推送到欧易修复区失败: {e}")
+                    logger.error(f"❌【调度区】 推送到欧易修复区失败: {e}")
             else:
-                logger.warning(f"⚠️ 欧易修复区未就绪，无法处理: {info}")
+                logger.warning(f"⚠️【调度区】 欧易修复区未就绪，无法处理: {info}")
 
         else:
-            logger.warning(f"⚠️ 未知信息标签: {info}")
+            logger.warning(f"⚠️ 【调度区】未知信息标签: {info}")
 
     # ==================== 推送大脑 ====================
 
@@ -246,7 +246,7 @@ class Scheduler:
         """
         try:
             if not self.brain:
-                logger.warning("⚠️ 大脑模块未就绪，无法推送")
+                logger.warning("⚠️【调度区】 大脑模块未就绪，无法推送")
                 return
 
             # 获取时间戳（优先用数据里的，没有就用当前时间）
@@ -262,7 +262,7 @@ class Scheduler:
 
             # 调用大脑的接收方法
             await self.brain.receive_private_data(brain_message)
-            logger.debug(f"✅ 已推送到大脑: {exchange}")
+            logger.debug(f"✅ 【调度区】已推送到大脑: {exchange}")
 
         except Exception as e:
-            logger.error(f"❌ 推送到大脑失败: {e}")
+            logger.error(f"❌ 【调度区】推送到大脑失败: {e}")
