@@ -131,7 +131,7 @@ class OkxMissingRepair:
         self.db_token = os.getenv('TURSO_DATABASE_TOKEN')
 
         if not self.db_url or not self.db_token:
-            logger.error("❌ 环境变量TURSO_DATABASE_URL和TURSO_DATABASE_TOKEN未设置")
+            logger.error("❌【欧易持仓缺失修复区】 环境变量TURSO_DATABASE_URL和TURSO_DATABASE_TOKEN未设置")
 
         # ===== 测试数据库连接 =====
         if self.db_url and self.db_token:
@@ -140,7 +140,7 @@ class OkxMissingRepair:
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
 
-        logger.info("✅ 欧意持仓缺失修复区初始化完成")
+        logger.info("✅【欧易持仓缺失修复区】 初始化完成")
 
     # ==================== 对外入口 ====================
 
@@ -166,7 +166,7 @@ class OkxMissingRepair:
         old_info = self.current_info
         self.current_info = info  # 覆盖更新
 
-        logger.info(f"📨 门外标签更新: {old_info} → {info}")
+        logger.info(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
 
         # ===== 根据标签决定开关 =====
         if info == INFO_OKX_MISSING:
@@ -174,7 +174,7 @@ class OkxMissingRepair:
         elif info == INFO_OKX_CLOSED:
             await self._stop_repair()
         else:
-            logger.warning(f"⚠️ 收到未知信息标签: {info}")
+            logger.warning(f"⚠️【欧易持仓缺失修复区】 收到未知信息标签: {info}")
 
     async def handle_store_snapshot(self, snapshot: Dict):
         """
@@ -198,19 +198,19 @@ class OkxMissingRepair:
         :param snapshot: 完整的存储区快照
         """
         self.latest_snapshot = snapshot
-        logger.debug(f"📦 收到存储区快照，时间戳: {snapshot.get('timestamp')}")
+        logger.debug(f"📦【欧易持仓缺失修复区】 收到存储区快照，时间戳: {snapshot.get('timestamp')}")
 
     # ==================== 修复循环控制 ====================
 
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.debug("修复流程已在运行中")
+            logger.debug("【欧易持仓缺失修复区】修复流程已在运行中")
             return
 
         self.is_running = True
         self.repair_task = asyncio.create_task(self._repair_loop())
-        logger.info("🚀 欧意持仓缺失修复流程已启动（循环运行）")
+        logger.info("🚀【欧易持仓缺失修复区】 修复流程已启动（循环运行）")
 
     async def _stop_repair(self):
         """停止修复流程"""
@@ -225,7 +225,7 @@ class OkxMissingRepair:
             except asyncio.CancelledError:
                 pass
             self.repair_task = None
-        logger.info("🛑 欧意持仓缺失修复流程已停止")
+        logger.info("🛑 【欧易持仓缺失修复区】修复流程已停止")
 
     async def _repair_loop(self):
         """
@@ -240,12 +240,12 @@ class OkxMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄 欧意持仓缺失修复循环开始")
+        logger.info("🔄【欧易持仓缺失修复区】 修复循环开始")
 
         while self.is_running:
             try:
                 if self.current_info != INFO_OKX_MISSING:
-                    logger.info("门外标签已不是持仓缺失，停止修复循环")
+                    logger.info("【欧易持仓缺失修复区】门外标签已不是持仓缺失，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -253,13 +253,13 @@ class OkxMissingRepair:
                 await asyncio.sleep(1)
 
             except asyncio.CancelledError:
-                logger.info("修复循环被取消")
+                logger.info("【欧易持仓缺失修复区】修复循环被取消")
                 break
             except Exception as e:
-                logger.error(f"❌ 修复循环出错: {e}", exc_info=True)
+                logger.error(f"❌ 【欧易持仓缺失修复区】修复循环出错: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
-        logger.info("🔄 欧意持仓缺失修复循环结束")
+        logger.info("🔄【欧易持仓缺失修复区】 修复循环结束")
 
     async def _repair_once(self):
         """
@@ -277,17 +277,17 @@ class OkxMissingRepair:
         logger.debug("执行一次欧意持仓缺失修复")
 
         if not await self._step1_get_cache():
-            logger.error("❌ 第1步失败：无法获取缓存数据，本次修复终止")
+            logger.error("❌【欧易持仓缺失修复区】 第1步失败：无法获取缓存数据，本次修复终止")
             return
 
         # 检查门外是否有存储区数据
         if not self.latest_snapshot:
-            logger.warning("⚠️ 门外还没有存储区数据，等待下次循环")
+            logger.warning("⚠️【欧易持仓缺失修复区】 门外还没有存储区数据，等待下次循环")
             return
 
         funding_action = await self._step2_check_funding()
         if funding_action is None:
-            logger.error("❌ 第2步失败：检测资金费状态出错，本次修复终止")
+            logger.error("❌【欧易持仓缺失修复区】 第2步失败：检测资金费状态出错，本次修复终止")
             return
 
         if funding_action == 'do_fusion':
@@ -297,7 +297,7 @@ class OkxMissingRepair:
         await self._step5_calc_fixed_fields()
         await self._step6_push_complete()
 
-        logger.debug("一次欧意持仓缺失修复执行完成")
+        logger.debug("【欧易持仓缺失修复区】一次修复流程执行完成")
 
     # ==================== 6步修复流程 ====================
 
@@ -317,13 +317,13 @@ class OkxMissingRepair:
         ==================================================
         """
         if self.cache is not None:
-            logger.debug("✅ 第1步：使用现有缓存")
+            logger.debug("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
             return True
 
-        logger.info("第1步：缓存为空，从数据库读取欧意持仓数据")
+        logger.debug("【欧易持仓缺失修复区】第1步：缓存为空，从数据库读取欧意持仓数据")
 
         if not self.db_url or not self.db_token:
-            logger.error("❌ 数据库连接信息不完整，无法读取")
+            logger.error("❌【欧易持仓缺失修复区】 数据库连接信息不完整，无法读取")
             return False
 
         try:
@@ -331,23 +331,23 @@ class OkxMissingRepair:
             result = self._query_database(sql)
 
             if not result:
-                logger.warning("⚠️ 数据库查询失败或无数据")
+                logger.warning("⚠️【欧易持仓缺失修复区】 数据库查询失败或无数据")
                 return False
 
             rows = result.get('rows', [])
             if not rows:
-                logger.warning("⚠️ 数据库中没有欧意持仓数据")
+                logger.warning("⚠️【欧易持仓缺失修复区】 数据库中没有欧意持仓数据")
                 return False
 
             cols = result.get('cols', [])
             row = rows[0]
             self.cache = self._row_to_dict(row, cols)
 
-            logger.info(f"✅ 第1步：从数据库读取到欧意数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.debug(f"✅【欧易持仓缺失修复区】 第1步：从数据库读取到欧意数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
             return True
 
         except Exception as e:
-            logger.error(f"❌ 第1步：读取数据库失败: {e}")
+            logger.error(f"❌【欧易持仓缺失修复区】 第1步：读取数据库失败: {e}")
             return False
 
     async def _step2_check_funding(self) -> Optional[str]:
@@ -365,12 +365,12 @@ class OkxMissingRepair:
             D. 有历史 + 有新结算 → 返回 'do_fusion'
         ==================================================
         """
-        logger.info("第2步：检测资金费状态")
+        logger.debug("【欧易持仓缺失修复区】第2步：检测资金费状态")
 
         # 从门外存储区快照获取最新的欧意数据
         snapshot_data = self._get_okx_from_snapshot()
         if not snapshot_data:
-            logger.error("❌ 门外存储区中没有欧意数据")
+            logger.error("❌【欧易持仓缺失修复区】 门外存储区中没有欧意数据")
             return None
 
         cache_total = self.cache.get(FIELD_FUNDING_TOTAL, 0)
@@ -383,24 +383,24 @@ class OkxMissingRepair:
             snapshot_total = 0
         has_new = (snapshot_total != cache_total)
 
-        logger.info(f"   缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
-        logger.info(f"   有无历史: {has_history}, 有无新结算: {has_new}")
+        logger.debug(f" 【欧易持仓缺失修复区】  缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
+        logger.debug(f" 【欧易持仓缺失修复区】  有无历史: {has_history}, 有无新结算: {has_new}")
 
         # 保存门外数据供后续步骤使用
         self._snapshot_data = snapshot_data
 
         if not has_history and not has_new:
-            logger.info("   情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         elif not has_history and has_new:
-            logger.info("   情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
         elif has_history and not has_new:
-            logger.info("   情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         else:
-            logger.info("   情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.debug(" 【欧易持仓缺失修复区】  情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -415,7 +415,7 @@ class OkxMissingRepair:
             3. 资金费结算次数 = 门外存储区次数 + 缓存次数
         ==================================================
         """
-        logger.info("第3步：执行资金费融合")
+        logger.debug("【欧易持仓缺失修复区】第3步：执行资金费融合")
 
         snapshot = self._snapshot_data
         cache = self.cache
@@ -439,7 +439,7 @@ class OkxMissingRepair:
         # 4. 资金费结算次数相加
         cache[FIELD_FUNDING_COUNT] = snapshot_count + cache_count
 
-        logger.info(f"   融合后 - 累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
+        logger.debug(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
                    f"本次资金费: {cache[FIELD_FUNDING_THIS]}, "
                    f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
 
@@ -453,11 +453,11 @@ class OkxMissingRepair:
             3. 保护4个资金费字段不被覆盖
         ==================================================
         """
-        logger.info("第4步：从门外存储区覆盖更新缓存")
+        logger.debug("【欧易持仓缺失修复区】第4步：从门外存储区覆盖更新缓存")
 
         snapshot_data = self._get_okx_from_snapshot()
         if not snapshot_data:
-            logger.warning("⚠️ 门外存储区中没有欧意数据，跳过第4步")
+            logger.warning("⚠️【欧易持仓缺失修复区】 门外存储区中没有欧意数据，跳过第4步")
             return
 
         protected_fields = [
@@ -479,7 +479,7 @@ class OkxMissingRepair:
                 self.cache[key] = value
                 update_count += 1
 
-        logger.info(f"   已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
+        logger.debug(f" 【欧易持仓缺失修复区】  已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
 
     async def _step5_calc_fixed_fields(self):
         """
@@ -518,7 +518,7 @@ class OkxMissingRepair:
             - 不需要从行情数据中获取
         ==================================================
         """
-        logger.info("第5步：计算6个固定字段（严格按照原始方案，独立计算）")
+        logger.debug("【欧易持仓缺失修复区】第5步：计算6个固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -584,7 +584,7 @@ class OkxMissingRepair:
         cache[FIELD_LATEST_MARGIN] = latest_margin                     # 5. 最新价保证金
         cache[FIELD_AVG_FUNDING_RATE] = avg_funding_rate               # 6. 平均资金费率
 
-        logger.info(f"   计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
+        logger.debug(f"  【欧易持仓缺失修复区】 计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
                    f"标记价仓位价值: {mark_position_value:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
                    f"最新价保证金: {latest_margin:.2f}, "
@@ -602,7 +602,7 @@ class OkxMissingRepair:
             3. 推送给调度器
         ==================================================
         """
-        logger.info("第6步：打标签推送")
+        logger.debug("【欧易持仓缺失修复区】第6步：打标签推送")
 
         data_copy = self.cache.copy()
 
@@ -633,7 +633,7 @@ class OkxMissingRepair:
         ==================================================
         """
         if not self.latest_snapshot:
-            logger.debug("门外还没有存储区数据")
+            logger.debug("【欧易持仓缺失修复区】门外还没有存储区数据")
             return None
 
         user_data = self.latest_snapshot.get('user_data', {})
@@ -694,13 +694,13 @@ class OkxMissingRepair:
             return None
 
         except requests.exceptions.Timeout:
-            logger.error(f"❌ 数据库查询超时: {sql[:50]}...")
+            logger.error(f"❌ 【欧易持仓缺失修复区】数据库查询超时: {sql[:50]}...")
             return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌ 数据库请求失败: {e}")
+            logger.error(f"❌ 【欧易持仓缺失修复区】数据库请求失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"❌ 数据库查询未知错误: {e}")
+            logger.error(f"❌【欧易持仓缺失修复区】 数据库查询未知错误: {e}")
             return None
 
     def _row_to_dict(self, row: List, cols: List) -> Dict:
@@ -742,15 +742,15 @@ class OkxMissingRepair:
                 self.cache[field] = snapshot_data[field]
                 update_count += 1
 
-        logger.debug(f"   已更新 {update_count} 个资金费字段")
+        logger.debug(f" 【欧易持仓缺失修复区】  已更新 {update_count} 个资金费字段")
 
     def _test_database_connection(self):
         """测试数据库连接是否正常"""
         try:
             result = self._query_database("SELECT 1")
             if result:
-                logger.info("✅ 数据库连接测试成功")
+                logger.info("✅【欧易持仓缺失修复区】 数据库连接测试成功")
             else:
-                logger.warning("⚠️ 数据库连接测试返回空结果")
+                logger.warning("⚠️【欧易持仓缺失修复区】 数据库连接测试返回空结果")
         except Exception as e:
             logger.error(f"❌ 数据库连接测试失败: {e}")
