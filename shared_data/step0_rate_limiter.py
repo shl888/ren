@@ -79,12 +79,12 @@ class Step0RateLimiter:
             time_since_last = current_time - self.last_process_time if self.last_process_time > 0 else 0
             self.last_process_time = current_time
             
-            logger.debug(f"🔍【Step0调试】收到 {len(raw_items)} 条数据，距离上次: {time_since_last:.3f}秒")
+            logger.debug(f"🔍【 流水线步骤0】收到 {len(raw_items)} 条数据，距离上次: {time_since_last:.3f}秒")
         
         # 如果收到空数据，直接返回
         if not raw_items:
             if self.debug_mode:
-                logger.debug("🔍【Step0调试】收到空数据，直接返回")
+                logger.debug("🔍【 流水线步骤0】收到空数据，直接返回")
             return []
         
         # ✅ 步骤1：检查本次是否有币安历史费率数据
@@ -110,8 +110,8 @@ class Step0RateLimiter:
         
         # 调试信息：显示检查结果
         if self.debug_mode and has_binance_funding:
-            logger.debug(f"🔍【Step0调试】发现币安历史费率数据: {len(binance_funding_items)}条")
-            logger.debug(f"🔍【Step0调试】涉及合约: {list(binance_funding_symbols)[:5]}{'...' if len(binance_funding_symbols) > 5 else ''}")
+            logger.debug(f"🔍【 流水线步骤0】发现币安历史费率数据: {len(binance_funding_items)}条")
+            logger.debug(f"🔍【 流水线步骤0】涉及合约: {list(binance_funding_symbols)[:5]}{'...' if len(binance_funding_symbols) > 5 else ''}")
         
         # ✅ 步骤2：如果没有币安历史费率数据，直接放行（不计数！）
         if not has_binance_funding:
@@ -125,7 +125,7 @@ class Step0RateLimiter:
                     type_counter[key] += 1
                 
                 type_info = ', '.join([f"{k}:{v}" for k, v in type_counter.items()])
-                logger.debug(f"🔍【Step0调试】无币安历史费率，直接放行。数据类型: {type_info}")
+                logger.debug(f"🔍【 流水线步骤0】无币安历史费率，直接放行。数据类型: {type_info}")
             
             return raw_items
         
@@ -148,8 +148,8 @@ class Step0RateLimiter:
             self.stats['binance_funding_blocked'] += blocked_count
             
             if self.debug_mode:
-                logger.debug(f"🔍【Step0调试】已拦截，过滤掉 {blocked_count} 条币安历史费率数据")
-                logger.debug(f"🔍【Step0调试】放行 {len(filtered_items)} 条其他数据")
+                logger.debug(f"🔍【 流水线步骤0】已拦截，过滤掉 {blocked_count} 条币安历史费率数据")
+                logger.debug(f"🔍【 流水线步骤0】放行 {len(filtered_items)} 条其他数据")
             
             return filtered_items
         
@@ -174,8 +174,8 @@ class Step0RateLimiter:
             logger.warning(f"🛑【流水线步骤0】币安历史费率数据已达到{self.limit_times}次限制，开始拦截")
             
             if self.debug_mode:
-                logger.debug(f"🔍【Step0调试】达到限制，拦截 {blocked_count} 条币安历史费率数据")
-                logger.debug(f"🔍【Step0调试】累计放行: {self.binance_funding_passed} 次")
+                logger.debug(f"🔍【 流水线步骤0】达到限制，拦截 {blocked_count} 条币安历史费率数据")
+                logger.debug(f"🔍【 流水线步骤0】累计放行: {self.binance_funding_passed} 次")
             
             return filtered_items
         
@@ -186,8 +186,8 @@ class Step0RateLimiter:
         
         # 输出本次放行信息
         if self.debug_mode:
-            logger.debug(f"✅【Step0调试】放行币安历史费率数据，累计 {self.binance_funding_passed}/{self.limit_times} 次")
-            logger.debug(f"🔍【Step0调试】本次数据量: {len(binance_funding_items)} 条，涉及 {len(binance_funding_symbols)} 个合约")
+            logger.debug(f"✅【 流水线步骤0】放行币安历史费率数据，累计 {self.binance_funding_passed}/{self.limit_times} 次")
+            logger.debug(f"🔍【 流水线步骤0】本次数据量: {len(binance_funding_items)} 条，涉及 {len(binance_funding_symbols)} 个合约")
         
         # 定期输出统计信息
         self._log_processing_stats(len(binance_funding_items), len(raw_items))
@@ -242,9 +242,9 @@ class Step0RateLimiter:
         # 如果新限制比已通过的次数大，解除拦截状态
         if new_limit > self.binance_funding_passed and self.binance_funding_blocked:
             self.binance_funding_blocked = False
-            logger.info(f"🔄【流水线步骤0】限制从{old_limit}次调整为{new_limit}次，解除拦截状态")
+            logger.debug(f"🔄【流水线步骤0】限制从{old_limit}次调整为{new_limit}次，解除拦截状态")
         else:
-            logger.info(f"📝【流水线步骤0】限制从{old_limit}次调整为{new_limit}次")
+            logger.debug(f"📝【流水线步骤0】限制从{old_limit}次调整为{new_limit}次")
         
         # 如果新限制小于已通过次数，立即拦截
         if new_limit <= self.binance_funding_passed and not self.binance_funding_blocked:
@@ -255,4 +255,4 @@ class Step0RateLimiter:
         """启用或禁用调试模式"""
         self.debug_mode = enabled
         status = "启用" if enabled else "禁用"
-        logger.info(f"🔧【流水线步骤0】调试模式{status}")
+        logger.debug(f"🔧【流水线步骤0】调试模式{status}")
