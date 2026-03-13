@@ -1,5 +1,5 @@
 """
-调度器 - 私人数据处理模块的核心调度中心
+私人调度器 - 私人数据处理模块的核心调度中心
 ==================================================
 【文件职责】
 1. 启动和管理步骤1-2-3-4的流水线
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class PrivateDataScheduler:
     """
-    私人数据调度器 - 真正的调度中心
+    私人数据私人调度器 - 真正的调度中心
     ==================================================
     负责：
         1. 创建并管理Step1-4的实例
@@ -39,14 +39,14 @@ class PrivateDataScheduler:
     """
 
     def __init__(self):
-        """初始化调度器（不启动流水线）"""
+        """初始化私人调度器（不启动流水线）"""
         self.step1 = None
         self.step2 = None
         self.step3 = None
         self.step4 = None
         self.running = False
         
-        # 添加就绪事件，用于等待调度器完全启动
+        # 添加就绪事件，用于等待私人调度器完全启动
         self._ready = asyncio.Event()
         
         # 统计信息（用于监控）
@@ -56,11 +56,11 @@ class PrivateDataScheduler:
             "last_process_time": None
         }
         
-        logger.info("✅【调度器】实例已创建")
+        logger.info("✅【私人调度器】实例已创建")
 
     async def start(self):
         """
-        启动调度器 - 启动所有步骤和工作流
+        启动私人调度器 - 启动所有步骤和工作流
         ==================================================
         做了三件事：
             1. 导入所有Step模块
@@ -69,7 +69,7 @@ class PrivateDataScheduler:
         ==================================================
         """
         if self.running:
-            logger.warning("⚠️【调度器】已经启动，跳过")
+            logger.warning("⚠️【私人调度器】已经启动，跳过")
             self._ready.set()
             return
             
@@ -86,21 +86,21 @@ class PrivateDataScheduler:
         self.step4 = Step4Funding()
         
         self.running = True
-        logger.info("🚀【调度器】已启动 - step1, step2, step3, step4 已就绪")
+        logger.info("🚀【私人调度器】已启动 - step1, step2, step3, step4 已就绪")
         
         # 标记就绪
         self._ready.set()
 
     async def stop(self):
-        """停止调度器"""
+        """停止私人调度器"""
         self.running = False
-        logger.info("🛑【调度器】已停止")
+        logger.error("🛑【私人调度器】已停止")
 
     async def feed_step1(self, stored_item: Dict[str, Any]):
         """
         Manager直接调用这个，把完整存储区塞给Step1
         ==================================================
-        这是调度器的输入入口，Manager收到数据后调用此方法。
+        这是私人调度器的输入入口，Manager收到数据后调用此方法。
         
         重要变更：不再使用队列，直接 await Step1 处理完成，
         然后对每个结果直接调用后续步骤。
@@ -115,14 +115,14 @@ class PrivateDataScheduler:
             }
         ==================================================
         """
-        logger.info(f"🎯【调度器】feed_step1被调用！存储区包含数据项: {len(stored_item.get('full_storage', {}))}")
+        logger.info(f"🎯【私人调度器】feed_step1被调用！存储区包含数据项: {len(stored_item.get('full_storage', {}))}")
         
         if not self.running:
-            logger.error("❌【调度器】未启动，无法处理数据")
+            logger.error("❌【私人调度器】未启动，无法处理数据")
             return
             
         if not self.step1:
-            logger.error("❌【调度器】Step1未初始化")
+            logger.error("❌【私人调度器】Step1未初始化")
             return
             
         try:
@@ -131,10 +131,10 @@ class PrivateDataScheduler:
             results = await self.step1.receive(stored_item)
             
             if not results:
-                logger.debug("⏭️【调度器】step1没有返回任何结果")
+                logger.debug("⏭️【私人调度器】step1没有返回任何结果")
                 return
                 
-            logger.info(f"📊【调度器】step1返回 {len(results)} 条提取结果")
+            logger.debug(f"📊【私人调度器】step1返回 {len(results)} 条提取结果")
             
             # ===== 对每条提取结果，独立执行后续步骤 =====
             # 为每条结果创建独立任务，实现并行处理
@@ -146,7 +146,7 @@ class PrivateDataScheduler:
             # 等待所有处理任务完成（可选，如果不关心结果可以不等待）
             if process_tasks:
                 await asyncio.gather(*process_tasks, return_exceptions=True)
-                logger.debug(f"✅【调度器】所有 {len(process_tasks)} 条结果处理完成")
+                logger.debug(f"✅【私人调度器】所有 {len(process_tasks)} 条结果处理完成")
             
             # 更新统计
             self.stats["total_processed"] += 1
@@ -154,7 +154,7 @@ class PrivateDataScheduler:
             self.stats["last_process_time"] = datetime.now().isoformat()
             
         except Exception as e:
-            logger.error(f"❌【调度器】处理失败: {e}")
+            logger.error(f"❌【私人调度器】处理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
@@ -172,7 +172,7 @@ class PrivateDataScheduler:
             exchange = extracted.get('交易所', 'unknown')
             event_type = extracted.get('event_type', extracted.get('data_type', 'unknown'))
             
-            logger.info(f"🔨【调度器】开始处理单条结果: {exchange} {event_type}")
+            logger.debug(f"🔨【私人调度器】开始处理单条结果: {exchange} {event_type}")
             
             # 获取事件循环
             loop = asyncio.get_event_loop()
@@ -183,30 +183,30 @@ class PrivateDataScheduler:
             )
             
             if not container:
-                logger.warning(f"⚠️【调度器】Step2返回空，跳过本条结果")
+                logger.warning(f"⚠️【私人调度器】Step2返回空，跳过本条结果")
                 return
                 
-            logger.debug(f"✅【调度器】Step2完成: {exchange}")
+            logger.info(f"✅【私人调度器】Step2完成: {exchange}")
             
             # ===== 步骤3：计算衍生字段 =====
             await loop.run_in_executor(
                 None, self.step3.process, container
             )
-            logger.debug(f"✅【调度器】Step3完成: {exchange}")
+            logger.debug(f"✅【私人调度器】Step3完成: {exchange}")
             
             # ===== 步骤4：资金费处理 =====
             final_container = await loop.run_in_executor(
                 None, self.step4.process, container
             )
-            logger.debug(f"✅【调度器】Step4完成: {exchange}")
+            logger.info(f"✅【私人调度器】Step4完成: {exchange}")
             
             # ===== 推送数据到完成部门 =====
             await self._push_to_data_completion(final_container, event_type)
             
-            logger.info(f"✅【调度器】单条结果处理完成: {exchange} {event_type}")
+            logger.debug(f"✅【私人调度器】单条结果处理完成: {exchange} {event_type}")
             
         except Exception as e:
-            logger.error(f"❌【调度器】处理单条结果失败: {e}")
+            logger.error(f"❌【私人调度器】处理单条结果失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
@@ -251,10 +251,10 @@ class PrivateDataScheduler:
             from data_completion_department import receive_private_data
             await receive_private_data(completion_data)
             
-            logger.info(f"✅【调度器】已推送 {exchange} 数据到数据完成部门")
+            logger.info(f"✅【私人调度器】已推送 {exchange} 数据到数据完成部门")
             
         except Exception as e:
-            logger.error(f"❌【调度器】推送数据到数据完成部门失败: {e}")
+            logger.error(f"❌【私人调度器】推送数据到数据完成部门失败: {e}")
 
     def _convert_numeric_fields(self, data: dict) -> dict:
         """
@@ -341,7 +341,7 @@ class PrivateDataScheduler:
             if value is None:
                 # None 保持 None
                 none_count += 1
-                logger.debug(f"字段 [{key}]: None (保持null)")
+                logger.debug(f"【私人调度器】字段 [{key}]: None (保持null)")
                 
             elif key in numeric_fields:
                 # 数字字段：必须转成 int/float（不带双引号）
@@ -351,45 +351,45 @@ class PrivateDataScheduler:
                         cleaned = value.strip().replace(',', '')
                         if '.' in cleaned:
                             converted[key] = float(cleaned)
-                            logger.debug(f"字段 [{key}]: '{value}' → {converted[key]} (float)")
+                            logger.debug(f"【私人调度器】字段 [{key}]: '{value}' → {converted[key]} (float)")
                         else:
                             # 先尝试转int，失败则转float
                             try:
                                 converted[key] = int(cleaned)
-                                logger.debug(f"字段 [{key}]: '{value}' → {converted[key]} (int)")
+                                logger.debug(f"【私人调度器】字段 [{key}]: '{value}' → {converted[key]} (int)")
                             except ValueError:
                                 converted[key] = float(cleaned)
-                                logger.debug(f"字段 [{key}]: '{value}' → {converted[key]} (float)")
+                                logger.debug(f"【私人调度器】字段 [{key}]: '{value}' → {converted[key]} (float)")
                         convert_count += 1
                     elif isinstance(value, (int, float)):
                         # 已经是数字，保持原样
-                        logger.debug(f"字段 [{key}]: {value} (已是{type(value).__name__})")
+                        logger.debug(f"【私人调度器】字段 [{key}]: {value} (已是{type(value).__name__})")
                         convert_count += 1
                     else:
                         # 意外类型，尝试转数字
                         converted[key] = float(value)
-                        logger.warning(f"字段 [{key}]: 意外类型 {type(value).__name__}，强制转float")
+                        logger.warning(f"【私人调度器】字段 [{key}]: 意外类型 {type(value).__name__}，强制转float")
                         convert_count += 1
                 except (ValueError, TypeError) as e:
-                    logger.error(f"字段 [{key}] 转换失败: {value}, 错误: {e}")
+                    logger.error(f"【私人调度器】字段 [{key}] 转换失败: {value}, 错误: {e}")
                     # 转换失败就保持原样，但记录错误
             else:
                 # 文本字段：保持原样（字符串、时间等）
-                logger.debug(f"字段 [{key}]: {value} ({type(value).__name__}) - 文本字段保持原样")
+                logger.debug(f"【私人调度器】字段 [{key}]: {value} ({type(value).__name__}) - 文本字段保持原样")
         
         # 记录转换统计
-        logger.info(f"📊 数字字段转换统计: {convert_count}个字段转成数字, {none_count}个null")
+        logger.debug(f"📊 【私人调度器】数字字段转换统计: {convert_count}个字段转成数字, {none_count}个null")
         
         # 记录关键字段示例
         sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', '开仓时间']
         for field in sample_fields:
             if field in converted:
-                logger.debug(f"  📌 {field}: {converted[field]} ({type(converted[field]).__name__})")
+                logger.debug(f" 【私人调度器】 📌 {field}: {converted[field]} ({type(converted[field]).__name__})")
         
         return converted
 
     async def wait_until_ready(self):
-        """等待调度器完全就绪"""
+        """等待私人调度器完全就绪"""
         await self._ready.wait()
     
     def get_stats(self) -> Dict:
@@ -403,15 +403,15 @@ _scheduler_instance: Optional[PrivateDataScheduler] = None
 
 def get_scheduler() -> PrivateDataScheduler:
     """
-    获取调度器单例
+    获取私人调度器单例
     ==================================================
-    确保整个模块只使用一个调度器实例。
-    其他组件通过此函数获取调度器，而不是直接创建。
+    确保整个模块只使用一个私人调度器实例。
+    其他组件通过此函数获取私人调度器，而不是直接创建。
     ==================================================
     """
     global _scheduler_instance
     if _scheduler_instance is None:
         _scheduler_instance = PrivateDataScheduler()
-        logger.info("🔥【调度器】单例已创建")
+        logger.info("🔥【私人调度器】单例已创建")
     
     return _scheduler_instance
