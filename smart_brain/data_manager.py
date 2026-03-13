@@ -46,7 +46,7 @@ class DataManager:
             exchange = private_data.get('exchange', 'unknown')
             data_type = private_data.get('data_type', 'unknown')
             
-            logger.info(f"📨 【接收】DataManager收到{exchange}.{data_type}数据")
+            logger.info(f"📨【智能大脑】 【接收】DataManager收到{exchange}.{data_type}数据")
             
             now = datetime.now()
             
@@ -63,7 +63,7 @@ class DataManager:
                     'source': 'reference_task'
                 }
                 self.last_reference_time = now
-                logger.info(f"✅ 【保存】参考数据 {exchange}.{data_type} 已保存")
+                logger.info(f"✅【智能大脑】 【保存】参考数据 {exchange}.{data_type} 已保存")
                 
             elif data_type == 'user_summary':
                 # 🎯 用户数据：账户、持仓、订单等
@@ -77,7 +77,7 @@ class DataManager:
                     'source': 'private_processor'
                 }
                 self.last_account_time = now
-                logger.info(f"✅ 【保存】用户数据 {exchange} 已保存")
+                logger.info(f"✅【智能大脑】 【保存】用户数据 {exchange} 已保存")
                 
             elif data_type == 'listen_key':
                 # 🎯 单独处理listenKey，存到 exchange_tokens
@@ -90,13 +90,13 @@ class DataManager:
                         'exchange': exchange,
                         'data_type': 'listen_key'
                     }
-                    logger.info(f"✅ 【保存】{exchange} listenKey已保存: {listen_key[:5]}...")
+                    logger.info(f"✅【智能大脑】 【保存】{exchange} listenKey已保存: {listen_key[:5]}...")
                     
                     # 通知连接池
                     if hasattr(self.brain, 'private_pool') and self.brain.private_pool:
                         asyncio.create_task(self._notify_listen_key_updated(exchange, listen_key))
                 else:
-                    logger.warning(f"⚠️ 收到空的listenKey: {exchange}")
+                    logger.warning(f"⚠️【智能大脑】 收到空的listenKey: {exchange}")
                 
             else:
                 # 🎯 未知类型，暂时存到user_data（带warning）
@@ -250,7 +250,7 @@ class DataManager:
                 'source': metadata.get('source', 'step5_cross_calc')
             }
         except Exception as e:
-            logger.error(f"❌ 创建简化市场数据失败: {e}")
+            logger.error(f"❌【智能大脑】 创建简化市场数据失败: {e}")
             return {
                 'symbol': raw_data.get('symbol', 'unknown'),
                 'trade_price_diff': None,
@@ -332,7 +332,7 @@ class DataManager:
                 "note": f"共{len(sources)}个数据来源，点击endpoint查看详情"
             }
         except Exception as e:
-            logger.error(f"❌ 获取数据大纲失败: {e}")
+            logger.error(f"❌ 【智能大脑】获取数据大纲失败: {e}")
             return {"timestamp": datetime.now().isoformat(), "error": str(e), "sources": []}
     
     async def get_public_market_data(self):
@@ -346,7 +346,7 @@ class DataManager:
                 "data": self.memory_store['market_data']
             }
         except Exception as e:
-            logger.error(f"❌ 获取公开市场数据失败: {e}")
+            logger.error(f"❌【智能大脑】 获取公开市场数据失败: {e}")
             return {"error": str(e)}
     
     async def get_private_user_data(self):
@@ -367,7 +367,7 @@ class DataManager:
                 "data": user_data
             }
         except Exception as e:
-            logger.error(f"❌ 获取私人用户数据失败: {e}")
+            logger.error(f"❌【智能大脑】 获取私人用户数据失败: {e}")
             return {"error": str(e)}
     
     async def get_okx_contracts_data(self):
@@ -388,7 +388,7 @@ class DataManager:
                 "data": contract_data.get('contracts', []) if contract_data else []
             }
         except Exception as e:
-            logger.error(f"❌ 获取OKX合约面值数据失败: {e}")
+            logger.error(f"❌【智能大脑】 获取OKX合约面值数据失败: {e}")
             return {"error": str(e)}
     
     async def get_api_credentials_status(self):
@@ -527,10 +527,10 @@ class DataManager:
         """供连接池只读查询当前令牌"""
         token_info = self.memory_store['exchange_tokens'].get(exchange)
         if token_info:
-            logger.debug(f"📤 【读取】{exchange} listenKey被读取")
+            logger.debug(f"📤【智能大脑】 【读取】{exchange} listenKey被读取")
             return token_info.get('key')
         else:
-            logger.warning(f"⚠️ 【读取】{exchange} listenKey不存在")
+            logger.warning(f"⚠️【智能大脑】 【读取】{exchange} listenKey不存在")
             return None
     
     async def get_api_credentials(self, exchange: str):
