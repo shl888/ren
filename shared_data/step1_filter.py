@@ -137,9 +137,9 @@ class Step1Filter:
             
             # 统计每种数据类型的提取数量（当前小时的统计）
             if self.stats:
-                logger.info("📊【流水线步骤1】提取数据统计（当前小时）:")
+                logger.debug("📊【流水线步骤1】提取数据统计（当前小时）:")
                 for data_type, count in sorted(self.stats.items()):
-                    logger.info(f"  • {data_type}: {count} 条")
+                    logger.debug(f"  • {data_type}: {count} 条")
             
             self.last_log_time = current_time
             self.process_count = 0
@@ -230,17 +230,17 @@ class Step1Filter:
     
     def _reset_hourly_stats(self):
         """每小时重置统计计数"""
-        logger.info("🕐【流水线步骤1】每小时统计重置开始")
+        logger.debug("🕐【流水线步骤1】每小时统计重置开始")
         
         # 记录重置前的统计快照（可选，仅日志）
         if self.stats:
             total_before = sum(self.stats.values())
-            logger.info(f"📊【流水线步骤1】重置前统计: 总共提取 {total_before} 条数据")
+            logger.debug(f"📊【流水线步骤1】重置前统计: 总共提取 {total_before} 条数据")
         
         # 重置统计计数
         self.stats.clear()
         
-        logger.info("✅【流水线步骤1】每小时统计重置完成")
+        logger.debug("✅【流水线步骤1】每小时统计重置完成")
     
     def get_status(self) -> Dict[str, Any]:
         """获取步骤状态（包含每小时重置检查）"""
