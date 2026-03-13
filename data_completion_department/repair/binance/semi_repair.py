@@ -122,7 +122,7 @@ class BinanceSemiRepair:
         # 只存1条数据，覆盖更新
         self.cache = None              # 类型: Dict or None
 
-        logger.info("✅ 币安半成品修复区初始化完成")
+        logger.info("✅【币安修复区】【半成品修复】 初始化完成")
 
     # ==================== 对外入口 ====================
 
@@ -153,11 +153,11 @@ class BinanceSemiRepair:
         :param snapshot: 完整的存储区快照
         """
         if not snapshot:
-            logger.warning("⚠️ 收到空快照")
+            logger.warning("⚠️ 【币安修复区】【半成品修复】收到空快照")
             return
 
         self.latest_snapshot = snapshot
-        logger.debug(f"📦 币安半成品修复收到存储区快照，时间戳: {snapshot.get('timestamp')}")
+        logger.debug(f"📦【币安修复区】【半成品修复】 收到存储区快照，时间戳: {snapshot.get('timestamp')}")
 
     async def handle_info(self, info: str):
         """
@@ -175,32 +175,32 @@ class BinanceSemiRepair:
         :param info: 信息标签
         """
         if not info:
-            logger.warning("⚠️ 收到空标签")
+            logger.warning("⚠️【币安修复区】【半成品修复】 收到空标签")
             return
 
         old_info = self.current_info
         self.current_info = info
 
-        logger.info(f"📨 币安半成品修复门外标签更新: {old_info} → {info}")
+        logger.info(f"📨【币安修复区】【半成品修复】 门外标签更新: {old_info} → {info}")
 
         if info == INFO_BINANCE_SEMI:
             await self._start_repair()
         elif info == INFO_BINANCE_CLOSED:
             await self._stop_repair()
         else:
-            logger.warning(f"⚠️ 币安半成品修复收到未知标签: {info}")
+            logger.warning(f"⚠️ 【币安修复区】【半成品修复】收到未知标签: {info}")
 
     # ==================== 修复循环控制 ====================
 
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.debug("修复流程已在运行中")
+            logger.debug("【币安修复区】【半成品修复】修复流程已在运行中")
             return
 
         self.is_running = True
         self.repair_task = asyncio.create_task(self._repair_loop())
-        logger.info("🚀 币安半成品修复流程已启动（循环运行）")
+        logger.info("🚀【币安修复区】【半成品修复】 修复流程已启动（循环运行）")
 
     async def _stop_repair(self):
         """停止修复流程"""
@@ -215,7 +215,7 @@ class BinanceSemiRepair:
             except asyncio.CancelledError:
                 pass
             self.repair_task = None
-        logger.info("🛑 币安半成品修复流程已停止")
+        logger.info("🛑 【币安修复区】【半成品修复】修复流程已停止")
 
     async def _repair_loop(self):
         """
@@ -230,12 +230,12 @@ class BinanceSemiRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄 币安半成品修复循环开始")
+        logger.info("🔄【币安修复区】【半成品修复】 修复循环开始")
 
         while self.is_running:
             try:
                 if self.current_info != INFO_BINANCE_SEMI:
-                    logger.info("门外标签已不是币安半成品，停止修复循环")
+                    logger.info("【币安修复区】【半成品修复】门外标签已不是币安半成品，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -243,13 +243,13 @@ class BinanceSemiRepair:
                 await asyncio.sleep(1)
 
             except asyncio.CancelledError:
-                logger.info("修复循环被取消")
+                logger.info("【币安修复区】【半成品修复】修复循环被取消")
                 break
             except Exception as e:
-                logger.error(f"❌ 修复循环出错: {e}", exc_info=True)
+                logger.error(f"❌ 【币安修复区】【半成品修复】修复循环出错: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
-        logger.info("🔄 币安半成品修复循环结束")
+        logger.info("🔄【币安修复区】【半成品修复】 修复循环结束")
 
     async def _repair_once(self):
         """
@@ -262,25 +262,25 @@ class BinanceSemiRepair:
             第4步：融合修复并推送
         ==================================================
         """
-        logger.debug("执行一次币安半成品修复")
+        logger.debug("【币安修复区】【半成品修复】执行一次修复")
 
         # 检查门外是否有存储区数据
         if not self.latest_snapshot:
-            logger.warning("⚠️ 门外还没有存储区数据，等待下次循环")
+            logger.warning("⚠️【币安修复区】【半成品修复】 门外还没有存储区数据，等待下次循环")
             return
 
         if not await self._step1_get_cache():
-            logger.error("❌ 第1步失败：无法获取缓存数据，本次修复终止")
+            logger.error("❌【币安修复区】【半成品修复】 第1步失败：无法获取缓存数据，本次修复终止")
             return
 
         if not await self._step2_get_prices():
-            logger.error("❌ 第2步失败：无法获取行情数据，本次修复终止")
+            logger.error("❌【币安修复区】【半成品修复】 第2步失败：无法获取行情数据，本次修复终止")
             return
 
         await self._step3_calc_fields()
         await self._step4_merge_and_push()
 
-        logger.debug("一次币安半成品修复执行完成")
+        logger.debug("✅【币安修复区】【半成品修复】一次修复执行完成")
 
     # ==================== 4步修复流程 ====================
 
@@ -300,20 +300,20 @@ class BinanceSemiRepair:
         ==================================================
         """
         if self.cache is not None:
-            logger.debug("✅ 第1步：使用现有缓存")
+            logger.debug("✅【币安修复区】【半成品修复】 第1步：使用现有缓存")
             return True
 
-        logger.info("第1步：缓存为空，从门外存储区读取币安数据")
+        logger.debug("【币安修复区】【半成品修复】第1步：缓存为空，从门外存储区读取币安数据")
 
         # 从门外存储区获取币安数据
         binance_data = self._get_binance_from_snapshot()
         if not binance_data:
-            logger.warning("⚠️ 门外存储区中没有币安数据")
+            logger.warning("⚠️【币安修复区】【半成品修复】 门外存储区中没有币安数据")
             return False
 
         # 保存到缓存
         self.cache = binance_data.copy()
-        logger.info(f"✅ 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+        logger.debug(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
         return True
 
     async def _step2_get_prices(self) -> bool:
@@ -327,17 +327,17 @@ class BinanceSemiRepair:
         把这两个值覆盖到缓存中
         ==================================================
         """
-        logger.info("第2步：从行情数据提取最新价和标记价")
+        logger.debug("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
 
         contract = self.cache.get(FIELD_OPEN_CONTRACT)
         if not contract:
-            logger.error("❌ 缓存中没有开仓合约名")
+            logger.error("❌【币安修复区】【半成品修复】 缓存中没有开仓合约名")
             return False
 
         # 从门外存储区获取行情数据
         market_data = self._get_market_data_from_snapshot(contract)
         if not market_data:
-            logger.error(f"❌ 无法获取合约 {contract} 的行情数据")
+            logger.error(f"❌ 【币安修复区】【半成品修复】无法获取合约 {contract} 的行情数据")
             return False
 
         # 提取币安的行情字段
@@ -345,7 +345,7 @@ class BinanceSemiRepair:
         mark_price = market_data.get('binance_mark_price')
 
         if latest_price is None or mark_price is None:
-            logger.error(f"❌ 行情数据中缺少必要字段: latest_price={latest_price}, mark_price={mark_price}")
+            logger.error(f"❌【币安修复区】【半成品修复】 行情数据中缺少必要字段: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
         # 转换为float（如果是字符串）
@@ -353,14 +353,14 @@ class BinanceSemiRepair:
             latest_price = float(latest_price)
             mark_price = float(mark_price)
         except (TypeError, ValueError):
-            logger.error(f"❌ 行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
+            logger.error(f"❌ 【币安修复区】【半成品修复】行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
         # 覆盖到缓存
         self.cache[FIELD_LATEST_PRICE] = latest_price
         self.cache[FIELD_MARK_PRICE] = mark_price
 
-        logger.info(f"✅ 第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
+        logger.debug(f"✅ 【币安修复区】【半成品修复】第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
         return True
 
     async def _step3_calc_fields(self):
@@ -396,7 +396,7 @@ class BinanceSemiRepair:
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
         ==================================================
         """
-        logger.info("第3步：计算6个字段（严格按照原始方案，独立计算）")
+        logger.debug("【币安修复区】【半成品修复】第3步：计算6个字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -461,7 +461,7 @@ class BinanceSemiRepair:
         cache[FIELD_LATEST_PNL] = latest_pnl
         cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
 
-        logger.info(f"   计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
+        logger.debug(f" 【币安修复区】【半成品修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
                    f"最新价涨跌盈亏幅: {latest_pnl_percent:.2f}%, "
                    f"最新价保证金: {latest_margin:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
@@ -489,12 +489,12 @@ class BinanceSemiRepair:
             - 最新价浮盈百分比 (计算得到)
         ==================================================
         """
-        logger.info("第4步：融合修复并推送")
+        logger.debug("【币安修复区】【半成品修复】第4步：融合修复并推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
         if not latest_binance:
-            logger.error("❌ 无法获取最新的币安数据，融合失败")
+            logger.error("❌【币安修复区】【半成品修复】 无法获取最新的币安数据，融合失败")
             return
 
         # 创建副本（要推送的数据）
@@ -519,7 +519,7 @@ class BinanceSemiRepair:
                 merged_data[field] = self.cache[field]
                 fill_count += 1
 
-        logger.debug(f"   已填充 {fill_count} 个字段")
+        logger.debug(f" 【币安修复区】【半成品修复】  已填充 {fill_count} 个字段")
 
         # 打标签推送
         await self.scheduler.handle({
@@ -528,7 +528,7 @@ class BinanceSemiRepair:
         })
 
         contract = merged_data.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.info(f"✅ 【币安修复区】【半成品修复】已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 
@@ -548,7 +548,7 @@ class BinanceSemiRepair:
         ==================================================
         """
         if not self.latest_snapshot:
-            logger.debug("门外还没有存储区数据")
+            logger.debug("【币安修复区】【半成品修复】门外还没有存储区数据")
             return None
 
         user_data = self.latest_snapshot.get('user_data', {})
@@ -556,7 +556,7 @@ class BinanceSemiRepair:
         binance_item = user_data.get(binance_key, {})
 
         if not binance_item:
-            logger.debug("存储区中没有币安用户数据")
+            logger.debug("【币安修复区】【半成品修复】存储区中没有币安用户数据")
             return None
 
         return binance_item.get('data')
@@ -582,12 +582,12 @@ class BinanceSemiRepair:
         :return: 该合约的行情数据，或None
         """
         if not self.latest_snapshot:
-            logger.debug("门外还没有存储区数据")
+            logger.debug("【币安修复区】【半成品修复】门外还没有存储区数据")
             return None
 
         market_data = self.latest_snapshot.get('market_data', {})
         if not market_data:
-            logger.debug("存储区中没有行情数据")
+            logger.debug("【币安修复区】【半成品修复】存储区中没有行情数据")
             return None
 
         return market_data.get(contract)
