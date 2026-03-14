@@ -292,14 +292,32 @@ class Database:
             logger.error(f"❌ 【数据库】请求失败: {e}")
             raise
     
-    # ==================== 表名查询（暴力调试版）====================
+    # ==================== 表名查询（精确解析版）====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 暴力调试版
+        获取当前数据库中的所有表名 - 精确解析版
         ==================================================
-        这个版本会把Turso返回的原始数据完整打印出来，
-        让我们看清到底是什么格式。
+        根据 Turso API 的标准返回格式精确解析，只返回真正的用户表。
+        
+        Turso API 返回格式示例：
+        {
+            "results": [
+                {
+                    "type": "ok",
+                    "result": {
+                        "cols": [...],
+                        "rows": [
+                            [{"type": "text", "value": "active_positions"}],
+                            [{"type": "text", "value": "closed_positions"}],
+                            [{"type": "text", "value": "sqlite_sequence"}]  # 系统表会被过滤
+                        ]
+                    }
+                }
+            ]
+        }
+        
+        解析路径：results[0].result.rows[*][0].value
         ==================================================
         """
         sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
@@ -308,114 +326,85 @@ class Database:
             # 执行查询
             result = self._run_sql(sql)
             
-            # ========== 暴力打印完整返回 ==========
-            logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
+            # 调试日志 - 只在DEBUG级别打印完整返回，避免INFO日志混乱
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 START ==========")
+            logger.debug(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 END ==========")
             
             tables = []
             
-            if not result:
-                logger.error("❌ 【数据库】查询表名返回为空")
-                return tables
-            
+            # 防御性编程：检查返回结果是否为字典
             if not isinstance(result, dict):
-                logger.error(f"❌ 【数据库】查询表名返回不是字典，是: {type(result)}")
+                logger.error(f"❌ 【数据库】查询表名返回不是字典，实际类型: {type(result)}")
                 return tables
             
-            # 方法1：检查最外层是否有rows
-            if 'rows' in result:
-                logger.info("🔍 【数据库】发现最外层有rows字段")
-                rows = result['rows']
-                logger.info(f"🔍 最外层rows类型: {type(rows)}, 长度: {len(rows)}")
-                for i, row in enumerate(rows):
-                    logger.info(f"🔍 最外层rows[{i}]: {row}")
-                    if row and len(row) > 0:
-                        cell = row[0]
-                        if isinstance(cell, dict) and 'value' in cell:
-                            tables.append(cell['value'])
+            # 步骤1：检查是否有 results 数组
+            if 'results' not in result:
+                logger.error("❌ 【数据库】返回结果中没有 'results' 字段")
+                return tables
             
-            # 方法2：检查results数组
-            if 'results' in result:
-                results_list = result['results']
-                logger.info(f"🔍 【数据库】发现results数组，类型: {type(results_list)}, 长度: {len(results_list)}")
+            results_list = result['results']
+            if not isinstance(results_list, list) or len(results_list) == 0:
+                logger.error("❌ 【数据库】'results' 不是数组或为空")
+                return tables
+            
+            # 步骤2：取第一个结果对象（通常只有一个）
+            first_result = results_list[0]
+            if not isinstance(first_result, dict):
+                logger.error("❌ 【数据库】results[0] 不是字典")
+                return tables
+            
+            # 步骤3：检查是否有 result 字段
+            if 'result' not in first_result:
+                logger.error("❌ 【数据库】results[0] 中没有 'result' 字段")
+                return tables
+            
+            result_data = first_result['result']
+            if not isinstance(result_data, dict):
+                logger.error("❌ 【数据库】result 字段不是字典")
+                return tables
+            
+            # 步骤4：检查是否有 rows 数组
+            if 'rows' not in result_data:
+                logger.error("❌ 【数据库】result 中没有 'rows' 字段")
+                return tables
+            
+            rows = result_data['rows']
+            if not isinstance(rows, list):
+                logger.error("❌ 【数据库】rows 不是数组")
+                return tables
+            
+            # 步骤5：遍历每一行数据
+            for row_index, row in enumerate(rows):
+                if not isinstance(row, list) or len(row) == 0:
+                    logger.debug(f"⏭️ 第 {row_index} 行格式不正确，跳过")
+                    continue
                 
-                for i, res_item in enumerate(results_list):
-                    logger.info(f"🔍 results[{i}] 类型: {type(res_item)}")
-                    
-                    if not isinstance(res_item, dict):
-                        logger.info(f"🔍 results[{i}] 不是字典，是: {type(res_item)}")
-                        continue
-                    
-                    logger.info(f"🔍 results[{i}] 的所有keys: {list(res_item.keys())}")
-                    
-                    # 尝试直接取rows
-                    if 'rows' in res_item:
-                        logger.info(f"🔍 results[{i}] 直接有rows字段")
-                        rows = res_item['rows']
-                        logger.info(f"🔍 rows类型: {type(rows)}, 长度: {len(rows)}")
-                        
-                        for j, row in enumerate(rows):
-                            logger.info(f"🔍 rows[{j}]: {row}")
-                            if row and len(row) > 0:
-                                cell = row[0]
-                                logger.info(f"🔍 cell[{j}]: {cell}")
-                                
-                                if isinstance(cell, dict):
-                                    logger.info(f"🔍 cell字典的keys: {list(cell.keys())}")
-                                    if 'value' in cell:
-                                        table_name = cell['value']
-                                        tables.append(table_name)
-                                        logger.info(f"✅ 从value字段找到表名: {table_name}")
-                                    else:
-                                        # 尝试所有可能的值
-                                        for k, v in cell.items():
-                                            if isinstance(v, str) and not v.startswith('sqlite_'):
-                                                tables.append(v)
-                                                logger.info(f"✅ 从字段{k}找到表名: {v}")
-                    
-                    # 尝试取result.rows
-                    if 'result' in res_item:
-                        logger.info(f"🔍 results[{i}] 有result字段")
-                        result_data = res_item['result']
-                        logger.info(f"🔍 result字段类型: {type(result_data)}")
-                        
-                        if isinstance(result_data, dict):
-                            logger.info(f"🔍 result字段的keys: {list(result_data.keys())}")
-                            
-                            if 'rows' in result_data:
-                                logger.info(f"🔍 result.rows存在")
-                                rows = result_data['rows']
-                                for row in rows:
-                                    if row and len(row) > 0:
-                                        cell = row[0]
-                                        if isinstance(cell, dict) and 'value' in cell:
-                                            tables.append(cell['value'])
-                    
-                    # 尝试取data.rows (有些API用data)
-                    if 'data' in res_item:
-                        logger.info(f"🔍 results[{i}] 有data字段")
-                        data = res_item['data']
-                        if isinstance(data, dict) and 'rows' in data:
-                            rows = data['rows']
-                            for row in rows:
-                                if row and len(row) > 0:
-                                    cell = row[0]
-                                    if isinstance(cell, dict) and 'value' in cell:
-                                        tables.append(cell['value'])
+                # 每一行的第一个单元格就是表名
+                cell = row[0]
+                if not isinstance(cell, dict):
+                    logger.debug(f"⏭️ 第 {row_index} 行第一个单元格不是字典")
+                    continue
+                
+                # 获取 value 字段，这就是表名
+                if 'value' not in cell:
+                    logger.debug(f"⏭️ 第 {row_index} 行单元格中没有 'value' 字段")
+                    continue
+                
+                table_name = cell['value']
+                
+                # 过滤掉 SQLite 系统表（以 sqlite_ 开头的都是系统表）
+                if table_name and isinstance(table_name, str) and not table_name.startswith('sqlite_'):
+                    tables.append(table_name)
+                    logger.debug(f"✅ 找到用户表: {table_name}")
             
-            # 方法3：递归搜索所有可能的值
-            self._deep_search_for_tables(result, tables, "root")
-            
-            # 去重
+            # 去重并排序（理论上不会重复，但为了安全还是去重）
             tables = list(set(tables))
             tables.sort()
             
-            # 过滤掉sqlite系统表
-            tables = [t for t in tables if t and not t.startswith('sqlite_')]
-            
+            # 记录找到的表数量（只记录非空结果）
             if tables:
-                logger.info(f"📋 【数据库】最终找到 {len(tables)} 个表: {tables}")
+                logger.info(f"📋 【数据库】找到 {len(tables)} 个用户表: {tables}")
             else:
                 logger.info("📋 【数据库】当前数据库中没有用户表")
             
@@ -425,31 +414,6 @@ class Database:
             logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
             return []
     
-    def _deep_search_for_tables(self, obj, tables: list, path: str = ""):
-        """
-        递归搜索所有可能的值，寻找表名
-        """
-        try:
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    
-                    # 如果值是字符串，可能是表名
-                    if isinstance(value, str) and value and len(value) < 100:
-                        if not value.startswith('sqlite_') and not value.startswith('SELECT'):
-                            tables.append(value)
-                            logger.info(f"🔍 在 {current_path} 找到可能的表名: {value}")
-                    
-                    # 递归搜索
-                    self._deep_search_for_tables(value, tables, current_path)
-            
-            elif isinstance(obj, (list, tuple)):
-                for i, item in enumerate(obj):
-                    self._deep_search_for_tables(item, tables, f"{path}[{i}]")
-        
-        except Exception as e:
-            logger.error(f"❌ 递归搜索失败: {e}")
-    
     # ==================== 连接测试 ====================
     
     def test_connection(self) -> bool:
@@ -457,7 +421,12 @@ class Database:
         try:
             result = self._run_sql("SELECT 1")
             
-            if result and 'results' in result:
+            # 精确验证连接是否成功
+            if (result and 
+                isinstance(result, dict) and 
+                'results' in result and 
+                len(result['results']) > 0 and
+                'result' in result['results'][0]):
                 logger.info("✅ 【数据库】连接测试成功")
                 return True
             else:
@@ -471,18 +440,21 @@ class Database:
     # ==================== 初始化/建表 ====================
     
     def _init_database(self):
-        """初始化数据库"""
+        """初始化数据库 - 确保必要的表存在"""
         try:
-            # 先查表，记录建表前的状态
+            # 先查表，记录建表前的状态（用于调试）
             tables_before = self._get_tables()
-            logger.info(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
+            if tables_before:
+                logger.info(f"📋 【数据库】初始化前已有用户表: {tables_before}")
+            else:
+                logger.info("📋 【数据库】初始化前没有用户表，准备创建")
             
-            # 建表（IF NOT EXISTS 保证安全）
+            # 建表（IF NOT EXISTS 保证安全，不会覆盖已有表）
             self._create_active_positions_table()
             self._create_closed_positions_table()
             self._create_indexes()
             
-            # 验证表是否创建成功
+            # 验证持仓区表是否创建成功
             try:
                 self._run_sql("SELECT COUNT(*) FROM active_positions LIMIT 1")
                 logger.info("✅ 【数据库】持仓区表验证成功")
@@ -490,6 +462,7 @@ class Database:
                 logger.error(f"❌ 【数据库】持仓区表验证失败: {e}")
                 raise
             
+            # 验证历史区表是否创建成功
             try:
                 self._run_sql("SELECT COUNT(*) FROM closed_positions LIMIT 1")
                 logger.info("✅ 【数据库】历史区表验证成功")
@@ -499,7 +472,8 @@ class Database:
             
             # 再查表，看建表后的状态
             tables_after = self._get_tables()
-            logger.info(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
+            if tables_after:
+                logger.info(f"📋 【数据库】初始化后所有用户表: {tables_after}")
             
             logger.info("✅ 【数据库】初始化完成")
             
@@ -630,7 +604,7 @@ class Database:
         logger.debug("📝 【数据库】执行创建历史表SQL")
     
     def _create_indexes(self):
-        """创建索引"""
+        """创建索引以提高查询性能"""
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
             "CREATE INDEX IF NOT EXISTS idx_active_contract ON active_positions(开仓合约名);",
