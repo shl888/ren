@@ -573,19 +573,23 @@ class Database:
         try:
             tables = self._get_tables()
             logger.debug(f"当前数据库中的表: {tables}")
-            
+        
             if 'active_positions' not in tables:
                 self._create_active_positions_table()
                 logger.info("✅ 【数据库】创建持仓区表 active_positions")
-            
+            else:
+                logger.debug("⏭️ 【数据库】持仓区表已存在，跳过创建")
+        
             if 'closed_positions' not in tables:
                 self._create_closed_positions_table()
                 logger.info("✅ 【数据库】创建历史区表 closed_positions")
-            
+            else:
+                logger.debug("⏭️ 【数据库】历史区表已存在，跳过创建")
+        
             self._create_indexes()
-            
+        
             logger.info("✅ 数据库初始化完成")
-            
+        
         except Exception as e:
             logger.error(f"❌ 数据库初始化失败: {e}")
             raise
