@@ -230,6 +230,38 @@ class Database:
             logger.error(f"❌ 【数据库】检查历史记录存在性失败: {e}")
             return False
     
+    def _check_active_exists_by_id(self, record_id: str) -> bool:
+        """
+        根据 id 检查持仓记录是否已存在（同步方法）
+        ==================================================
+        用于日志控制，判断是首次写入还是覆盖更新
+        
+        【注意】这是同步方法，不需要async/await
+        因为底层_run_sql也是同步的（使用requests）
+        
+        :param record_id: 记录唯一标识（交易所_合约名_开仓时间）
+        :return: True=已存在（覆盖更新），False=不存在（首次写入）
+        """
+        if not record_id:
+            return False
+        
+        sql = "SELECT 1 FROM active_positions WHERE id = ? LIMIT 1"
+        
+        try:
+            result = self._run_sql(sql, [record_id])
+            if result and 'results' in result:
+                results_list = result.get('results', [])
+                if results_list and len(results_list) > 0:
+                    rows = results_list[0].get('rows', [])
+                    exists = len(rows) > 0
+                    if exists:
+                        logger.debug(f"🔍 【数据库】持仓表发现已存在id: {record_id}")
+                    return exists
+            return False
+        except Exception as e:
+            logger.error(f"❌ 【数据库】检查持仓记录存在性失败: {e}")
+            return False  # 出错时假设不存在，允许打印首次写入日志
+    
     async def _delete_active_position(self, exchange: str):
         """清理持仓区 - 只清理指定交易所"""
         if not exchange:
