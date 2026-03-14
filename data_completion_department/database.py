@@ -76,7 +76,7 @@ class Database:
             )
         
         logger.info("✅ 【数据库】数据库配置加载成功")
-        logger.info(f"🔗 【数据库】连接URL: {self.url}")
+        logger.debug(f"🔗 【数据库】连接URL: {self.url}")
         
         # ----- 第3步：测试数据库连接 -----
         if not self.test_connection():
@@ -437,7 +437,7 @@ class Database:
         try:
             # 先查表，记录建表前的状态
             tables_before = self._get_tables()
-            logger.info(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
+            logger.debug(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
             
             # 建表（IF NOT EXISTS 保证安全）
             self._create_active_positions_table()
@@ -461,7 +461,7 @@ class Database:
             
             # 再查表，看建表后的状态
             tables_after = self._get_tables()
-            logger.info(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
+            logger.debug(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
             
             logger.info("✅ 【数据库】初始化完成")
             
