@@ -35,6 +35,11 @@ Turso数据库
 【重要原则】
 Turso API 要求所有值都必须是字符串类型
 所以不管来的是什么类型的数据，都统一转成字符串
+
+【修复历史】
+- 2024-03-11：修复历史区id为空问题，增加id去重
+- 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
+- 2024-03-15：修复表名查询问题，根据实际返回格式正确解析
 ==================================================
 """
 
@@ -43,6 +48,7 @@ import requests
 import logging
 import json
 import time
+import re
 from typing import Dict, Any, List, Optional
 
 # 配置日志 - 统一前缀
@@ -61,6 +67,15 @@ class Database:
     def __init__(self):
         """
         初始化数据库连接
+        ==================================================
+        做了六件事：
+        1. 从环境变量读取数据库URL和令牌
+        2. 验证配置是否存在
+        3. 测试数据库连接是否正常
+        4. 初始化数据库表（如果表不存在就创建）
+        5. 初始化日志记录集合（用于控制日志输出）
+        6. 初始化最后日志时间记录（用于控制收到数据日志频率）
+        ==================================================
         """
         # ----- 第1步：从环境变量读取配置 -----
         self.url = os.getenv('TURSO_DATABASE_URL')
@@ -90,8 +105,8 @@ class Database:
         logger.info("✅ 【数据库】日志控制集合初始化完成")
         
         # ----- 第6步：初始化最后日志时间记录 -----
-        self._last_log_time = 0
-        self._log_interval = 60
+        self._last_log_time = 0  # 上一次打印收到数据日志的时间戳
+        self._log_interval = 60  # 日志打印间隔（秒）
         logger.info(f"✅ 【数据库】日志时间控制初始化完成，间隔{self._log_interval}秒")
     
     # ==================== 对外唯一入口 ====================
@@ -99,27 +114,48 @@ class Database:
     async def handle_data(self, tag: str, data: Dict[str, Any]):
         """
         接收调度器推送的数据 - 这是数据库文件的唯一入口
+        ==================================================
+        参数说明：
+            tag: 数据标签，只能是"已平仓"或"持仓完整"
+            data: 完整的原始数据，字段全是中文
+        
+        处理逻辑：
+            根据tag的值，执行不同的数据库操作
+            
+        【日志控制】
+        - 收到数据日志每分钟最多打印一条，避免刷屏
+        - 使用时间戳控制，精确到秒
+        ==================================================
+        
+        :param tag: 数据标签（已平仓/持仓完整）
+        :param data: 完整的原始数据（字段全是中文）
         """
         try:
+            # ----- 第1步：从数据中提取交易所信息 -----
             exchange = data.get('交易所')
             if not exchange:
                 logger.error("❌ 【数据库】数据中没有'交易所'字段，无法处理")
                 return
             
+            # ----- 第2步：根据标签执行不同逻辑 -----
             if tag == '已平仓':
+                # 已平仓数据一直打印，因为频率低
                 logger.info(f"📦 【数据库】收到已平仓数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
                 contract = data.get('开仓合约名', 'unknown')
                 
+                # ========== 时间控制：每分钟最多打印一条 ==========
                 current_time = time.time()
                 time_since_last_log = current_time - self._last_log_time
                 
                 if time_since_last_log >= self._log_interval:
+                    # 距离上次打印已超过间隔，打印日志
                     logger.info(f"📦 【数据库】收到持仓完整数据: {exchange} - {contract}")
                     self._last_log_time = current_time
                 else:
+                    # 间隔内，只打印debug日志
                     logger.debug(f"📦 【数据库】收到持仓完整数据: {exchange} - {contract} (已抑制)")
                 
                 await self._handle_active(data)
@@ -133,19 +169,60 @@ class Database:
     # ==================== 内部处理方法 ====================
     
     async def _handle_closed(self, data: Dict[str, Any], exchange: str):
-        """处理已平仓数据"""
+        """
+        处理已平仓数据
+        ==================================================
+        做了两件事，顺序很重要：
+        1. 先写入历史表（永久保存，带幂等性保护）
+        2. 再清理持仓表（只清理这个交易所）
+        
+        日志输出：
+            - 成功写入历史区欧易数据 / 成功写入历史区币安数据
+            - 成功清除持仓区欧易数据 / 成功清除持仓区币安数据
+            - 或跳过写入（如果id已存在）
+        ==================================================
+        
+        :param data: 已平仓的完整数据
+        :param exchange: 交易所名称（binance/okx）
+        """
+        # ----- 第1步：写入历史表（追加，带幂等性保护）-----
+        # 已平仓数据永久保存到历史区，id=交易所_合约名_平仓时间
         await self._insert_closed_position(data)
+        
+        # ----- 第2步：清理持仓表（只清理该交易所）-----
+        # 该交易所的持仓已平仓，从活跃持仓表中移除
         await self._delete_active_position(exchange)
+        
         logger.info(f"✅ 【数据库】已平仓处理完成: {exchange}")
     
     async def _handle_active(self, data: Dict[str, Any]):
-        """处理持仓完整数据"""
+        """
+        处理持仓完整数据
+        ==================================================
+        做一件事：覆盖更新到持仓区（带日志控制）
+        ==================================================
+        
+        :param data: 持仓完整的完整数据
+        """
         await self._save_active_position(data)
     
     # ==================== 实际数据库操作 ====================
     
     async def _save_active_position(self, data: Dict[str, Any]):
-        """持仓区：覆盖更新（日志控制版本）"""
+        """
+        持仓区：覆盖更新（日志控制版本）
+        ==================================================
+        【日志控制逻辑】
+        - 同一个ID只打印一次"首次写入"的成功日志
+        - 之后相同ID的更新完全不打印任何日志（完全静默）
+        
+        【实现方式】
+        使用内存集合 _logged_active_ids 记录已打印日志的ID
+        ==================================================
+        
+        :param data: 数据字典，key必须全是中文
+        """
+        # ----- 第1步：确保数据有id字段 -----
         if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
@@ -157,8 +234,10 @@ class Database:
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         
+        # ========== 判断这个ID是否已经打印过日志 ==========
         should_log_info = record_id not in self._logged_active_ids
         
+        # ----- 第2步：构建SQL语句 -----
         fields = list(data.keys())
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
@@ -172,27 +251,53 @@ class Database:
         logger.debug(f"📝 【数据库】持仓表 SQL: {sql}")
         logger.debug(f"📝 【数据库】持仓表 值: {values}")
         
+        # ----- 第3步：执行SQL -----
         self._run_sql(sql, values)
         
+        # ========== 只对首次写入打印日志 ==========
         if should_log_info:
+            # 第一次遇到这个ID，打印info日志，并记录到集合
             logger.info(f"✅ 【数据库】成功写入持仓区{exchange}数据 - {contract}（首次）")
             self._logged_active_ids.add(record_id)
+        # 非首次写入：完全静默，不打印任何日志
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
-        """历史区：追加写入（带幂等性保护）"""
+        """
+        历史区：追加写入（带幂等性保护）
+        ==================================================
+        【防重复逻辑】
+        使用 id 字段（交易所_合约名_平仓时间）作为唯一键
+        写入前检查是否已存在相同 id，避免20秒倒计时期间的重复数据
+        
+        【id 生成规则】
+        历史区 id = 交易所_合约名_平仓时间
+        例如：okx_BTCUSDT_2026.03.11 18:17:00
+        【注意】与持仓区不同，持仓区用的是开仓时间！
+        
+        【去重判断】
+        - 如果 id 已存在 → 跳过写入（重复数据），输出日志：⏭️ 历史区已存在记录，跳过写入
+        - 如果 id 不存在 → 正常写入（新记录），输出日志：✅ 成功写入历史区...
+        ==================================================
+        
+        :param data: 数据字典，key必须全是中文
+        """
+        # ========== 第1步：确保数据有 id 字段（用平仓时间！）==========
         if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
+            # 【关键】历史区用平仓时间，不是开仓时间！
             close_time = data.get('平仓时间', '')
             data['id'] = f"{exchange}_{contract}_{close_time}"
             logger.debug(f"🔑 【数据库】历史表生成id: {data['id']}")
         
         record_id = data['id']
         
+        # ========== 第2步：检查是否已存在相同 id（幂等性保护）==========
         if self._check_exists_by_id(record_id):
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
+        # ========== 第3步：构建SQL并写入 ==========
         fields = list(data.keys())
         placeholders = ','.join(['?' for _ in fields])
         values = [data.get(f) for f in fields]
@@ -204,13 +309,21 @@ class Database:
         
         self._run_sql(sql, values)
         
+        # ========== 第4步：输出成功日志 ==========
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         close_time = data.get('平仓时间', 'unknown')
         logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
     def _check_exists_by_id(self, record_id: str) -> bool:
-        """根据 id 检查历史记录是否已存在"""
+        """
+        根据 id 检查历史记录是否已存在（同步方法）
+        ==================================================
+        用于幂等性保护，避免重复写入
+        
+        :param record_id: 记录唯一标识（交易所_合约名_平仓时间）
+        :return: True=已存在，False=不存在
+        """
         if not record_id:
             return False
         
@@ -223,7 +336,11 @@ class Database:
                 results_list = result.get('results', [])
                 if results_list and len(results_list) > 0:
                     rows = results_list[0].get('rows', [])
-                    return len(rows) > 0
+                    exists = len(rows) > 0
+                    if exists:
+                        logger.debug(f"🔍 【数据库】历史表发现重复记录 id: {record_id}")
+                    return exists
+                
             return False
             
         except Exception as e:
@@ -231,7 +348,21 @@ class Database:
             return False
     
     async def _delete_active_position(self, exchange: str):
-        """清理持仓区 - 只清理指定交易所"""
+        """
+        清理持仓区 - 只清理指定交易所
+        ==================================================
+        重要警告：
+            必须传入exchange参数，绝对不能删除所有持仓
+        
+        使用场景：
+            - 已平仓时清理对应交易所的持仓记录
+        
+        日志输出：
+            - 成功清除持仓区{交易所}数据
+        ==================================================
+        
+        :param exchange: 'binance' 或 'okx'，不能为空
+        """
         if not exchange:
             logger.error("❌ 【数据库】清理持仓必须传入交易所参数，本次操作已取消")
             return
@@ -244,10 +375,25 @@ class Database:
     # ==================== SQL执行基础方法 ====================
     
     def _run_sql(self, sql: str, params: List = None) -> Dict:
-        """执行SQL语句"""
+        """
+        执行SQL语句
+        ==================================================
+        【重要】Turso API要求所有值都必须是字符串类型
+        所以不管来的是什么类型的数据，都统一转成字符串
+        
+        转换规则：
+            - None → {"type": "null", "value": None}
+            - 其他所有值 → {"type": "text", "value": str(值)}
+        ==================================================
+        
+        :param sql: SQL语句（字段名用中文）
+        :param params: 参数列表
+        :return: Turso API返回的原始结果
+        """
         if params is None:
             params = []
         
+        # ========== 强制全部转字符串 ==========
         args = []
         for p in params:
             if p is None:
@@ -255,6 +401,7 @@ class Database:
             else:
                 args.append({"type": "text", "value": str(p)})
         
+        # ========== 构建请求体 ==========
         payload = {
             "requests": [
                 {
@@ -267,6 +414,7 @@ class Database:
             ]
         }
         
+        # ========== 发送HTTP请求 ==========
         try:
             response = requests.post(
                 f"{self.url}/v2/pipeline",
@@ -283,139 +431,106 @@ class Database:
                     error_detail = response.json()
                     logger.error(f"❌ 【数据库】Turso返回错误: {error_detail}")
                 except:
-                    logger.error(f"❌ 【数据库】Turso返回错误状态码: {response.status_code}")
+                    logger.error(f"❌ 【数据库】Turso返回错误状态码: {response.status_code}, 响应: {response.text[:500]}")
             
             response.raise_for_status()
             return response.json()
             
-        except Exception as e:
+        except requests.exceptions.Timeout:
+            logger.error("❌ 【数据库】请求超时")
+            raise
+        except requests.exceptions.RequestException as e:
             logger.error(f"❌ 【数据库】请求失败: {e}")
             raise
+        except Exception as e:
+            logger.error(f"❌ 【数据库】未知错误: {e}")
+            raise
     
-    # ==================== 表名查询（暴力调试版）====================
+    # ==================== 表名查询（最终修复版）====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 暴力调试版
+        获取当前数据库中的所有表名 - 最终修复版
         ==================================================
-        这个版本会把Turso返回的原始数据完整打印出来，
-        让我们看清到底是什么格式。
+        【根据实际返回格式修复 - 2024-03-15】
+        
+        Turso实际返回格式：
+        {
+            "results": [
+                {
+                    "rows": [  # 直接在这里，没有中间的"result"
+                        [{"type": "text", "value": "active_positions"}],
+                        [{"type": "text", "value": "closed_positions"}]
+                    ],
+                    "cols": [...],
+                    "affected_row_count": 0,
+                    "rows_read": 2,
+                    "rows_written": 0
+                }
+            ]
+        }
+        
+        过滤规则：
+        - 只保留真正的表名（active_positions, closed_positions）
+        - 过滤掉垃圾数据（TEXT, execute, name, ok, text等）
+        - 使用正则匹配表名格式：小写字母 + 下划线 + 小写字母
         ==================================================
+        
+        :return: 表名列表
         """
         sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
         
         try:
-            # 执行查询
             result = self._run_sql(sql)
-            
-            # ========== 暴力打印完整返回 ==========
-            logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
-            
             tables = []
             
-            if not result:
-                logger.error("❌ 【数据库】查询表名返回为空")
+            if not result or not isinstance(result, dict):
+                logger.error(f"❌ 【数据库】查询表名返回格式错误")
                 return tables
             
-            if not isinstance(result, dict):
-                logger.error(f"❌ 【数据库】查询表名返回不是字典，是: {type(result)}")
+            # 获取 results 数组
+            results_list = result.get('results', [])
+            if not results_list:
+                logger.debug("📋 【数据库】查询表名返回的 results 为空")
                 return tables
             
-            # 方法1：检查最外层是否有rows
-            if 'rows' in result:
-                logger.info("🔍 【数据库】发现最外层有rows字段")
-                rows = result['rows']
-                logger.info(f"🔍 最外层rows类型: {type(rows)}, 长度: {len(rows)}")
-                for i, row in enumerate(rows):
-                    logger.info(f"🔍 最外层rows[{i}]: {row}")
-                    if row and len(row) > 0:
-                        cell = row[0]
-                        if isinstance(cell, dict) and 'value' in cell:
-                            tables.append(cell['value'])
-            
-            # 方法2：检查results数组
-            if 'results' in result:
-                results_list = result['results']
-                logger.info(f"🔍 【数据库】发现results数组，类型: {type(results_list)}, 长度: {len(results_list)}")
+            # 遍历每个结果
+            for result_item in results_list:
+                if not isinstance(result_item, dict):
+                    continue
                 
-                for i, res_item in enumerate(results_list):
-                    logger.info(f"🔍 results[{i}] 类型: {type(res_item)}")
-                    
-                    if not isinstance(res_item, dict):
-                        logger.info(f"🔍 results[{i}] 不是字典，是: {type(res_item)}")
+                # ========== 直接从结果中取 rows（根据实际返回格式）==========
+                rows = result_item.get('rows', [])
+                
+                if not rows:
+                    continue
+                
+                # 解析每一行
+                for row in rows:
+                    if not isinstance(row, list) or len(row) == 0:
                         continue
                     
-                    logger.info(f"🔍 results[{i}] 的所有keys: {list(res_item.keys())}")
-                    
-                    # 尝试直接取rows
-                    if 'rows' in res_item:
-                        logger.info(f"🔍 results[{i}] 直接有rows字段")
-                        rows = res_item['rows']
-                        logger.info(f"🔍 rows类型: {type(rows)}, 长度: {len(rows)}")
+                    cell = row[0]
+                    if isinstance(cell, dict) and 'value' in cell:
+                        table_name = cell['value']
                         
-                        for j, row in enumerate(rows):
-                            logger.info(f"🔍 rows[{j}]: {row}")
-                            if row and len(row) > 0:
-                                cell = row[0]
-                                logger.info(f"🔍 cell[{j}]: {cell}")
-                                
-                                if isinstance(cell, dict):
-                                    logger.info(f"🔍 cell字典的keys: {list(cell.keys())}")
-                                    if 'value' in cell:
-                                        table_name = cell['value']
-                                        tables.append(table_name)
-                                        logger.info(f"✅ 从value字段找到表名: {table_name}")
-                                    else:
-                                        # 尝试所有可能的值
-                                        for k, v in cell.items():
-                                            if isinstance(v, str) and not v.startswith('sqlite_'):
-                                                tables.append(v)
-                                                logger.info(f"✅ 从字段{k}找到表名: {v}")
-                    
-                    # 尝试取result.rows
-                    if 'result' in res_item:
-                        logger.info(f"🔍 results[{i}] 有result字段")
-                        result_data = res_item['result']
-                        logger.info(f"🔍 result字段类型: {type(result_data)}")
-                        
-                        if isinstance(result_data, dict):
-                            logger.info(f"🔍 result字段的keys: {list(result_data.keys())}")
-                            
-                            if 'rows' in result_data:
-                                logger.info(f"🔍 result.rows存在")
-                                rows = result_data['rows']
-                                for row in rows:
-                                    if row and len(row) > 0:
-                                        cell = row[0]
-                                        if isinstance(cell, dict) and 'value' in cell:
-                                            tables.append(cell['value'])
-                    
-                    # 尝试取data.rows (有些API用data)
-                    if 'data' in res_item:
-                        logger.info(f"🔍 results[{i}] 有data字段")
-                        data = res_item['data']
-                        if isinstance(data, dict) and 'rows' in data:
-                            rows = data['rows']
-                            for row in rows:
-                                if row and len(row) > 0:
-                                    cell = row[0]
-                                    if isinstance(cell, dict) and 'value' in cell:
-                                        tables.append(cell['value'])
+                        # ========== 严格的过滤规则 ==========
+                        # 1. 不能是系统表
+                        # 2. 必须匹配我们的表名格式：小写字母 + 下划线 + 小写字母
+                        # 3. 不能是垃圾关键词
+                        if (table_name and 
+                            not table_name.startswith('sqlite_') and
+                            table_name not in ['TEXT', 'execute', 'name', 'ok', 'text'] and
+                            re.match(r'^[a-z]+_[a-z]+$', table_name)):  # 正则匹配
+                            tables.append(table_name)
+                            logger.debug(f"📋 【数据库】找到表: {table_name}")
             
-            # 方法3：递归搜索所有可能的值
-            self._deep_search_for_tables(result, tables, "root")
-            
-            # 去重
+            # 去重并排序
             tables = list(set(tables))
             tables.sort()
             
-            # 过滤掉sqlite系统表
-            tables = [t for t in tables if t and not t.startswith('sqlite_')]
-            
             if tables:
-                logger.info(f"📋 【数据库】最终找到 {len(tables)} 个表: {tables}")
+                logger.info(f"📋 【数据库】找到 {len(tables)} 个表: {tables}")
             else:
                 logger.info("📋 【数据库】当前数据库中没有用户表")
             
@@ -425,35 +540,17 @@ class Database:
             logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
             return []
     
-    def _deep_search_for_tables(self, obj, tables: list, path: str = ""):
-        """
-        递归搜索所有可能的值，寻找表名
-        """
-        try:
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    
-                    # 如果值是字符串，可能是表名
-                    if isinstance(value, str) and value and len(value) < 100:
-                        if not value.startswith('sqlite_') and not value.startswith('SELECT'):
-                            tables.append(value)
-                            logger.info(f"🔍 在 {current_path} 找到可能的表名: {value}")
-                    
-                    # 递归搜索
-                    self._deep_search_for_tables(value, tables, current_path)
-            
-            elif isinstance(obj, (list, tuple)):
-                for i, item in enumerate(obj):
-                    self._deep_search_for_tables(item, tables, f"{path}[{i}]")
-        
-        except Exception as e:
-            logger.error(f"❌ 递归搜索失败: {e}")
-    
     # ==================== 连接测试 ====================
     
     def test_connection(self) -> bool:
-        """测试数据库连接是否正常"""
+        """
+        测试数据库连接是否正常
+        ==================================================
+        执行一个简单的SQL查询，验证连接
+        ==================================================
+        
+        :return: True=连接正常，False=连接失败
+        """
         try:
             result = self._run_sql("SELECT 1")
             
@@ -471,7 +568,12 @@ class Database:
     # ==================== 初始化/建表 ====================
     
     def _init_database(self):
-        """初始化数据库"""
+        """
+        初始化数据库
+        ==================================================
+        确保数据库表存在，如果不存在就创建
+        ==================================================
+        """
         try:
             # 先查表，记录建表前的状态
             tables_before = self._get_tables()
@@ -501,6 +603,17 @@ class Database:
             tables_after = self._get_tables()
             logger.info(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
             
+            # 根据实际变化打印日志
+            if 'active_positions' not in tables_before and 'active_positions' in tables_after:
+                logger.info("✅ 【数据库】创建持仓区表 active_positions")
+            elif 'active_positions' in tables_before:
+                logger.info("✅ 【数据库】持仓区表已存在")
+            
+            if 'closed_positions' not in tables_before and 'closed_positions' in tables_after:
+                logger.info("✅ 【数据库】创建历史区表 closed_positions")
+            elif 'closed_positions' in tables_before:
+                logger.info("✅ 【数据库】历史区表已存在")
+            
             logger.info("✅ 【数据库】初始化完成")
             
         except Exception as e:
@@ -508,7 +621,9 @@ class Database:
             raise
     
     def _create_active_positions_table(self):
-        """创建持仓区表"""
+        """
+        创建持仓区表
+        """
         sql = """
         CREATE TABLE IF NOT EXISTS active_positions (
             id TEXT PRIMARY KEY,
@@ -569,7 +684,9 @@ class Database:
         logger.debug("📝 【数据库】执行创建持仓表SQL")
     
     def _create_closed_positions_table(self):
-        """创建历史区表"""
+        """
+        创建历史区表
+        """
         sql = """
         CREATE TABLE IF NOT EXISTS closed_positions (
             id TEXT PRIMARY KEY,
@@ -630,7 +747,9 @@ class Database:
         logger.debug("📝 【数据库】执行创建历史表SQL")
     
     def _create_indexes(self):
-        """创建索引"""
+        """
+        创建索引
+        """
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
             "CREATE INDEX IF NOT EXISTS idx_active_contract ON active_positions(开仓合约名);",
@@ -644,4 +763,4 @@ class Database:
                 self._run_sql(sql)
                 logger.debug(f"📝 【数据库】索引创建/已存在: {sql[:40]}...")
             except Exception as e:
-                logger.warning(f"⚠️ 【数据库】索引创建失败: {e}")
+                logger.warning(f"⚠️ 【数据库】索引创建失败（可能已存在）: {e}")
