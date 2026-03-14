@@ -360,17 +360,24 @@ class Database:
             
             # 去重
             tables = list(set(tables))
-            tables.sort()
             
-            # 过滤掉sqlite系统表
-            tables = [t for t in tables if t and not t.startswith('sqlite_')]
+            # ========== 添加过滤 ==========
+            # 过滤掉sqlite系统表和API返回的元数据
+            filtered_tables = []
+            exclude_keywords = {'TEXT', 'execute', 'name', 'ok', 'text'}
             
-            if tables:
-                logger.info(f"📋 【数据库】最终找到 {len(tables)} 个表: {tables}")
+            for t in tables:
+                if t and not t.startswith('sqlite_') and t not in exclude_keywords:
+                    filtered_tables.append(t)
+            
+            filtered_tables.sort()
+            
+            if filtered_tables:
+                logger.info(f"📋 【数据库】最终找到 {len(filtered_tables)} 个表: {filtered_tables}")
             else:
                 logger.info("📋 【数据库】当前数据库中没有用户表")
             
-            return tables
+            return filtered_tables
             
         except Exception as e:
             logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
