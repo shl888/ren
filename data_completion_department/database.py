@@ -341,9 +341,9 @@ class Database:
             result = self._run_sql(sql)
             
             # ========== 暴力打印完整返回 ==========
-            logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 START ==========")
+            logger.debug(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 END ==========")
             
             tables = []
             
@@ -373,7 +373,7 @@ class Database:
             filtered_tables.sort()
             
             if filtered_tables:
-                logger.info(f"📋 【数据库】最终找到 {len(filtered_tables)} 个表: {filtered_tables}")
+                logger.debug(f"📋 【数据库】最终找到 {len(filtered_tables)} 个表: {filtered_tables}")
             else:
                 logger.info("📋 【数据库】当前数据库中没有用户表")
             
@@ -396,7 +396,7 @@ class Database:
                     if isinstance(value, str) and value and len(value) < 100:
                         if not value.startswith('sqlite_') and not value.startswith('SELECT'):
                             tables.append(value)
-                            logger.info(f"🔍 在 {current_path} 找到可能的表名: {value}")
+                            logger.debug(f"🔍 在 {current_path} 找到可能的表名: {value}")
                     
                     # 递归搜索
                     self._deep_search_for_tables(value, tables, current_path)
