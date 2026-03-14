@@ -526,26 +526,36 @@ class Database:
         ==================================================
         """
         try:
-            tables = self._get_tables()
-            logger.info(f"📋 【数据库】当前数据库中的表: {tables}")
-        
-            # 处理持仓表
+            # 先查表，记录建表前的状态
+            tables_before = self._get_tables()
+            logger.info(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
+            
+            # 建表（IF NOT EXISTS 保证安全，表存在时啥也不干）
             self._create_active_positions_table()
-            if 'active_positions' in tables:
+            self._create_closed_positions_table()
+            self._create_indexes()
+            
+            # 再查表，看建表后的状态
+            tables_after = self._get_tables()
+            logger.info(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
+            
+            # 根据实际变化打印日志
+            if 'active_positions' not in tables_before and 'active_positions' in tables_after:
+                logger.info("✅ 【数据库】创建持仓区表 active_positions")
+            elif 'active_positions' in tables_before:
                 logger.info("✅ 【数据库】持仓区表已存在")
             else:
-                logger.info("✅ 【数据库】创建持仓区表 active_positions")
-        
-            # 处理历史表
-            self._create_closed_positions_table()
-            if 'closed_positions' in tables:
+                logger.warning("⚠️ 【数据库】持仓区表创建后仍未查到")
+            
+            if 'closed_positions' not in tables_before and 'closed_positions' in tables_after:
+                logger.info("✅ 【数据库】创建历史区表 closed_positions")
+            elif 'closed_positions' in tables_before:
                 logger.info("✅ 【数据库】历史区表已存在")
             else:
-                logger.info("✅ 【数据库】创建历史区表 closed_positions")
-        
-            self._create_indexes()
+                logger.warning("⚠️ 【数据库】历史区表创建后仍未查到")
+            
             logger.info("✅ 【数据库】初始化完成")
-        
+            
         except Exception as e:
             logger.error(f"❌ 【数据库】初始化失败: {e}")
             raise
@@ -554,7 +564,8 @@ class Database:
         """
         获取当前数据库中的所有表名
         ==================================================
-        执行SQLite的系统表查询，并处理Turso API的各种返回格式
+        执行SQLite的系统表查询
+        根据日志确认的Turso返回格式：rows = [[{"type": "text", "value": "表名"}]]
         ==================================================
         
         :return: 表名列表
@@ -562,97 +573,28 @@ class Database:
         sql = "SELECT name FROM sqlite_master WHERE type='table';"
         result = self._run_sql(sql)
         
-        # ----- 打印完整原始返回 -----
-        logger.info("🔍 【数据库】【_get_tables调试】开始")
-        logger.info(f"🔍 【数据库】原始result类型: {type(result)}")
-        logger.info(f"🔍 【数据库】完整result: {json.dumps(result, ensure_ascii=False, indent=2)}")
-        
         tables = []
         
-        # 检查 result 是否有效
-        if not result:
-            logger.error("❌ 【数据库】_run_sql返回空结果")
-            logger.info("🔍 【数据库】【_get_tables调试】结束")
-            return tables
+        try:
+            # Turso 标准返回格式：results[0].result.rows
+            if result and 'results' in result and len(result['results']) > 0:
+                first_result = result['results'][0]
+                if 'result' in first_result:
+                    result_obj = first_result['result']
+                    if 'rows' in result_obj:
+                        rows = result_obj['rows']
+                        
+                        for row in rows:
+                            if row and len(row) > 0:
+                                cell = row[0]
+                                # Turso 返回格式：每个单元格是 {"type": "text", "value": "表名"}
+                                if isinstance(cell, dict) and 'value' in cell:
+                                    tables.append(cell['value'])
+        except Exception as e:
+            logger.error(f"❌ 【数据库】解析表名失败: {e}")
+            # 调试用：打印原始返回帮助排查
+            logger.error(f"❌ 【数据库】原始返回: {result}")
         
-        if 'results' not in result:
-            logger.error(f"❌ 【数据库】result中没有'results'字段，可用键: {list(result.keys())}")
-            logger.info("🔍 【数据库】【_get_tables调试】结束")
-            return tables
-        
-        # 获取第一个结果集
-        first_result = result['results'][0] if result['results'] else {}
-        logger.info(f"🔍 【数据库】first_result类型: {type(first_result)}")
-        logger.info(f"🔍 【数据库】first_result内容: {json.dumps(first_result, ensure_ascii=False, indent=2)}")
-        
-        # 获取 result 对象
-        result_obj = first_result.get('result', {})
-        logger.info(f"🔍 【数据库】result_obj类型: {type(result_obj)}")
-        logger.info(f"🔍 【数据库】result_obj内容: {json.dumps(result_obj, ensure_ascii=False, indent=2)}")
-        
-        # 获取 rows
-        rows = result_obj.get('rows', [])
-        logger.info(f"🔍 【数据库】rows类型: {type(rows)}")
-        logger.info(f"🔍 【数据库】rows内容: {json.dumps(rows, ensure_ascii=False, indent=2)}")
-        logger.info(f"🔍 【数据库】rows长度: {len(rows)}")
-        
-        # 遍历每一行
-        for row_idx, row in enumerate(rows):
-            logger.info(f"🔍 【数据库】--- 处理第 {row_idx} 行 ---")
-            logger.info(f"🔍 【数据库】row类型: {type(row)}")
-            logger.info(f"🔍 【数据库】row内容: {row}")
-            
-            if not row:
-                logger.warning(f"⚠️ 【数据库】第 {row_idx} 行为空，跳过")
-                continue
-            
-            logger.info(f"🔍 【数据库】row长度: {len(row)}")
-            
-            # 遍历行中的每个字段
-            for col_idx, cell in enumerate(row):
-                logger.info(f"🔍 【数据库】单元格 [{row_idx}, {col_idx}] 类型: {type(cell)}")
-                logger.info(f"🔍 【数据库】单元格 [{row_idx}, {col_idx}] 内容: {cell}")
-                
-                # 处理单元格为 None 的情况
-                if cell is None:
-                    logger.info(f"🔍 【数据库】单元格 [{row_idx}, {col_idx}] 为 None，跳过")
-                    continue
-                
-                # 处理单元格为字典的情况
-                if isinstance(cell, dict):
-                    logger.info(f"🔍 【数据库】单元格是字典，键: {list(cell.keys())}")
-                    # 尝试常见的键名
-                    if 'value' in cell:
-                        table_name = cell['value']
-                        logger.info(f"🔍 【数据库】从'value'键获取表名: {table_name}")
-                    elif 'name' in cell:
-                        table_name = cell['name']
-                        logger.info(f"🔍 【数据库】从'name'键获取表名: {table_name}")
-                    elif 'text' in cell:
-                        table_name = cell['text']
-                        logger.info(f"🔍 【数据库】从'text'键获取表名: {table_name}")
-                    else:
-                        # 如果都不是，取第一个值
-                        first_value = list(cell.values())[0] if cell.values() else None
-                        table_name = first_value
-                        logger.info(f"🔍 【数据库】取字典第一个值作为表名: {table_name}")
-                
-                # 处理单元格为字符串的情况
-                elif isinstance(cell, str):
-                    table_name = cell
-                    logger.info(f"🔍 【数据库】单元格是字符串，直接作为表名: {table_name}")
-                
-                # 处理其他类型
-                else:
-                    table_name = str(cell)
-                    logger.info(f"🔍 【数据库】单元格是其他类型({type(cell)})，转字符串: {table_name}")
-                
-                if table_name:
-                    tables.append(table_name)
-                    logger.info(f"✅ 【数据库】添加表名: {table_name}")
-        
-        logger.info(f"📋 【数据库】最终tables列表: {tables}")
-        logger.info("🔍 【数据库】【_get_tables调试】结束")
         return tables
     
     def _create_active_positions_table(self):
