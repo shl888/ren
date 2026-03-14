@@ -40,6 +40,7 @@ import os
 import logging
 import asyncio
 import requests
+import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -327,6 +328,43 @@ class OkxMissingRepair:
             return False
 
         try:
+            # ===== 调试代码开始 =====
+            logger.info("=" * 60)
+            logger.info("🔍【欧易持仓缺失修复区】【数据库调试】开始诊断")
+            
+            # 测试 0：表结构
+            sql_pragma = "PRAGMA table_info(active_positions)"
+            result_pragma = self._query_database(sql_pragma)
+            logger.info(f"📋 【欧易持仓缺失修复区】表结构: {result_pragma}")
+            
+            # 测试 1：所有数据
+            sql_all = "SELECT 交易所, 开仓合约名 FROM active_positions"
+            result_all = self._query_database(sql_all)
+            logger.info(f"📊 【欧易持仓缺失修复区】所有数据: {result_all}")
+            
+            # 测试 2：小写 okx
+            sql_lower = "SELECT * FROM active_positions WHERE 交易所 = 'okx'"
+            result_lower = self._query_database(sql_lower)
+            logger.info(f"🔍【欧易持仓缺失修复区】 查询 'okx': {result_lower}")
+            
+            # 测试 3：大写 OKX
+            sql_upper = "SELECT * FROM active_positions WHERE 交易所 = 'OKX'"
+            result_upper = self._query_database(sql_upper)
+            logger.info(f"🔍【欧易持仓缺失修复区】 查询 'OKX': {result_upper}")
+            
+            # 测试 4：不区分大小写
+            sql_ci = "SELECT * FROM active_positions WHERE 交易所 COLLATE NOCASE = 'okx'"
+            result_ci = self._query_database(sql_ci)
+            logger.info(f"🔍 【欧易持仓缺失修复区】不区分大小写: {result_ci}")
+            
+            # 测试 5：用 id 查（更精确）
+            sql_id = "SELECT * FROM active_positions WHERE id LIKE 'okx_%' LIMIT 1"
+            result_id = self._query_database(sql_id)
+            logger.info(f"🔍 【欧易持仓缺失修复区】用id前缀查: {result_id}")
+            
+            logger.info("=" * 60)
+            # ===== 调试代码结束 =====
+
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'okx' LIMIT 1"
             result = self._query_database(sql)
 
@@ -335,11 +373,11 @@ class OkxMissingRepair:
                 return False
 
             rows = result.get('rows', [])
+            cols = result.get('cols', [])
             if not rows:
                 logger.warning("⚠️【欧易持仓缺失修复区】 数据库中没有欧意持仓数据")
                 return False
 
-            cols = result.get('cols', [])
             row = rows[0]
             self.cache = self._row_to_dict(row, cols)
 
@@ -659,21 +697,23 @@ class OkxMissingRepair:
         for p in params:
             if p is None:
                 args.append({"type": "null", "value": None})
-            elif isinstance(p, (int, float)):
-                args.append({"type": "integer", "value": p})
             else:
                 args.append({"type": "text", "value": str(p)})
 
+        # 构建请求体
+        request_item = {
+            "type": "execute",
+            "stmt": {
+                "sql": sql
+            }
+        }
+        
+        # 只有在有参数时才添加 args
+        if args:
+            request_item["stmt"]["args"] = args
+        
         payload = {
-            "requests": [
-                {
-                    "type": "execute",
-                    "stmt": {
-                        "sql": sql,
-                        "args": args
-                    }
-                }
-            ]
+            "requests": [request_item]
         }
 
         try:
@@ -715,9 +755,12 @@ class OkxMissingRepair:
         result = {}
         for i, col in enumerate(cols):
             if i < len(row):
-                col_name = col.get('name')
+                col_name = col.get('name') if isinstance(col, dict) else col
                 value_cell = row[i]
-                value = value_cell.get('value') if value_cell else None
+                if isinstance(value_cell, dict):
+                    value = value_cell.get('value')
+                else:
+                    value = value_cell
                 result[col_name] = value
         return result
 
