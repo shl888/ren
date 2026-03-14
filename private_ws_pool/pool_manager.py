@@ -378,7 +378,7 @@ class PrivateWebSocketPool:
             try:
                 from private_data_processing.manager import receive_private_data
                 asyncio.create_task(receive_private_data(raw_data))  # ← 不等待
-                logger.debug(f"[私人连接池] 📨 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
+                logger.info(f"[私人连接池] 📨 已推送到私人数据处理模块: {raw_data['exchange']}.{raw_data['data_type']}")
             except ImportError as e:
                 logger.error(f"[私人连接池] ❌ 无法导入私人数据处理模块: {e}")
             except Exception as e:
