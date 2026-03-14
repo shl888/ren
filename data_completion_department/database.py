@@ -310,7 +310,7 @@ class Database:
             
             # ========== 暴力打印完整返回 ==========
             logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.info(数据库调试json.dumps(result, ensure_ascii=False, indent=2))
+            logger.info(json.dumps(数据库调试, result, ensure_ascii=False, indent=2))
             logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
             
             tables = []
