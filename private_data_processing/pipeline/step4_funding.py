@@ -1,13 +1,24 @@
 """
 第四步：资金费特殊处理
-逻辑：
+==================================================
+【文件职责】
 1. 收到container
 2. 检查缓存
 3. 按对应交易所的逻辑更新缓存
 4. 用更新后的缓存覆盖container
 5. 返回container（给调度器）
+
+【重要变更 - 2026.03.14】
+==================================================
+🔴 修改点：改为独立循环+覆盖更新模式
+- 每个交易所独立循环运行
+- 循环内读取最新数据，完整走完资金费流程
+- 数据覆盖更新，永远处理最新
+- 无锁设计，互不干扰
+==================================================
 """
 import logging
+import asyncio
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -17,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class Step4Funding:
-    """第四步：资金费处理"""
+    """第四步：资金费处理 - 独立循环版"""
     
     def __init__(self):
         # 缓存整个container（每个交易所独立）
@@ -26,7 +37,13 @@ class Step4Funding:
             "okx": None
         }
         
-        # 线程锁保护缓存
+        # 🔴 新增：最新数据存储（覆盖更新）
+        self.latest_data = {
+            "binance": None,
+            "okx": None
+        }
+        
+        # 线程锁保护缓存（仅用于缓存读写）
         self._lock = threading.Lock()
         
         # 清理线程（每个交易所独立）
@@ -38,79 +55,88 @@ class Step4Funding:
         # 清理倒计时秒数
         self.reset_countdown = 5
         
+        # 🔴 新增：运行标志
+        self.running = True
+        
+        # 🔴 新增：启动独立循环
+        asyncio.create_task(self._funding_loop("binance"))
+        asyncio.create_task(self._funding_loop("okx"))
+        
         logger.info("✅【私人step4】资金费缓存已创建: binance, okx")
+        logger.info("🔄【私人step4】独立循环已启动（覆盖更新模式）")
     
-    def _round_4(self, value):
-        """四舍五入保留4位小数"""
-        if value is None:
-            return None
-        try:
-            return round(float(value), 4)
-        except (ValueError, TypeError):
-            return None
+    # ========== 🔴 新增：独立循环 ==========
     
-    def _get_beijing_time(self, timestamp_ms: Optional[int] = None) -> str:
+    async def _funding_loop(self, exchange: str):
         """
-        获取北京时间（仅欧易资金费结算使用）
-        Args:
-            timestamp_ms: 毫秒级时间戳，None表示当前时间
-        Returns:
-            格式化字符串: "2026.03.16 08:00:03"
+        交易所资金费独立循环
+        每次循环读取最新数据，完整走完资金费流程
         """
-        try:
-            if timestamp_ms is not None:
-                dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
-            else:
-                dt = datetime.now(timezone.utc)
-            
-            beijing_tz = timezone(timedelta(hours=8))
-            beijing_time = dt.astimezone(beijing_tz)
-            
-            return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
-        except Exception as e:
-            logger.error(f"❌【私人step4】时间转换失败: {e}")
-            return datetime.now().strftime("%Y.%m.%d %H:%M:%S")
+        logger.info(f"🔄【私人step4】【{exchange}】资金费循环已启动")
+        
+        while self.running:
+            try:
+                # ===== 1. 读取最新数据（覆盖更新）=====
+                data = self.latest_data[exchange]
+                
+                if data is None:
+                    # 没有数据就短暂休息
+                    await asyncio.sleep(0.01)
+                    continue
+                
+                # ===== 2. 根据交易所选择处理逻辑 =====
+                if exchange == "binance":
+                    result = self._process_binance(data)
+                else:  # okx
+                    result = self._process_okx(data)
+                
+                # ===== 3. 如果有结果，推送（异步，不等待）=====
+                if result:
+                    # 🔴 注意：这里不直接返回，而是让调度器通过process获取
+                    # 因为调度器会调用process获取处理后的数据
+                    pass
+                
+                # ===== 4. 短暂休息，避免CPU空转 =====
+                # 可以根据需要调整，比如10ms
+                await asyncio.sleep(0.01)
+                
+            except Exception as e:
+                logger.error(f"❌【私人step4】【{exchange}】循环异常: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                await asyncio.sleep(0.1)
     
-    def _delayed_reset_sync(self, exchange: str):
-        """同步版：延迟重置容器"""
-        try:
-            time.sleep(self.reset_countdown)
-            
-            with self._lock:
-                if self.cache[exchange] is not None:
-                    self._reset_container(self.cache[exchange])
-                    logger.info(f"✨【私人step4】【{exchange}】平仓清理完成，容器已重置")
-            
-        except Exception as e:
-            logger.error(f"❌【私人step4】【{exchange}】延迟重置失败: {e}")
-        finally:
-            self.reset_threads[exchange] = None
+    # ========== 🔴 新增：更新最新数据 ==========
     
-    def _schedule_reset(self, exchange: str):
-        """启动独立线程执行清理"""
-        # 如果已有线程在运行，先取消？（这里简单处理：允许新线程覆盖旧线程）
-        thread = threading.Thread(target=self._delayed_reset_sync, args=(exchange,))
-        thread.daemon = True
-        thread.start()
-        self.reset_threads[exchange] = thread
-        logger.info(f"⏰【私人step4】【{exchange}】清理线程已启动: {self.reset_countdown}秒后重置")
+    def update_data(self, exchange: str, container: Dict[str, Any]):
+        """
+        外部调用：更新最新数据（覆盖模式）
+        这是唯一被外部调用的方法！
+        """
+        self.latest_data[exchange] = container
+        logger.debug(f"📥【私人step4】【{exchange}】收到新数据，已覆盖")
+        return container  # 立即返回，不处理！
+    
+    # ========== 原有 process 方法（修改为只更新数据）==========
     
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """
         处理资金费数据
+        🔴【修改点】现在只做数据更新，不处理！
+        处理由独立循环负责
+        
         根据交易所选择不同的处理逻辑
         """
         exchange = container.get("交易所")
         
-        if exchange == "binance":
-            return self._process_binance(container)
-        elif exchange == "okx":
-            return self._process_okx(container)
-        else:
-            logger.warning(f"⚠️【私人step4】未知交易所: {exchange}")
-            return container
+        # 🔴 只更新数据，不处理！
+        self.update_data(exchange, container)
+        
+        # 返回原数据（让流程继续）
+        return container
     
-    # ========== 币安房间 ==========
+    # ========== 币安房间（原有代码，一字不改）==========
+    
     def _process_binance(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """币安资金费处理逻辑"""
         exchange = "binance"
@@ -205,7 +231,8 @@ class Step4Funding:
         except (ValueError, TypeError):
             pass
     
-    # ========== 欧易房间 ==========
+    # ========== 欧易房间（原有代码，一字不改）==========
+    
     def _process_okx(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """欧易资金费处理逻辑"""
         exchange = "okx"
@@ -290,7 +317,38 @@ class Step4Funding:
         
         return result
     
-    # ========== 通用工具函数 ==========
+    # ========== 通用工具函数（原有代码，一字不改）==========
+    
+    def _round_4(self, value):
+        """四舍五入保留4位小数"""
+        if value is None:
+            return None
+        try:
+            return round(float(value), 4)
+        except (ValueError, TypeError):
+            return None
+    
+    def _get_beijing_time(self, timestamp_ms: Optional[int] = None) -> str:
+        """
+        获取北京时间（仅欧易资金费结算使用）
+        Args:
+            timestamp_ms: 毫秒级时间戳，None表示当前时间
+        Returns:
+            格式化字符串: "2026.03.16 08:00:03"
+        """
+        try:
+            if timestamp_ms is not None:
+                dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+            else:
+                dt = datetime.now(timezone.utc)
+            
+            beijing_tz = timezone(timedelta(hours=8))
+            beijing_time = dt.astimezone(beijing_tz)
+            
+            return beijing_time.strftime("%Y.%m.%d %H:%M:%S")
+        except Exception as e:
+            logger.error(f"❌【私人step4】时间转换失败: {e}")
+            return datetime.now().strftime("%Y.%m.%d %H:%M:%S")
     
     def _reset_funding_fields(self, cache_entry: Dict):
         """重置资金费相关字段"""
@@ -325,3 +383,27 @@ class Step4Funding:
         exchange = container.get("交易所")
         if exchange:
             container["交易所"] = exchange
+    
+    def _delayed_reset_sync(self, exchange: str):
+        """同步版：延迟重置容器"""
+        try:
+            time.sleep(self.reset_countdown)
+            
+            with self._lock:
+                if self.cache[exchange] is not None:
+                    self._reset_container(self.cache[exchange])
+                    logger.info(f"✨【私人step4】【{exchange}】平仓清理完成，容器已重置")
+            
+        except Exception as e:
+            logger.error(f"❌【私人step4】【{exchange}】延迟重置失败: {e}")
+        finally:
+            self.reset_threads[exchange] = None
+    
+    def _schedule_reset(self, exchange: str):
+        """启动独立线程执行清理"""
+        # 如果已有线程在运行，先取消？（这里简单处理：允许新线程覆盖旧线程）
+        thread = threading.Thread(target=self._delayed_reset_sync, args=(exchange,))
+        thread.daemon = True
+        thread.start()
+        self.reset_threads[exchange] = thread
+        logger.info(f"⏰【私人step4】【{exchange}】清理线程已启动: {self.reset_countdown}秒后重置")
