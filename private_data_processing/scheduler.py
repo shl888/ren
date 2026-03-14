@@ -6,15 +6,12 @@
 2. 接收Manager的完整存储区，直接驱动Step1-2-3-4
 3. 将最终处理后的数据推送到数据完成部门
 
-【重要变更 - 2026.03.12】
+【重要变更 - 2026.03.14】
 ==================================================
-彻底取消所有队列，改为直接调用链：
-- Manager → feed_step1() → Step1.receive() → 返回结果列表
-- 对每个结果 → Step2.process() → Step3.process() → Step4.process() → 推送
-- 所有步骤串行处理单条数据，但多条数据之间并行（通过异步任务）
-
-这样改造后，数据在模块内的延迟 = Step1 + Step2 + Step3 + Step4 的处理时间
-没有任何排队等待时间，极大提升实时性
+🔴 修改点：去掉 await gather，改为纯转发模式
+- 收到step1的结果后，只创建任务转发
+- 不等待任何任务完成，立即返回
+- 实现收一条转一条的纯转发器功能
 ==================================================
 """
 
@@ -80,7 +77,7 @@ class PrivateDataScheduler:
         from .pipeline.step4_funding import Step4Funding
         
         # 创建所有步骤实例
-        self.step1 = Step1Extract()  # 不再传队列！
+        self.step1 = Step1Extract()
         self.step2 = Step2Fusion()
         self.step3 = Step3Calc()
         self.step4 = Step4Funding()
@@ -100,10 +97,10 @@ class PrivateDataScheduler:
         """
         Manager直接调用这个，把完整存储区塞给Step1
         ==================================================
-        这是私人调度器的输入入口，Manager收到数据后调用此方法。
+        🔴【修改点】改为纯转发模式：收到就转，绝不等待！
         
-        重要变更：不再使用队列，直接 await Step1 处理完成，
-        然后对每个结果直接调用后续步骤。
+        原来：await asyncio.gather(*process_tasks) 会等待所有任务完成
+        现在：只创建任务，不等待，立即返回
         
         :param stored_item: 完整存储区数据，格式：
             {
@@ -136,17 +133,13 @@ class PrivateDataScheduler:
                 
             logger.debug(f"📊【私人调度器】step1返回 {len(results)} 条提取结果")
             
-            # ===== 对每条提取结果，独立执行后续步骤 =====
-            # 为每条结果创建独立任务，实现并行处理
-            process_tasks = []
+            # ===== 🔴 关键修改：只转发，不等待！ =====
+            # 对每条提取结果，创建独立任务执行后续步骤
             for result in results:
-                task = asyncio.create_task(self._process_single_result(result))
-                process_tasks.append(task)
+                asyncio.create_task(self._process_single_result(result))
             
-            # 等待所有处理任务完成（可选，如果不关心结果可以不等待）
-            if process_tasks:
-                await asyncio.gather(*process_tasks, return_exceptions=True)
-                logger.debug(f"✅【私人调度器】所有 {len(process_tasks)} 条结果处理完成")
+            # 立即返回，不等待任何任务完成！
+            logger.debug(f"✅【私人调度器】已转发 {len(results)} 条结果到后台处理")
             
             # 更新统计
             self.stats["total_processed"] += 1
