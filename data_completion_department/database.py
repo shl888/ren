@@ -355,21 +355,6 @@ class Database:
                 logger.error(f"❌ 【数据库】查询表名返回不是字典，是: {type(result)}")
                 return tables
             
-            # 方法1：检查最外层是否有rows
-#            if 'rows' in result:
-#                logger.info("🔍 【数据库】发现最外层有rows字段")
-#                rows = result['rows']
-#                logger.info(f"🔍 最外层rows类型: {type(rows)}, 长度: {len(rows)}")
-#                for i, row in enumerate(rows):
-#                    logger.info(f"🔍 最外层rows[{i}]: {row}")
-#                    if row and len(row) > 0:
-#                        cell = row[0]
-#                        if isinstance(cell, dict) and 'value' in cell:
-#                            tables.append(cell['value'])
-            
-            # 方法2：检查results数组
-
-            
             # 方法3：递归搜索所有可能的值
             self._deep_search_for_tables(result, tables, "root")
             
