@@ -40,7 +40,7 @@ Turso API 要求所有值都必须是字符串类型
 - 2024-03-11：修复历史区id为空问题，增加id去重
 - 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
 - 2024-03-15：修复表名查询问题，根据实际返回格式正确解析
-- 2024-03-15：简化表名过滤规则，避免误过滤
+- 2024-03-15：添加垃圾表名黑名单，精确过滤只保留需要的表
 ==================================================
 """
 
@@ -446,33 +446,35 @@ class Database:
             logger.error(f"❌ 【数据库】未知错误: {e}")
             raise
     
-    # ==================== 表名查询（简化版）====================
+    # ==================== 表名查询（完美过滤版）====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 简化版
+        获取当前数据库中的所有表名 - 完美过滤版
         ==================================================
         【根据实际返回格式修复 - 2024-03-15】
         
-        Turso实际返回格式：
+        Turso实际返回格式（已验证）：
         {
             "results": [
                 {
                     "rows": [  # 直接在这里，没有中间的"result"
                         [{"type": "text", "value": "active_positions"}],
-                        [{"type": "text", "value": "closed_positions"}]
-                    ],
-                    "cols": [...],
-                    "affected_row_count": 0,
-                    "rows_read": 2,
-                    "rows_written": 0
+                        [{"type": "text", "value": "closed_positions"}],
+                        [{"type": "text", "value": "TEXT"}],      # 垃圾1
+                        [{"type": "text", "value": "execute"}],   # 垃圾2
+                        [{"type": "text", "value": "name"}],      # 垃圾3
+                        [{"type": "text", "value": "ok"}],        # 垃圾4
+                        [{"type": "text", "value": "text"}]       # 垃圾5
+                    ]
                 }
             ]
         }
         
-        过滤规则（简化）：
-        - 只过滤掉明确知道的系统表和垃圾数据
-        - 保留所有可能的表名
+        过滤规则：
+        - 过滤掉 sqlite_ 开头的系统表
+        - 过滤掉已知的5个垃圾表名
+        - 只保留我们的表
         ==================================================
         
         :return: 表名列表
@@ -486,6 +488,9 @@ class Database:
             if not result or not isinstance(result, dict):
                 logger.error(f"❌ 【数据库】查询表名返回格式错误")
                 return tables
+            
+            # 垃圾表名黑名单（从日志中看到的5个）
+            garbage_tables = {'TEXT', 'execute', 'name', 'ok', 'text'}
             
             # 获取 results 数组
             results_list = result.get('results', [])
@@ -513,12 +518,12 @@ class Database:
                     if isinstance(cell, dict) and 'value' in cell:
                         table_name = cell['value']
                         
-                        # ========== 简化的过滤规则 ==========
+                        # ========== 双重过滤 ==========
                         # 1. 不能是系统表
-                        # 2. 不能是明确的垃圾关键词
+                        # 2. 不能在垃圾表名黑名单中
                         if (table_name and 
                             not table_name.startswith('sqlite_') and
-                            table_name not in ['TEXT', 'execute', 'name', 'ok', 'text']):
+                            table_name not in garbage_tables):
                             tables.append(table_name)
                             logger.debug(f"📋 【数据库】找到表: {table_name}")
             
