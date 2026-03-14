@@ -367,18 +367,18 @@ class Database:
             
             if result and 'results' in result:
                 results_list = result.get('results', [])
-                logger.debug(f"🔍 【数据库调试】results_list: {results_list}")
+                logger.info(f"🔍 【数据库调试】results_list: {results_list}")
                 
                 if results_list and len(results_list) > 0:
                     first_result = results_list[0]
-                    logger.debug(f"🔍 【数据库调试】第一个结果: {first_result}")
+                    logger.info(f"🔍 【数据库调试】第一个结果: {first_result}")
                     
                     rows = first_result.get('rows', [])
-                    logger.debug(f"🔍 【数据库调试】rows: {rows}")
+                    logger.info(f"🔍 【数据库调试】rows: {rows}")
                     
                     tables = []
                     for row in rows:
-                        logger.debug(f"🔍 【数据库调试】处理行: {row}")
+                        logger.info(f"🔍 【数据库调试】处理行: {row}")
                         if row and len(row) > 0:
                             # Turso返回的行可能是 [{"type": "text", "value": "表名"}] 这样的格式
                             if isinstance(row[0], dict) and 'value' in row[0]:
@@ -386,12 +386,12 @@ class Database:
                             else:
                                 table_name = row[0]
                             
-                            logger.debug(f"🔍 【数据库调试】提取的表名: {table_name}")
+                            logger.info(f"🔍 【数据库调试】提取的表名: {table_name}")
                             
                             if table_name and not table_name.startswith('sqlite_'):
                                 tables.append(table_name)
                     
-                    logger.debug(f"🔍 【数据库调试】解析出的表名列表: {tables}")
+                    logger.info(f"🔍 【数据库调试】解析出的表名列表: {tables}")
                     logger.info(f"📋 【数据库】当前数据库中的表: {tables}")
                     return tables
             
