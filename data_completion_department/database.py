@@ -360,23 +360,46 @@ class Database:
         try:
             result = self._run_sql(sql)
             
-            tables = []
+            # ===== 调试日志：打印完整返回 =====
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 START ==========")
+            logger.debug(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.debug("🔍 【数据库调试】========== Turso原始返回 END ==========")
+            
             if result and 'results' in result:
                 results_list = result.get('results', [])
+                logger.debug(f"🔍 【数据库调试】results_list: {results_list}")
+                
                 if results_list and len(results_list) > 0:
-                    rows = results_list[0].get('rows', [])
+                    first_result = results_list[0]
+                    logger.debug(f"🔍 【数据库调试】第一个结果: {first_result}")
+                    
+                    rows = first_result.get('rows', [])
+                    logger.debug(f"🔍 【数据库调试】rows: {rows}")
+                    
+                    tables = []
                     for row in rows:
+                        logger.debug(f"🔍 【数据库调试】处理行: {row}")
                         if row and len(row) > 0:
-                            table_name = row[0]
-                            # 过滤掉sqlite系统表
-                            if not table_name.startswith('sqlite_'):
+                            # Turso返回的行可能是 [{"type": "text", "value": "表名"}] 这样的格式
+                            if isinstance(row[0], dict) and 'value' in row[0]:
+                                table_name = row[0]['value']
+                            else:
+                                table_name = row[0]
+                            
+                            logger.debug(f"🔍 【数据库调试】提取的表名: {table_name}")
+                            
+                            if table_name and not table_name.startswith('sqlite_'):
                                 tables.append(table_name)
+                    
+                    logger.debug(f"🔍 【数据库调试】解析出的表名列表: {tables}")
+                    logger.info(f"📋 【数据库】当前数据库中的表: {tables}")
+                    return tables
             
-            logger.debug(f"📋 【数据库】当前数据库中的表: {tables}")
-            return tables
+            logger.info("📋 【数据库】当前数据库中没有找到表")
+            return []
             
         except Exception as e:
-            logger.error(f"❌ 【数据库】查询表名失败: {e}")
+            logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
             return []
     
     # ==================== 连接测试 ====================
