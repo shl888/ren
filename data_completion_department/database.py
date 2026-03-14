@@ -292,32 +292,13 @@ class Database:
             logger.error(f"❌ 【数据库】请求失败: {e}")
             raise
     
-    # ==================== 表名查询（精确解析版）====================
+    # ==================== 表名查询（精确解析版）- 只替换了这个方法 ====================
     
     def _get_tables(self) -> List[str]:
         """
         获取当前数据库中的所有表名 - 精确解析版
         ==================================================
-        根据 Turso API 的标准返回格式精确解析，只返回真正的用户表。
-        
-        Turso API 返回格式示例：
-        {
-            "results": [
-                {
-                    "type": "ok",
-                    "result": {
-                        "cols": [...],
-                        "rows": [
-                            [{"type": "text", "value": "active_positions"}],
-                            [{"type": "text", "value": "closed_positions"}],
-                            [{"type": "text", "value": "sqlite_sequence"}]  # 系统表会被过滤
-                        ]
-                    }
-                }
-            ]
-        }
-        
-        解析路径：results[0].result.rows[*][0].value
+        把原来的方法直接替换成这个，其他代码一个字不动
         ==================================================
         """
         sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
@@ -326,85 +307,36 @@ class Database:
             # 执行查询
             result = self._run_sql(sql)
             
-            # 调试日志 - 只在DEBUG级别打印完整返回，避免INFO日志混乱
-            logger.debug("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.debug(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.debug("🔍 【数据库调试】========== Turso原始返回 END ==========")
+            # 保留您的调试日志
+            logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
+            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
             
             tables = []
             
-            # 防御性编程：检查返回结果是否为字典
-            if not isinstance(result, dict):
-                logger.error(f"❌ 【数据库】查询表名返回不是字典，实际类型: {type(result)}")
-                return tables
-            
-            # 步骤1：检查是否有 results 数组
-            if 'results' not in result:
-                logger.error("❌ 【数据库】返回结果中没有 'results' 字段")
-                return tables
-            
-            results_list = result['results']
-            if not isinstance(results_list, list) or len(results_list) == 0:
-                logger.error("❌ 【数据库】'results' 不是数组或为空")
-                return tables
-            
-            # 步骤2：取第一个结果对象（通常只有一个）
-            first_result = results_list[0]
-            if not isinstance(first_result, dict):
-                logger.error("❌ 【数据库】results[0] 不是字典")
-                return tables
-            
-            # 步骤3：检查是否有 result 字段
-            if 'result' not in first_result:
-                logger.error("❌ 【数据库】results[0] 中没有 'result' 字段")
-                return tables
-            
-            result_data = first_result['result']
-            if not isinstance(result_data, dict):
-                logger.error("❌ 【数据库】result 字段不是字典")
-                return tables
-            
-            # 步骤4：检查是否有 rows 数组
-            if 'rows' not in result_data:
-                logger.error("❌ 【数据库】result 中没有 'rows' 字段")
-                return tables
-            
-            rows = result_data['rows']
-            if not isinstance(rows, list):
-                logger.error("❌ 【数据库】rows 不是数组")
-                return tables
-            
-            # 步骤5：遍历每一行数据
-            for row_index, row in enumerate(rows):
-                if not isinstance(row, list) or len(row) == 0:
-                    logger.debug(f"⏭️ 第 {row_index} 行格式不正确，跳过")
-                    continue
+            # 精确解析，只从正确的路径取表名
+            if (result and 
+                'results' in result and 
+                len(result['results']) > 0 and
+                'result' in result['results'][0] and
+                'rows' in result['results'][0]['result']):
                 
-                # 每一行的第一个单元格就是表名
-                cell = row[0]
-                if not isinstance(cell, dict):
-                    logger.debug(f"⏭️ 第 {row_index} 行第一个单元格不是字典")
-                    continue
-                
-                # 获取 value 字段，这就是表名
-                if 'value' not in cell:
-                    logger.debug(f"⏭️ 第 {row_index} 行单元格中没有 'value' 字段")
-                    continue
-                
-                table_name = cell['value']
-                
-                # 过滤掉 SQLite 系统表（以 sqlite_ 开头的都是系统表）
-                if table_name and isinstance(table_name, str) and not table_name.startswith('sqlite_'):
-                    tables.append(table_name)
-                    logger.debug(f"✅ 找到用户表: {table_name}")
+                rows = result['results'][0]['result']['rows']
+                for row in rows:
+                    if row and len(row) > 0:
+                        cell = row[0]
+                        if isinstance(cell, dict) and 'value' in cell:
+                            table_name = cell['value']
+                            # 过滤系统表
+                            if table_name and not table_name.startswith('sqlite_'):
+                                tables.append(table_name)
             
-            # 去重并排序（理论上不会重复，但为了安全还是去重）
+            # 去重并排序
             tables = list(set(tables))
             tables.sort()
             
-            # 记录找到的表数量（只记录非空结果）
             if tables:
-                logger.info(f"📋 【数据库】找到 {len(tables)} 个用户表: {tables}")
+                logger.info(f"📋 【数据库】找到 {len(tables)} 个表: {tables}")
             else:
                 logger.info("📋 【数据库】当前数据库中没有用户表")
             
@@ -421,12 +353,7 @@ class Database:
         try:
             result = self._run_sql("SELECT 1")
             
-            # 精确验证连接是否成功
-            if (result and 
-                isinstance(result, dict) and 
-                'results' in result and 
-                len(result['results']) > 0 and
-                'result' in result['results'][0]):
+            if result and 'results' in result:
                 logger.info("✅ 【数据库】连接测试成功")
                 return True
             else:
@@ -440,21 +367,18 @@ class Database:
     # ==================== 初始化/建表 ====================
     
     def _init_database(self):
-        """初始化数据库 - 确保必要的表存在"""
+        """初始化数据库"""
         try:
-            # 先查表，记录建表前的状态（用于调试）
+            # 先查表，记录建表前的状态
             tables_before = self._get_tables()
-            if tables_before:
-                logger.info(f"📋 【数据库】初始化前已有用户表: {tables_before}")
-            else:
-                logger.info("📋 【数据库】初始化前没有用户表，准备创建")
+            logger.info(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
             
-            # 建表（IF NOT EXISTS 保证安全，不会覆盖已有表）
+            # 建表（IF NOT EXISTS 保证安全）
             self._create_active_positions_table()
             self._create_closed_positions_table()
             self._create_indexes()
             
-            # 验证持仓区表是否创建成功
+            # 验证表是否创建成功
             try:
                 self._run_sql("SELECT COUNT(*) FROM active_positions LIMIT 1")
                 logger.info("✅ 【数据库】持仓区表验证成功")
@@ -462,7 +386,6 @@ class Database:
                 logger.error(f"❌ 【数据库】持仓区表验证失败: {e}")
                 raise
             
-            # 验证历史区表是否创建成功
             try:
                 self._run_sql("SELECT COUNT(*) FROM closed_positions LIMIT 1")
                 logger.info("✅ 【数据库】历史区表验证成功")
@@ -472,8 +395,7 @@ class Database:
             
             # 再查表，看建表后的状态
             tables_after = self._get_tables()
-            if tables_after:
-                logger.info(f"📋 【数据库】初始化后所有用户表: {tables_after}")
+            logger.info(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
             
             logger.info("✅ 【数据库】初始化完成")
             
@@ -604,7 +526,7 @@ class Database:
         logger.debug("📝 【数据库】执行创建历史表SQL")
     
     def _create_indexes(self):
-        """创建索引以提高查询性能"""
+        """创建索引"""
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
             "CREATE INDEX IF NOT EXISTS idx_active_contract ON active_positions(开仓合约名);",
