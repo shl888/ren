@@ -39,8 +39,7 @@ Turso API 要求所有值都必须是字符串类型
 【修复历史】
 - 2024-03-11：修复历史区id为空问题，增加id去重
 - 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
-- 2024-03-15：修复表名查询问题，根据实际返回格式正确解析
-- 2024-03-15：添加垃圾表名黑名单，精确过滤只保留需要的表
+- 2024-03-15：修复表名查询问题，使用正确的解析方法，添加垃圾表名过滤
 ==================================================
 """
 
@@ -446,11 +445,11 @@ class Database:
             logger.error(f"❌ 【数据库】未知错误: {e}")
             raise
     
-    # ==================== 表名查询（完美过滤版）====================
+    # ==================== 表名查询（最终正确版）====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 完美过滤版
+        获取当前数据库中的所有表名 - 最终正确版
         ==================================================
         【根据实际返回格式修复 - 2024-03-15】
         
@@ -458,7 +457,7 @@ class Database:
         {
             "results": [
                 {
-                    "rows": [  # 直接在这里，没有中间的"result"
+                    "rows": [  # ✅ 直接在这里，没有中间的"result"
                         [{"type": "text", "value": "active_positions"}],
                         [{"type": "text", "value": "closed_positions"}],
                         [{"type": "text", "value": "TEXT"}],      # 垃圾1
@@ -472,9 +471,9 @@ class Database:
         }
         
         过滤规则：
-        - 过滤掉 sqlite_ 开头的系统表
-        - 过滤掉已知的5个垃圾表名
-        - 只保留我们的表
+        - 只过滤掉 sqlite_ 开头的系统表
+        - 只过滤掉已知的5个垃圾表名
+        - 保留所有其他表名（包括我们的表）
         ==================================================
         
         :return: 表名列表
@@ -492,40 +491,40 @@ class Database:
             # 垃圾表名黑名单（从日志中看到的5个）
             garbage_tables = {'TEXT', 'execute', 'name', 'ok', 'text'}
             
-            # 获取 results 数组
-            results_list = result.get('results', [])
-            if not results_list:
-                logger.debug("📋 【数据库】查询表名返回的 results 为空")
-                return tables
-            
-            # 遍历每个结果
-            for result_item in results_list:
-                if not isinstance(result_item, dict):
-                    continue
+            # ========== 正确的解析方法：直接从 results[0].rows 取 ==========
+            if 'results' in result:
+                results_list = result.get('results', [])
+                if not results_list:
+                    logger.debug("📋 【数据库】查询表名返回的 results 为空")
+                    return tables
                 
-                # ========== 直接从结果中取 rows（根据实际返回格式）==========
-                rows = result_item.get('rows', [])
-                
-                if not rows:
-                    continue
-                
-                # 解析每一行
-                for row in rows:
-                    if not isinstance(row, list) or len(row) == 0:
+                for result_item in results_list:
+                    if not isinstance(result_item, dict):
                         continue
                     
-                    cell = row[0]
-                    if isinstance(cell, dict) and 'value' in cell:
-                        table_name = cell['value']
+                    # ✅ 直接从结果中取 rows（根据实际返回格式）
+                    rows = result_item.get('rows', [])
+                    
+                    if not rows:
+                        continue
+                    
+                    # 解析每一行
+                    for row in rows:
+                        if not isinstance(row, list) or len(row) == 0:
+                            continue
                         
-                        # ========== 双重过滤 ==========
-                        # 1. 不能是系统表
-                        # 2. 不能在垃圾表名黑名单中
-                        if (table_name and 
-                            not table_name.startswith('sqlite_') and
-                            table_name not in garbage_tables):
-                            tables.append(table_name)
-                            logger.debug(f"📋 【数据库】找到表: {table_name}")
+                        cell = row[0]
+                        if isinstance(cell, dict) and 'value' in cell:
+                            table_name = cell['value']
+                            
+                            # ========== 双重过滤 ==========
+                            # 1. 不能是系统表
+                            # 2. 不能在垃圾表名黑名单中
+                            if (table_name and 
+                                not table_name.startswith('sqlite_') and
+                                table_name not in garbage_tables):
+                                tables.append(table_name)
+                                logger.debug(f"📋 【数据库】找到表: {table_name}")
             
             # 去重并排序
             tables = list(set(tables))
@@ -765,4 +764,4 @@ class Database:
                 self._run_sql(sql)
                 logger.debug(f"📝 【数据库】索引创建/已存在: {sql[:40]}...")
             except Exception as e:
-                logger.warning(f"⚠️ 【数据库】索引创建失败（可能已存在）: {e}")
+                logger.warning(f"⚠️ 【数据库】索引创建失败: {e}")
