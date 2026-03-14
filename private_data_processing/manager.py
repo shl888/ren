@@ -206,7 +206,7 @@ class PrivateDataProcessor:
                         stop_loss_key = f"{symbol}_03_设置止损"
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
-                            logger.info(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
+                            logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
                         await self._feed_full_storage_to_step1()
                         return
                     
@@ -214,7 +214,7 @@ class PrivateDataProcessor:
                         take_profit_key = f"{symbol}_04_设置止盈"
                         if take_profit_key in classified:
                             del classified[take_profit_key]
-                            logger.info(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
+                            logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止盈，已删除设置止盈记录")
                         await self._feed_full_storage_to_step1()
                         return
                     
@@ -250,12 +250,16 @@ class PrivateDataProcessor:
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
+                            # ✅ 有订单ID时用这个日志
+                            logger.info(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
                     else:
                         classified[classified_key].append({
                             'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
+                        # ✅ 没有订单ID时用这个日志
+                        logger.info(f"📦【私人数据处理】 [币安订单] {symbol} {category} 已保存")
                     
                     # 平仓处理：启动独立线程清理
                     if is_binance_closing(category):
@@ -270,7 +274,7 @@ class PrivateDataProcessor:
             # ========== OKX订单更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'order_update':
                 
-                logger.info(f"📥【私人数据处理】 [OKX订单] 收到订单更新")
+                logger.debug(f"📥【私人数据处理】 [OKX订单] 收到订单更新")
                 
                 try:
                     if 'data' not in raw_data:
@@ -293,10 +297,10 @@ class PrivateDataProcessor:
                     
                     order_id = order_data.get('ordId', 'unknown')
                     state = order_data.get('state', 'unknown')
-                    logger.info(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
+                    logger.debug(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
                     
                     category = classify_okx_order(raw_data['data'])
-                    logger.debug(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
+                    logger.info(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
                     
                     # 过滤不需要保存的分类
                     filtered_categories = [
@@ -355,14 +359,16 @@ class PrivateDataProcessor:
                                     'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                     'data': raw_data
                                 })
-                                logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
+                                # ✅ 有订单ID时用这个日志
+                                logger.info(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
                         else:
                             classified[classified_key].append({
                                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
-                            logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
+                            # ✅ 没有订单ID时用这个日志
+                            logger.info(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         
                         # ===== 平仓全部成交：启动独立线程清理 =====
                         if is_okx_closing(category):
@@ -395,7 +401,7 @@ class PrivateDataProcessor:
                             'received_at': private_data.get('received_at', datetime.now().isoformat())
                         }
                     
-                    logger.debug(f"✅【私人数据处理】 [OKX持仓] 已保存: {storage_key}")
+                    logger.debug(f"📦【私人数据处理】 [OKX持仓] 已保存: {storage_key}")
                     await self._feed_full_storage_to_step1()
                     
                 except Exception as e:
@@ -442,7 +448,7 @@ class PrivateDataProcessor:
                     'received_at': private_data.get('received_at', datetime.now().isoformat())
                 }
             
-            logger.debug(f"✅ [私人数据处理] 已保存: {storage_key}")
+            logger.debug(f"📦【私人数据处理】 已保存: {storage_key}")
             await self._feed_full_storage_to_step1()
             
         except Exception as e:
