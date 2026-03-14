@@ -293,7 +293,7 @@ class PrivateDataProcessor:
                     
                     order_id = order_data.get('ordId', 'unknown')
                     state = order_data.get('state', 'unknown')
-                    logger.debug(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
+                    logger.info(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
                     
                     category = classify_okx_order(raw_data['data'])
                     logger.debug(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
