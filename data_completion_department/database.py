@@ -345,89 +345,39 @@ class Database:
             logger.error(f"❌ 【数据库】请求失败: {e}")
             raise
     
-    # ==================== 表名查询（暴力调试版）====================
+    # ==================== 表名查询 ====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 暴力调试版
-        ==================================================
-        这个版本会把Turso返回的原始数据完整打印出来，
-        让我们看清到底是什么格式。
-        ==================================================
+        获取当前数据库中的所有表名
+        
+        查询 sqlite_master 系统表获取所有用户表。
+        
+        :return: 表名列表，例如 ['active_positions', 'closed_positions']
         """
         sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
         
         try:
-            # 执行查询
             result = self._run_sql(sql)
             
-            # ========== 暴力打印完整返回 ==========
-            logger.debug("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.debug(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.debug("🔍 【数据库调试】========== Turso原始返回 END ==========")
-            
             tables = []
+            if result and 'results' in result:
+                results_list = result.get('results', [])
+                if results_list and len(results_list) > 0:
+                    rows = results_list[0].get('rows', [])
+                    for row in rows:
+                        if row and len(row) > 0:
+                            table_name = row[0]
+                            # 过滤掉sqlite系统表
+                            if not table_name.startswith('sqlite_'):
+                                tables.append(table_name)
             
-            if not result:
-                logger.error("❌ 【数据库】查询表名返回为空")
-                return tables
-            
-            if not isinstance(result, dict):
-                logger.error(f"❌ 【数据库】查询表名返回不是字典，是: {type(result)}")
-                return tables
-            
-            # 方法3：递归搜索所有可能的值
-            self._deep_search_for_tables(result, tables, "root")
-            
-            # 去重
-            tables = list(set(tables))
-            
-            # ========== 添加过滤 ==========
-            # 过滤掉sqlite系统表和API返回的元数据
-            filtered_tables = []
-            exclude_keywords = {'TEXT', 'execute', 'name', 'ok', 'text'}
-            
-            for t in tables:
-                if t and not t.startswith('sqlite_') and t not in exclude_keywords:
-                    filtered_tables.append(t)
-            
-            filtered_tables.sort()
-            
-            if filtered_tables:
-                logger.debug(f"📋 【数据库】最终找到 {len(filtered_tables)} 个表: {filtered_tables}")
-            else:
-                logger.info("📋 【数据库】当前数据库中没有用户表")
-            
-            return filtered_tables
+            logger.debug(f"📋 【数据库】当前数据库中的表: {tables}")
+            return tables
             
         except Exception as e:
-            logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
+            logger.error(f"❌ 【数据库】查询表名失败: {e}")
             return []
-    
-    def _deep_search_for_tables(self, obj, tables: list, path: str = ""):
-        """
-        递归搜索所有可能的值，寻找表名
-        """
-        try:
-            if isinstance(obj, dict):
-                for key, value in obj.items():
-                    current_path = f"{path}.{key}" if path else key
-                    
-                    # 如果值是字符串，可能是表名
-                    if isinstance(value, str) and value and len(value) < 100:
-                        if not value.startswith('sqlite_') and not value.startswith('SELECT'):
-                            tables.append(value)
-                            logger.debug(f"🔍 在 {current_path} 找到可能的表名: {value}")
-                    
-                    # 递归搜索
-                    self._deep_search_for_tables(value, tables, current_path)
-            
-            elif isinstance(obj, (list, tuple)):
-                for i, item in enumerate(obj):
-                    self._deep_search_for_tables(item, tables, f"{path}[{i}]")
-        
-        except Exception as e:
-            logger.error(f"❌ 递归搜索失败: {e}")
     
     # ==================== 连接测试 ====================
     
