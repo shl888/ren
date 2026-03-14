@@ -189,7 +189,7 @@ class Database:
         
         record_id = data['id']
         
-        if self._check_exists_by_id(record_id):
+        if self._check_closed_exists(record_id):
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
@@ -209,8 +209,21 @@ class Database:
         close_time = data.get('平仓时间', 'unknown')
         logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
-    def _check_exists_by_id(self, record_id: str) -> bool:
-        """根据 id 检查历史记录是否已存在"""
+    def _check_closed_exists(self, record_id: str) -> bool:
+        """
+        检查历史表中是否已存在该记录
+        
+        用于历史表的幂等性保护，避免重复写入。
+        查询表: closed_positions（历史表）
+        
+        调用场景：
+            _insert_closed_position() 在写入前调用，判断是否需要跳过
+            
+        :param record_id: 记录ID (格式: 交易所_合约名_平仓时间)
+        :return: 
+            True = 记录已存在（跳过写入）
+            False = 记录不存在（可以写入）
+        """
         if not record_id:
             return False
         
@@ -223,24 +236,30 @@ class Database:
                 results_list = result.get('results', [])
                 if results_list and len(results_list) > 0:
                     rows = results_list[0].get('rows', [])
-                    return len(rows) > 0
+                    exists = len(rows) > 0
+                    if exists:
+                        logger.debug(f"🔍 【数据库】历史表已存在记录: {record_id}")
+                    return exists
             return False
             
         except Exception as e:
-            logger.error(f"❌ 【数据库】检查历史记录存在性失败: {e}")
-            return False
+            logger.error(f"❌ 【数据库】检查历史表记录失败: {e}")
+            return False  # 出错时假设不存在，让写入流程继续
     
-    def _check_active_exists_by_id(self, record_id: str) -> bool:
+    def _check_active_exists(self, record_id: str) -> bool:
         """
-        根据 id 检查持仓记录是否已存在（同步方法）
-        ==================================================
-        用于日志控制，判断是首次写入还是覆盖更新
+        检查持仓表中是否已存在该记录
         
-        【注意】这是同步方法，不需要async/await
-        因为底层_run_sql也是同步的（使用requests）
+        用于持仓表的日志控制，判断是首次写入还是覆盖更新。
+        查询表: active_positions（持仓表）
         
-        :param record_id: 记录唯一标识（交易所_合约名_开仓时间）
-        :return: True=已存在（覆盖更新），False=不存在（首次写入）
+        调用场景：
+            _save_active_position() 在写入前调用，决定是否打印"首次写入"日志
+            
+        :param record_id: 记录ID (格式: 交易所_合约名_开仓时间)
+        :return: 
+            True = 记录已存在（覆盖更新，不打印首次日志）
+            False = 记录不存在（首次写入，打印首次日志）
         """
         if not record_id:
             return False
@@ -249,17 +268,19 @@ class Database:
         
         try:
             result = self._run_sql(sql, [record_id])
+            
             if result and 'results' in result:
                 results_list = result.get('results', [])
                 if results_list and len(results_list) > 0:
                     rows = results_list[0].get('rows', [])
                     exists = len(rows) > 0
                     if exists:
-                        logger.debug(f"🔍 【数据库】持仓表发现已存在id: {record_id}")
+                        logger.debug(f"🔍 【数据库】持仓表已存在记录: {record_id}")
                     return exists
             return False
+            
         except Exception as e:
-            logger.error(f"❌ 【数据库】检查持仓记录存在性失败: {e}")
+            logger.error(f"❌ 【数据库】检查持仓表记录失败: {e}")
             return False  # 出错时假设不存在，允许打印首次写入日志
     
     async def _delete_active_position(self, exchange: str):
