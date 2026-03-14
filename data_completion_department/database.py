@@ -309,7 +309,7 @@ class Database:
             
             # 保留您的调试日志
             logger.info("🔍 【数据库调试】========== Turso原始返回 START ==========")
-            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.info(数据库调试json.dumps(result, ensure_ascii=False, indent=2))
             logger.info("🔍 【数据库调试】========== Turso原始返回 END ==========")
             
             tables = []
