@@ -368,73 +368,7 @@ class Database:
 #                            tables.append(cell['value'])
             
             # 方法2：检查results数组
-            if 'results' in result:
-                results_list = result['results']
-                logger.info(f"🔍 【数据库】发现results数组，类型: {type(results_list)}, 长度: {len(results_list)}")
-                
-                for i, res_item in enumerate(results_list):
-                    logger.info(f"🔍 results[{i}] 类型: {type(res_item)}")
-                    
-                    if not isinstance(res_item, dict):
-                        logger.info(f"🔍 results[{i}] 不是字典，是: {type(res_item)}")
-                        continue
-                    
-                    logger.info(f"🔍 results[{i}] 的所有keys: {list(res_item.keys())}")
-                    
-                    # 尝试直接取rows
-                    if 'rows' in res_item:
-                        logger.info(f"🔍 results[{i}] 直接有rows字段")
-                        rows = res_item['rows']
-                        logger.info(f"🔍 rows类型: {type(rows)}, 长度: {len(rows)}")
-                        
-                        for j, row in enumerate(rows):
-                            logger.info(f"🔍 rows[{j}]: {row}")
-                            if row and len(row) > 0:
-                                cell = row[0]
-                                logger.info(f"🔍 cell[{j}]: {cell}")
-                                
-                                if isinstance(cell, dict):
-                                    logger.info(f"🔍 cell字典的keys: {list(cell.keys())}")
-                                    if 'value' in cell:
-                                        table_name = cell['value']
-                                        tables.append(table_name)
-                                        logger.info(f"✅ 从value字段找到表名: {table_name}")
-                                    else:
-                                        # 尝试所有可能的值
-                                        for k, v in cell.items():
-                                            if isinstance(v, str) and not v.startswith('sqlite_'):
-                                                tables.append(v)
-                                                logger.info(f"✅ 从字段{k}找到表名: {v}")
-                    
-                    # 尝试取result.rows
-                    if 'result' in res_item:
-                        logger.info(f"🔍 results[{i}] 有result字段")
-                        result_data = res_item['result']
-                        logger.info(f"🔍 result字段类型: {type(result_data)}")
-                        
-                        if isinstance(result_data, dict):
-                            logger.info(f"🔍 result字段的keys: {list(result_data.keys())}")
-                            
-                            if 'rows' in result_data:
-                                logger.info(f"🔍 result.rows存在")
-                                rows = result_data['rows']
-                                for row in rows:
-                                    if row and len(row) > 0:
-                                        cell = row[0]
-                                        if isinstance(cell, dict) and 'value' in cell:
-                                            tables.append(cell['value'])
-                    
-                    # 尝试取data.rows (有些API用data)
-                    if 'data' in res_item:
-                        logger.info(f"🔍 results[{i}] 有data字段")
-                        data = res_item['data']
-                        if isinstance(data, dict) and 'rows' in data:
-                            rows = data['rows']
-                            for row in rows:
-                                if row and len(row) > 0:
-                                    cell = row[0]
-                                    if isinstance(cell, dict) and 'value' in cell:
-                                        tables.append(cell['value'])
+
             
             # 方法3：递归搜索所有可能的值
             self._deep_search_for_tables(result, tables, "root")
