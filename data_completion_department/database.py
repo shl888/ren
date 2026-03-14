@@ -355,7 +355,19 @@ class Database:
                 logger.error(f"❌ 【数据库】查询表名返回不是字典，是: {type(result)}")
                 return tables
             
-            # 只使用方法2：检查results数组
+            # 方法1：检查最外层是否有rows
+#            if 'rows' in result:
+#                logger.info("🔍 【数据库】发现最外层有rows字段")
+#                rows = result['rows']
+#                logger.info(f"🔍 最外层rows类型: {type(rows)}, 长度: {len(rows)}")
+#                for i, row in enumerate(rows):
+#                    logger.info(f"🔍 最外层rows[{i}]: {row}")
+#                    if row and len(row) > 0:
+#                        cell = row[0]
+#                        if isinstance(cell, dict) and 'value' in cell:
+#                            tables.append(cell['value'])
+            
+            # 方法2：检查results数组
             if 'results' in result:
                 results_list = result['results']
                 logger.info(f"🔍 【数据库】发现results数组，类型: {type(results_list)}, 长度: {len(results_list)}")
@@ -424,6 +436,9 @@ class Database:
                                     if isinstance(cell, dict) and 'value' in cell:
                                         tables.append(cell['value'])
             
+            # 方法3：递归搜索所有可能的值
+            self._deep_search_for_tables(result, tables, "root")
+            
             # 去重
             tables = list(set(tables))
             tables.sort()
@@ -441,6 +456,31 @@ class Database:
         except Exception as e:
             logger.error(f"❌ 【数据库】查询表名失败: {e}", exc_info=True)
             return []
+    
+    def _deep_search_for_tables(self, obj, tables: list, path: str = ""):
+        """
+        递归搜索所有可能的值，寻找表名
+        """
+        try:
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    
+                    # 如果值是字符串，可能是表名
+                    if isinstance(value, str) and value and len(value) < 100:
+                        if not value.startswith('sqlite_') and not value.startswith('SELECT'):
+                            tables.append(value)
+                            logger.info(f"🔍 在 {current_path} 找到可能的表名: {value}")
+                    
+                    # 递归搜索
+                    self._deep_search_for_tables(value, tables, current_path)
+            
+            elif isinstance(obj, (list, tuple)):
+                for i, item in enumerate(obj):
+                    self._deep_search_for_tables(item, tables, f"{path}[{i}]")
+        
+        except Exception as e:
+            logger.error(f"❌ 递归搜索失败: {e}")
     
     # ==================== 连接测试 ====================
     
