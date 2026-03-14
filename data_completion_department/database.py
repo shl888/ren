@@ -565,7 +565,6 @@ class Database:
         获取当前数据库中的所有表名
         ==================================================
         执行SQLite的系统表查询
-        根据日志确认的Turso返回格式：rows = [[{"type": "text", "value": "表名"}]]
         ==================================================
         
         :return: 表名列表
@@ -575,26 +574,39 @@ class Database:
         
         tables = []
         
+        # 直接解析，不依赖多层 .get()
         try:
-            # Turso 标准返回格式：results[0].result.rows
-            if result and 'results' in result and len(result['results']) > 0:
-                first_result = result['results'][0]
-                if 'result' in first_result:
-                    result_obj = first_result['result']
-                    if 'rows' in result_obj:
-                        rows = result_obj['rows']
-                        
-                        for row in rows:
-                            if row and len(row) > 0:
-                                cell = row[0]
-                                # Turso 返回格式：每个单元格是 {"type": "text", "value": "表名"}
-                                if isinstance(cell, dict) and 'value' in cell:
-                                    tables.append(cell['value'])
+            if result and isinstance(result, dict):
+                # 获取 results 数组
+                results_list = result.get('results', [])
+                if results_list and len(results_list) > 0:
+                    first_result = results_list[0]
+                    if first_result and isinstance(first_result, dict):
+                        # 获取 result 对象
+                        result_data = first_result.get('result', {})
+                        if result_data and isinstance(result_data, dict):
+                            # 获取 rows 数组
+                            rows = result_data.get('rows', [])
+                            for row in rows:
+                                if row and len(row) > 0:
+                                    cell = row[0]
+                                    # Turso 返回格式：{"type": "text", "value": "表名"}
+                                    if isinstance(cell, dict):
+                                        # 优先取 value
+                                        if 'value' in cell:
+                                            tables.append(cell['value'])
+                                        # 如果没有 value，取第一个值
+                                        elif cell:
+                                            first_val = list(cell.values())[0]
+                                            tables.append(str(first_val))
+                                    else:
+                                        tables.append(str(cell))
         except Exception as e:
             logger.error(f"❌ 【数据库】解析表名失败: {e}")
             # 调试用：打印原始返回帮助排查
             logger.error(f"❌ 【数据库】原始返回: {result}")
         
+        logger.info(f"📋 【数据库】当前数据库中的表: {tables}")
         return tables
     
     def _create_active_positions_table(self):
@@ -658,7 +670,9 @@ class Database:
         );
         """
         self._run_sql(sql)
-        logger.debug("📝 【数据库】执行创建持仓表SQL")
+        # 强制提交事务
+        self._run_sql("COMMIT")
+        logger.debug("📝 【数据库】执行创建持仓表SQL并提交")
     
     def _create_closed_positions_table(self):
         """
@@ -721,7 +735,9 @@ class Database:
         );
         """
         self._run_sql(sql)
-        logger.debug("📝 【数据库】执行创建历史表SQL")
+        # 强制提交事务
+        self._run_sql("COMMIT")
+        logger.debug("📝 【数据库】执行创建历史表SQL并提交")
     
     def _create_indexes(self):
         """
