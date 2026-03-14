@@ -40,6 +40,7 @@ Turso API 要求所有值都必须是字符串类型
 - 2024-03-11：修复历史区id为空问题，增加id去重
 - 2024-03-11：修复持仓区日志刷屏问题，首次写入才打印日志
 - 2024-03-15：修复表名查询问题，根据实际返回格式正确解析
+- 2024-03-15：简化表名过滤规则，避免误过滤
 ==================================================
 """
 
@@ -48,7 +49,6 @@ import requests
 import logging
 import json
 import time
-import re
 from typing import Dict, Any, List, Optional
 
 # 配置日志 - 统一前缀
@@ -446,11 +446,11 @@ class Database:
             logger.error(f"❌ 【数据库】未知错误: {e}")
             raise
     
-    # ==================== 表名查询（最终修复版）====================
+    # ==================== 表名查询（简化版）====================
     
     def _get_tables(self) -> List[str]:
         """
-        获取当前数据库中的所有表名 - 最终修复版
+        获取当前数据库中的所有表名 - 简化版
         ==================================================
         【根据实际返回格式修复 - 2024-03-15】
         
@@ -470,10 +470,9 @@ class Database:
             ]
         }
         
-        过滤规则：
-        - 只保留真正的表名（active_positions, closed_positions）
-        - 过滤掉垃圾数据（TEXT, execute, name, ok, text等）
-        - 使用正则匹配表名格式：小写字母 + 下划线 + 小写字母
+        过滤规则（简化）：
+        - 只过滤掉明确知道的系统表和垃圾数据
+        - 保留所有可能的表名
         ==================================================
         
         :return: 表名列表
@@ -514,14 +513,12 @@ class Database:
                     if isinstance(cell, dict) and 'value' in cell:
                         table_name = cell['value']
                         
-                        # ========== 严格的过滤规则 ==========
+                        # ========== 简化的过滤规则 ==========
                         # 1. 不能是系统表
-                        # 2. 必须匹配我们的表名格式：小写字母 + 下划线 + 小写字母
-                        # 3. 不能是垃圾关键词
+                        # 2. 不能是明确的垃圾关键词
                         if (table_name and 
                             not table_name.startswith('sqlite_') and
-                            table_name not in ['TEXT', 'execute', 'name', 'ok', 'text'] and
-                            re.match(r'^[a-z]+_[a-z]+$', table_name)):  # 正则匹配
+                            table_name not in ['TEXT', 'execute', 'name', 'ok', 'text']):
                             tables.append(table_name)
                             logger.debug(f"📋 【数据库】找到表: {table_name}")
             
