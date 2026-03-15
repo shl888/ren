@@ -212,7 +212,7 @@ class Step3Calc:
             except (ValueError, TypeError, ZeroDivisionError):
                 pass
     
-    # ========== 欧易房间（新写）==========
+    # ========== 欧易房间（修改后）==========
     def _process_okx(self, container: Dict[str, Any]):
         """欧易计算逻辑"""
         
@@ -338,22 +338,22 @@ class Step3Calc:
                 except (ValueError, TypeError, ZeroDivisionError):
                     pass
         
-        # ===== 标记价浮盈百分比 =====
-        mark_upl = self._safe_float(container.get("标记价浮盈"))
-        mark_margin = self._safe_float(container.get("标记价保证金"))
-        if mark_upl is not None and mark_margin is not None and mark_margin != 0:
+        # ===== 标记价浮盈百分比（修改：直接乘以100）=====
+        mark_upl_percent = container.get("标记价浮盈百分比")  # 直接取已有值
+        if mark_upl_percent is not None:
             try:
-                container["标记价浮盈百分比"] = self._round_4((mark_upl / mark_margin) * 100)
-            except (ValueError, TypeError, ZeroDivisionError):
+                # 直接乘以100，转换为百分比
+                container["标记价浮盈百分比"] = self._round_4(float(mark_upl_percent) * 100)
+            except (ValueError, TypeError):
                 pass
-        
-        # ===== 最新价浮盈百分比 =====
-        last_upl = self._safe_float(container.get("最新价浮盈"))
-        last_margin = self._safe_float(container.get("最新价保证金"))
-        if last_upl is not None and last_margin is not None and last_margin != 0:
+
+        # ===== 最新价浮盈百分比（修改：直接乘以100）=====
+        last_upl_percent = container.get("最新价浮盈百分比")  # 直接取已有值
+        if last_upl_percent is not None:
             try:
-                container["最新价浮盈百分比"] = self._round_4((last_upl / last_margin) * 100)
-            except (ValueError, TypeError, ZeroDivisionError):
+                # 直接乘以100，转换为百分比
+                container["最新价浮盈百分比"] = self._round_4(float(last_upl_percent) * 100)
+            except (ValueError, TypeError):
                 pass
         
         # ===== 平仓收益和收益率 =====
