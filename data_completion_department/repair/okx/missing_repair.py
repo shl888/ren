@@ -159,7 +159,7 @@ class OkxMissingRepair:
         old_info = self.current_info
         self.current_info = info  # 覆盖更新
 
-        logger.info(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
+        logger.debug(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
 
         # ===== 根据标签决定开关 =====
         if info == INFO_OKX_MISSING:
@@ -233,7 +233,7 @@ class OkxMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄【欧易持仓缺失修复区】 修复循环开始")
+        logger.debug("🔄【欧易持仓缺失修复区】 修复循环开始")
 
         while self.is_running:
             try:
@@ -314,7 +314,7 @@ class OkxMissingRepair:
         """
         # ----- 第1层：检查缓存 -----
         if self.cache is not None:
-            logger.info("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
+            logger.debug("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
             return True
 
         logger.info("🔍【欧易持仓缺失修复区】 第1步：缓存为空，准备从数据库读取")
@@ -332,7 +332,7 @@ class OkxMissingRepair:
             return False
 
         logger.info("✅【欧易持仓缺失修复区】 成功读取数据库连接信息")
-        logger.info(f"   数据库URL: {db_url}")
+        logger.debug(f"   数据库URL: {db_url}")
 
         # ----- 第3层：测试数据库连接是否成功 -----
         try:
@@ -368,7 +368,7 @@ class OkxMissingRepair:
                         table_name = row[0]
                     all_tables.append(table_name)
             
-            logger.info(f"📋【欧易持仓缺失修复区】 数据库中的所有表: {all_tables}")
+            logger.debug(f"📋【欧易持仓缺失修复区】 数据库中的所有表: {all_tables}")
             
             if 'active_positions' not in all_tables:
                 logger.error("❌【欧易持仓缺失修复区】 数据库中没有 active_positions 表")
@@ -399,7 +399,7 @@ class OkxMissingRepair:
                         column_names.append(col.get('name'))
                     else:
                         column_names.append(col)
-                logger.info(f"   列名: {column_names}")
+                logger.debug(f" 【欧易持仓缺失修复区】  列名: {column_names}")
                 
                 # 打印前几条数据
                 for i, row in enumerate(rows[:3]):  # 只打印前3条
@@ -410,7 +410,7 @@ class OkxMissingRepair:
                                 row_data[col] = row[j].get('value')
                             else:
                                 row_data[col] = row[j]
-                    logger.info(f"   第{i+1}条: {row_data}")
+                    logger.debug(f" 【欧易持仓缺失修复区】  第{i+1}条: {row_data}")
                 
                 # 找出交易所字段的索引位置
                 exchange_idx = None
@@ -429,7 +429,7 @@ class OkxMissingRepair:
                                 exchange = row[exchange_idx]
                             exchanges.append(exchange)
                     
-                    logger.info(f"📋【欧易持仓缺失修复区】 表中的交易所值: {exchanges}")
+                    logger.debug(f"📋【欧易持仓缺失修复区】 表中的交易所值: {exchanges}")
                 else:
                     logger.warning("⚠️【欧易持仓缺失修复区】 找不到'交易所'字段")
             else:
@@ -442,7 +442,7 @@ class OkxMissingRepair:
         try:
             # 先尝试小写 okx
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'okx' LIMIT 1"
-            logger.info(f"🔍【欧易持仓缺失修复区】 执行查询: {sql}")
+            logger.debug(f"🔍【欧易持仓缺失修复区】 执行查询: {sql}")
             
             result = self._query_database(sql, db_url, db_token)
 
@@ -462,14 +462,14 @@ class OkxMissingRepair:
                 found = False
                 
                 for test_exchange in test_exchanges:
-                    logger.info(f"🔍【欧易持仓缺失修复区】 尝试查询: {test_exchange}")
+                    logger.debug(f"🔍【欧易持仓缺失修复区】 尝试查询: {test_exchange}")
                     test_result = self._query_database(
                         f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
                         db_url, db_token
                     )
                     
                     if test_result and test_result.get('rows'):
-                        logger.info(f"✅【欧易持仓缺失修复区】 找到数据！交易所字段实际为: {test_exchange}")
+                        logger.debug(f"✅【欧易持仓缺失修复区】 找到数据！交易所字段实际为: {test_exchange}")
                         rows = test_result.get('rows', [])
                         cols = test_result.get('cols', [])
                         found = True
@@ -489,10 +489,10 @@ class OkxMissingRepair:
             logger.info(f"   ID: {self.cache.get('id')}")
             
             # 打印关键字段
-            logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
-            logger.info(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
-            logger.info(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
-            logger.info(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
+            logger.debug(f"   开仓时间: {self.cache.get('开仓时间')}")
+            logger.debug(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
+            logger.debug(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
+            logger.debug(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
             
             return True
 
@@ -515,7 +515,7 @@ class OkxMissingRepair:
             D. 有历史 + 有新结算 → 返回 'do_fusion'
         ==================================================
         """
-        logger.info("【欧易持仓缺失修复区】第2步：检测资金费状态")
+        logger.debug("【欧易持仓缺失修复区】第2步：检测资金费状态")
 
         # 从门外存储区快照获取最新的欧意数据
         snapshot_data = self._get_okx_from_snapshot()
@@ -603,7 +603,7 @@ class OkxMissingRepair:
             3. 保护4个资金费字段不被覆盖
         ==================================================
         """
-        logger.info("【欧易持仓缺失修复区】第4步：从门外存储区覆盖更新缓存")
+        logger.debug("【欧易持仓缺失修复区】第4步：从门外存储区覆盖更新缓存")
 
         snapshot_data = self._get_okx_from_snapshot()
         if not snapshot_data:
@@ -629,7 +629,7 @@ class OkxMissingRepair:
                 self.cache[key] = value
                 update_count += 1
 
-        logger.info(f" 【欧易持仓缺失修复区】  已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
+        logger.debug(f" 【欧易持仓缺失修复区】  已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
 
     async def _step5_calc_fixed_fields(self):
         """
@@ -668,7 +668,7 @@ class OkxMissingRepair:
             - 不需要从行情数据中获取
         ==================================================
         """
-        logger.info("【欧易持仓缺失修复区】第5步：计算6个固定字段（严格按照原始方案，独立计算）")
+        logger.debug("【欧易持仓缺失修复区】第5步：计算6个固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -689,42 +689,54 @@ class OkxMissingRepair:
 
             # 1. 标记价涨跌盈亏幅 = (标记价 - 开仓价) * 100 / 开仓价
             mark_pnl_percent = (mark_price - open_price) * 100 / open_price if open_price else 0
+            mark_pnl_percent = round(mark_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 2. 最新价涨跌盈亏幅 = (最新价 - 开仓价) * 100 / 开仓价
             latest_pnl_percent = (latest_price - open_price) * 100 / open_price if open_price else 0
+            latest_pnl_percent = round(latest_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 3. 标记价仓位价值 = 标记价 * 合约面值 * 持仓张数
             mark_position_value = mark_price * contract_value * contracts
+            mark_position_value = round(mark_position_value, 4)  # 四舍五入保留4位小数
 
             # 4. 最新价仓位价值 = 最新价 * 合约面值 * 持仓张数
             latest_position_value = latest_price * contract_value * contracts
+            latest_position_value = round(latest_position_value, 4)  # 四舍五入保留4位小数
 
             # 5. 最新价保证金 = 最新价 * 合约面值 * 持仓张数 ÷ 杠杆
             latest_margin = (latest_price * contract_value * contracts / leverage) if leverage else 0
+            latest_margin = round(latest_margin, 4)  # 四舍五入保留4位小数
 
             # 6. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
+            avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
         else:  # direction == "SHORT"
             # 空头 - 严格按照原始公式，独立计算每个字段
 
             # 1. 标记价涨跌盈亏幅 = (开仓价 - 标记价) * 100 / 开仓价
             mark_pnl_percent = (open_price - mark_price) * 100 / open_price if open_price else 0
+            mark_pnl_percent = round(mark_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 2. 最新价涨跌盈亏幅 = (开仓价 - 最新价) * 100 / 开仓价
             latest_pnl_percent = (open_price - latest_price) * 100 / open_price if open_price else 0
+            latest_pnl_percent = round(latest_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 3. 标记价仓位价值 = 标记价 * 合约面值 * 持仓张数
             mark_position_value = mark_price * contract_value * contracts
+            mark_position_value = round(mark_position_value, 4)  # 四舍五入保留4位小数
 
             # 4. 最新价仓位价值 = 最新价 * 合约面值 * 持仓张数
             latest_position_value = latest_price * contract_value * contracts
+            latest_position_value = round(latest_position_value, 4)  # 四舍五入保留4位小数
 
             # 5. 最新价保证金 = 最新价 * 合约面值 * 持仓张数 ÷ 杠杆
             latest_margin = (latest_price * contract_value * contracts / leverage) if leverage else 0
+            latest_margin = round(latest_margin, 4)  # 四舍五入保留4位小数
 
             # 6. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
+            avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
         # 保存计算结果到缓存 - 每个字段只赋值一次
         cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent              # 1. 标记价涨跌盈亏幅
@@ -734,7 +746,7 @@ class OkxMissingRepair:
         cache[FIELD_LATEST_MARGIN] = latest_margin                     # 5. 最新价保证金
         cache[FIELD_AVG_FUNDING_RATE] = avg_funding_rate               # 6. 平均资金费率
 
-        logger.info(f"  【欧易持仓缺失修复区】 计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
+        logger.debug(f"  【欧易持仓缺失修复区】 计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
                    f"标记价仓位价值: {mark_position_value:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
                    f"最新价保证金: {latest_margin:.2f}, "
@@ -752,7 +764,7 @@ class OkxMissingRepair:
             3. 推送给调度器
         ==================================================
         """
-        logger.info("【欧易持仓缺失修复区】第6步：打标签推送")
+        logger.debug("【欧易持仓缺失修复区】第6步：打标签推送")
 
         data_copy = self.cache.copy()
 
