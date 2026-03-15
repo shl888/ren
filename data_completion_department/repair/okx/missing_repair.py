@@ -256,7 +256,7 @@ class OkxMissingRepair:
 
     async def _repair_once(self):
         """
-        执行一次修复流程
+        执行一轮修复流程
         ==================================================
         完全按照你的6步设计文档：
             第1步：获取缓存数据
@@ -267,7 +267,7 @@ class OkxMissingRepair:
             第6步：打标签推送
         ==================================================
         """
-        logger.debug("执行一次欧意持仓缺失修复")
+        logger.debug("执行一轮欧意持仓缺失修复")
 
         if not await self._step1_get_cache():
             logger.error("❌【欧易持仓缺失修复区】 第1步失败：无法获取缓存数据，本次修复终止")
@@ -290,7 +290,7 @@ class OkxMissingRepair:
         await self._step5_calc_fixed_fields()
         await self._step6_push_complete()
 
-        logger.debug("【欧易持仓缺失修复区】一次修复流程执行完成")
+        logger.debug("【欧易持仓缺失修复区】一轮修复流程执行完成")
 
     # ==================== 6步修复流程 ====================
 
@@ -319,7 +319,7 @@ class OkxMissingRepair:
         """
         # ----- 第1层：检查缓存 -----
         if self.cache is not None:
-            logger.debug("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
+            logger.info("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
             return True
 
         logger.info("🔍【欧易持仓缺失修复区】 第1步：缓存为空，准备从数据库读取")
@@ -337,7 +337,7 @@ class OkxMissingRepair:
             return False
 
         logger.info("✅【欧易持仓缺失修复区】 成功读取数据库连接信息")
-        logger.debug(f"   数据库URL: {db_url}")
+        logger.info(f"   数据库URL: {db_url}")
 
         # ----- 第3层：测试数据库连接（执行简单查询）-----
         try:
@@ -424,7 +424,7 @@ class OkxMissingRepair:
         try:
             # 先尝试小写 okx
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'okx' LIMIT 1"
-            logger.debug(f"🔍【欧易持仓缺失修复区】 执行查询: {sql}")
+            logger.info(f"🔍【欧易持仓缺失修复区】 执行查询: {sql}")
             
             result = self._query_database(sql, db_url, db_token)
 
@@ -444,7 +444,7 @@ class OkxMissingRepair:
                 found = False
                 
                 for test_exchange in test_exchanges:
-                    logger.debug(f"🔍【欧易持仓缺失修复区】 尝试查询: {test_exchange}")
+                    logger.info(f"🔍【欧易持仓缺失修复区】 尝试查询: {test_exchange}")
                     test_result = self._query_database(
                         f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
                         db_url, db_token
@@ -471,10 +471,10 @@ class OkxMissingRepair:
             logger.info(f"   ID: {self.cache.get('id')}")
             
             # 打印关键字段（DEBUG级别）
-            logger.debug(f"   开仓时间: {self.cache.get('开仓时间')}")
-            logger.debug(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
-            logger.debug(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
-            logger.debug(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
+            logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
+            logger.info(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
+            logger.info(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
+            logger.info(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
             
             return True
 
@@ -497,7 +497,7 @@ class OkxMissingRepair:
             D. 有历史 + 有新结算 → 返回 'do_fusion'
         ==================================================
         """
-        logger.debug("【欧易持仓缺失修复区】第2步：检测资金费状态")
+        logger.info("【欧易持仓缺失修复区】第2步：检测资金费状态")
 
         # 从门外存储区快照获取最新的欧意数据
         snapshot_data = self._get_okx_from_snapshot()
@@ -522,17 +522,17 @@ class OkxMissingRepair:
         self._snapshot_data = snapshot_data
 
         if not has_history and not has_new:
-            logger.debug(" 【欧易持仓缺失修复区】  情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.info(" 【欧易持仓缺失修复区】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         elif not has_history and has_new:
-            logger.debug(" 【欧易持仓缺失修复区】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.info(" 【欧易持仓缺失修复区】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
         elif has_history and not has_new:
-            logger.debug(" 【欧易持仓缺失修复区】  情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.info(" 【欧易持仓缺失修复区】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         else:
-            logger.debug(" 【欧易持仓缺失修复区】  情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.info(" 【欧易持仓缺失修复区】  情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -547,7 +547,7 @@ class OkxMissingRepair:
             3. 资金费结算次数 = 门外存储区次数 + 缓存次数
         ==================================================
         """
-        logger.debug("【欧易持仓缺失修复区】第3步：执行资金费融合")
+        logger.info("【欧易持仓缺失修复区】第3步：执行资金费融合")
 
         snapshot = self._snapshot_data
         cache = self.cache
@@ -571,7 +571,7 @@ class OkxMissingRepair:
         # 4. 资金费结算次数相加
         cache[FIELD_FUNDING_COUNT] = snapshot_count + cache_count
 
-        logger.debug(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
+        logger.info(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
                    f"本次资金费: {cache[FIELD_FUNDING_THIS]}, "
                    f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
 
@@ -585,7 +585,7 @@ class OkxMissingRepair:
             3. 保护4个资金费字段不被覆盖
         ==================================================
         """
-        logger.debug("【欧易持仓缺失修复区】第4步：从门外存储区覆盖更新缓存")
+        logger.info("【欧易持仓缺失修复区】第4步：从门外存储区覆盖更新缓存")
 
         snapshot_data = self._get_okx_from_snapshot()
         if not snapshot_data:
@@ -611,7 +611,7 @@ class OkxMissingRepair:
                 self.cache[key] = value
                 update_count += 1
 
-        logger.debug(f" 【欧易持仓缺失修复区】  已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
+        logger.info(f" 【欧易持仓缺失修复区】  已覆盖 {update_count} 个字段，跳过 {skip_count} 个保护字段")
 
     async def _step5_calc_fixed_fields(self):
         """
@@ -650,7 +650,7 @@ class OkxMissingRepair:
             - 不需要从行情数据中获取
         ==================================================
         """
-        logger.debug("【欧易持仓缺失修复区】第5步：计算6个固定字段（严格按照原始方案，独立计算）")
+        logger.info("【欧易持仓缺失修复区】第5步：计算6个固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -716,7 +716,7 @@ class OkxMissingRepair:
         cache[FIELD_LATEST_MARGIN] = latest_margin                     # 5. 最新价保证金
         cache[FIELD_AVG_FUNDING_RATE] = avg_funding_rate               # 6. 平均资金费率
 
-        logger.debug(f"  【欧易持仓缺失修复区】 计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
+        logger.info(f"  【欧易持仓缺失修复区】 计算完成 - 标记价: {mark_price}, 最新价: {latest_price}, "
                    f"标记价仓位价值: {mark_position_value:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
                    f"最新价保证金: {latest_margin:.2f}, "
@@ -734,7 +734,7 @@ class OkxMissingRepair:
             3. 推送给调度器
         ==================================================
         """
-        logger.debug("【欧易持仓缺失修复区】第6步：打标签推送")
+        logger.info("【欧易持仓缺失修复区】第6步：打标签推送")
 
         data_copy = self.cache.copy()
 
