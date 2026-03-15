@@ -126,17 +126,9 @@ class OkxMissingRepair:
         # 只存1条数据，覆盖更新
         self.cache = None              # 类型: Dict or None
 
-        # ===== 数据库连接信息（从环境变量读取）=====
-        # 修复区需要直接读取数据库，不经过database.py
-        self.db_url = os.getenv('TURSO_DATABASE_URL')
-        self.db_token = os.getenv('TURSO_DATABASE_TOKEN')
-
-        if not self.db_url or not self.db_token:
-            logger.error("❌【欧易持仓缺失修复区】 环境变量TURSO_DATABASE_URL和TURSO_DATABASE_TOKEN未设置")
-
-        # ===== 测试数据库连接 =====
-        if self.db_url and self.db_token:
-            self._test_database_connection()
+        # ===== 【修改】不再在初始化时读取和存储数据库连接信息 =====
+        # 数据库连接改为按需使用，只在第1步缓存为空时才读取环境变量
+        # 这样可以避免不必要的数据库连接，也符合"用完即弃"的原则
 
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
@@ -306,86 +298,188 @@ class OkxMissingRepair:
         """
         第1步：获取缓存数据
         ==================================================
-        规则：
-            - 如果已经有缓存，直接用
-            - 如果没有缓存，从数据库持仓区读取1条欧意数据
+        【修改说明】
+        按照"按需连接"原则重构：
+            1. 先检查缓存是否有数据
+            2. 如果有缓存，直接使用，不需要连接数据库
+            3. 如果没缓存，才去连接数据库读取
 
-        数据库查询：
-            SELECT * FROM active_positions WHERE 交易所 = 'okx'
+        【日志分级】
+            - INFO: 关键步骤（是否拿到令牌、是否连接成功、是否有数据）
+            - DEBUG: 详细信息（具体查询了什么、返回了什么）
+            - ERROR: 失败原因
 
-        注意：
-            数据库表字段全是中文，SQL必须用中文字段名
+        【5层检查】
+            第1层：是否拿到环境变量
+            第2层：数据库连接是否成功
+            第3层：持仓表是否存在
+            第4层：表中有什么数据
+            第5层：是否找到欧意数据并提取成功
         ==================================================
         """
+        # ----- 第1层：检查缓存 -----
         if self.cache is not None:
             logger.debug("✅【欧易持仓缺失修复区】 第1步：使用现有缓存")
             return True
 
-        logger.debug("【欧易持仓缺失修复区】第1步：缓存为空，从数据库读取欧意持仓数据")
+        logger.info("🔍【欧易持仓缺失修复区】 第1步：缓存为空，准备从数据库读取")
 
-        if not self.db_url or not self.db_token:
-            logger.error("❌【欧易持仓缺失修复区】 数据库连接信息不完整，无法读取")
+        # ----- 第2层：获取数据库连接信息（按需读取环境变量）-----
+        db_url = os.getenv('TURSO_DATABASE_URL')
+        db_token = os.getenv('TURSO_DATABASE_TOKEN')
+
+        if not db_url:
+            logger.error("❌【欧易持仓缺失修复区】 环境变量 TURSO_DATABASE_URL 未设置")
+            return False
+        
+        if not db_token:
+            logger.error("❌【欧易持仓缺失修复区】 环境变量 TURSO_DATABASE_TOKEN 未设置")
             return False
 
-        try:
-            # ===== 调试代码开始 =====
-            logger.info("=" * 60)
-            logger.info("🔍【欧易持仓缺失修复区】【数据库调试】开始诊断")
-            
-            # 测试 0：表结构
-            sql_pragma = "PRAGMA table_info(active_positions)"
-            result_pragma = self._query_database(sql_pragma)
-            logger.info(f"📋 【欧易持仓缺失修复区】表结构: {result_pragma}")
-            
-            # 测试 1：所有数据
-            sql_all = "SELECT 交易所, 开仓合约名 FROM active_positions"
-            result_all = self._query_database(sql_all)
-            logger.info(f"📊 【欧易持仓缺失修复区】所有数据: {result_all}")
-            
-            # 测试 2：小写 okx
-            sql_lower = "SELECT * FROM active_positions WHERE 交易所 = 'okx'"
-            result_lower = self._query_database(sql_lower)
-            logger.info(f"🔍【欧易持仓缺失修复区】 查询 'okx': {result_lower}")
-            
-            # 测试 3：大写 OKX
-            sql_upper = "SELECT * FROM active_positions WHERE 交易所 = 'OKX'"
-            result_upper = self._query_database(sql_upper)
-            logger.info(f"🔍【欧易持仓缺失修复区】 查询 'OKX': {result_upper}")
-            
-            # 测试 4：不区分大小写
-            sql_ci = "SELECT * FROM active_positions WHERE 交易所 COLLATE NOCASE = 'okx'"
-            result_ci = self._query_database(sql_ci)
-            logger.info(f"🔍 【欧易持仓缺失修复区】不区分大小写: {result_ci}")
-            
-            # 测试 5：用 id 查（更精确）
-            sql_id = "SELECT * FROM active_positions WHERE id LIKE 'okx_%' LIMIT 1"
-            result_id = self._query_database(sql_id)
-            logger.info(f"🔍 【欧易持仓缺失修复区】用id前缀查: {result_id}")
-            
-            logger.info("=" * 60)
-            # ===== 调试代码结束 =====
+        logger.info("✅【欧易持仓缺失修复区】 成功读取数据库连接信息")
+        logger.debug(f"   数据库URL: {db_url}")
 
+        # ----- 第3层：测试数据库连接（执行简单查询）-----
+        try:
+            # 使用 SELECT 1 测试连接
+            test_result = self._query_database("SELECT 1", db_url, db_token)
+            
+            # 检查是否真的拿到数据
+            if not test_result:
+                logger.error("❌【欧易持仓缺失修复区】 数据库连接失败：查询返回空结果")
+                return False
+            
+            rows = test_result.get('rows', [])
+            if not rows or len(rows) == 0:
+                logger.error("❌【欧易持仓缺失修复区】 数据库连接失败：无法执行查询")
+                return False
+            
+            logger.info("✅【欧易持仓缺失修复区】 数据库连接成功")
+        except Exception as e:
+            logger.error(f"❌【欧易持仓缺失修复区】 数据库连接异常: {e}")
+            return False
+
+        # ----- 第4层：检查持仓表是否存在 -----
+        try:
+            table_check = self._query_database(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='active_positions'", 
+                db_url, db_token
+            )
+            
+            if not table_check:
+                logger.error("❌【欧易持仓缺失修复区】 检查持仓表失败：查询返回空")
+                return False
+            
+            table_rows = table_check.get('rows', [])
+            if not table_rows:
+                logger.error("❌【欧易持仓缺失修复区】 数据库中没有 active_positions 表")
+                return False
+            
+            logger.info("✅【欧易持仓缺失修复区】 持仓表存在")
+        except Exception as e:
+            logger.error(f"❌【欧易持仓缺失修复区】 检查持仓表失败: {e}")
+            return False
+
+        # ----- 第5层：查看表中所有数据（调试用，帮助定位问题）-----
+        try:
+            all_data = self._query_database(
+                "SELECT 交易所, 开仓合约名, id FROM active_positions", 
+                db_url, db_token
+            )
+            
+            if all_data and all_data.get('rows'):
+                rows = all_data.get('rows', [])
+                cols = all_data.get('cols', [])
+                
+                logger.info(f"📊【欧易持仓缺失修复区】 持仓表中共有 {len(rows)} 条数据")
+                
+                # 找出交易所字段的索引位置
+                exchange_idx = None
+                for i, col in enumerate(cols):
+                    col_name = col.get('name') if isinstance(col, dict) else col
+                    if col_name == '交易所':
+                        exchange_idx = i
+                        break
+                
+                if exchange_idx is not None:
+                    exchanges = []
+                    for row in rows:
+                        if row and len(row) > exchange_idx:
+                            # 解析Turso的数据格式：{"type": "text", "value": "值"}
+                            if isinstance(row[exchange_idx], dict):
+                                exchange = row[exchange_idx].get('value')
+                            else:
+                                exchange = row[exchange_idx]
+                            exchanges.append(exchange)
+                    
+                    logger.info(f"📋【欧易持仓缺失修复区】 表中的交易所值: {exchanges}")
+                else:
+                    logger.warning("⚠️【欧易持仓缺失修复区】 找不到'交易所'字段")
+            else:
+                logger.warning("⚠️【欧易持仓缺失修复区】 持仓表是空的")
+        except Exception as e:
+            logger.warning(f"⚠️【欧易持仓缺失修复区】 查询所有数据失败: {e}")
+
+        # ----- 第6层：查询欧意数据（尝试不同写法）-----
+        try:
+            # 先尝试小写 okx
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'okx' LIMIT 1"
-            result = self._query_database(sql)
+            logger.debug(f"🔍【欧易持仓缺失修复区】 执行查询: {sql}")
+            
+            result = self._query_database(sql, db_url, db_token)
 
             if not result:
-                logger.warning("⚠️【欧易持仓缺失修复区】 数据库查询失败或无数据")
+                logger.error("❌【欧易持仓缺失修复区】 查询返回空结果")
                 return False
 
             rows = result.get('rows', [])
             cols = result.get('cols', [])
+            
+            # 如果没有找到数据，尝试其他可能的写法
             if not rows:
-                logger.warning("⚠️【欧易持仓缺失修复区】 数据库中没有欧意持仓数据")
-                return False
+                logger.warning("⚠️【欧易持仓缺失修复区】 查询成功，但没有找到交易所为 'okx' 的数据")
+                
+                # 尝试其他可能的交易所名称
+                test_exchanges = ['OKX', 'Okx', 'okex', 'OKEX', '欧意', '欧易']
+                found = False
+                
+                for test_exchange in test_exchanges:
+                    logger.debug(f"🔍【欧易持仓缺失修复区】 尝试查询: {test_exchange}")
+                    test_result = self._query_database(
+                        f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
+                        db_url, db_token
+                    )
+                    
+                    if test_result and test_result.get('rows'):
+                        logger.info(f"✅【欧易持仓缺失修复区】 找到数据！交易所字段实际为: {test_exchange}")
+                        rows = test_result.get('rows', [])
+                        cols = test_result.get('cols', [])
+                        found = True
+                        break
+                
+                if not found:
+                    logger.error("❌【欧易持仓缺失修复区】 尝试了所有可能的交易所名称，都没有找到数据")
+                    return False
 
+            # ----- 第7层：提取数据到缓存 -----
             row = rows[0]
             self.cache = self._row_to_dict(row, cols)
 
-            logger.debug(f"✅【欧易持仓缺失修复区】 第1步：从数据库读取到欧意数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"✅【欧易持仓缺失修复区】 第1步：成功读取到欧意数据")
+            logger.info(f"   交易所: {self.cache.get(FIELD_EXCHANGE)}")
+            logger.info(f"   开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"   ID: {self.cache.get('id')}")
+            
+            # 打印关键字段（DEBUG级别）
+            logger.debug(f"   开仓时间: {self.cache.get('开仓时间')}")
+            logger.debug(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
+            logger.debug(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
+            logger.debug(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
+            
             return True
 
         except Exception as e:
-            logger.error(f"❌【欧易持仓缺失修复区】 第1步：读取数据库失败: {e}")
+            logger.error(f"❌【欧易持仓缺失修复区】 第1步：读取数据库失败: {e}", exc_info=True)
             return False
 
     async def _step2_check_funding(self) -> Optional[str]:
@@ -681,12 +775,22 @@ class OkxMissingRepair:
         # 返回实际的业务数据
         return okx_item.get('data')
 
-    def _query_database(self, sql: str, params: List = None) -> Optional[Dict]:
+    def _query_database(self, sql: str, db_url: str, db_token: str, params: List = None) -> Optional[Dict]:
         """
         查询Turso数据库
         ==================================================
+        【修改说明】
+        接收数据库连接信息作为参数，而不是使用实例变量。
+        这样符合"按需连接、用完即弃"的原则。
+
         执行SQL查询，返回结果。
         如果查询失败，返回None并记录错误。
+
+        :param sql: SQL查询语句
+        :param db_url: 数据库URL
+        :param db_token: 数据库令牌
+        :param params: 查询参数列表
+        :return: 查询结果字典，失败返回None
         ==================================================
         """
         if params is None:
@@ -718,82 +822,7 @@ class OkxMissingRepair:
 
         try:
             response = requests.post(
-                f"{self.db_url}/v2/pipeline",
+                f"{db_url}/v2/pipeline",  # 使用传入的db_url
                 headers={
-                    "Authorization": f"Bearer {self.db_token}",
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=10
-            )
-            response.raise_for_status()
-            result = response.json()
-
-            if result and 'results' in result and len(result['results']) > 0:
-                return result['results'][0].get('result', {})
-            return None
-
-        except requests.exceptions.Timeout:
-            logger.error(f"❌ 【欧易持仓缺失修复区】数据库查询超时: {sql[:50]}...")
-            return None
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ 【欧易持仓缺失修复区】数据库请求失败: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"❌【欧易持仓缺失修复区】 数据库查询未知错误: {e}")
-            return None
-
-    def _row_to_dict(self, row: List, cols: List) -> Dict:
-        """
-        将数据库行转换为字典
-        ==================================================
-        Turso返回的数据格式：
-            cols: [{"name": "字段名"}, ...]
-            rows: [[{"value": "值"}, ...], ...]
-        ==================================================
-        """
-        result = {}
-        for i, col in enumerate(cols):
-            if i < len(row):
-                col_name = col.get('name') if isinstance(col, dict) else col
-                value_cell = row[i]
-                if isinstance(value_cell, dict):
-                    value = value_cell.get('value')
-                else:
-                    value = value_cell
-                result[col_name] = value
-        return result
-
-    def _update_funding_fields(self, snapshot_data: Dict):
-        """
-        更新4个资金费字段（用于情况B）
-        ==================================================
-        当无历史但有新结算时，直接把存储区的4个资金费字段
-        覆盖到缓存。
-        ==================================================
-        """
-        fields = [
-            FIELD_FUNDING_THIS,
-            FIELD_FUNDING_TOTAL,
-            FIELD_FUNDING_COUNT,
-            FIELD_FUNDING_TIME
-        ]
-
-        update_count = 0
-        for field in fields:
-            if field in snapshot_data and snapshot_data[field] is not None:
-                self.cache[field] = snapshot_data[field]
-                update_count += 1
-
-        logger.debug(f" 【欧易持仓缺失修复区】  已更新 {update_count} 个资金费字段")
-
-    def _test_database_connection(self):
-        """测试数据库连接是否正常"""
-        try:
-            result = self._query_database("SELECT 1")
-            if result:
-                logger.info("✅【欧易持仓缺失修复区】 数据库连接测试成功")
-            else:
-                logger.warning("⚠️【欧易持仓缺失修复区】 数据库连接测试返回空结果")
-        except Exception as e:
-            logger.error(f"❌ 数据库连接测试失败: {e}")
+                    "Authorization": f"Bearer {db_token}",  # 使用传入的db_token
+                    "Content-Type":
