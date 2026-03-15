@@ -304,11 +304,6 @@ class OkxMissingRepair:
             2. 如果有缓存，直接使用，不需要连接数据库
             3. 如果没缓存，才去连接数据库读取
 
-        【日志分级】
-            - INFO: 关键步骤（是否拿到令牌、是否连接成功、是否有数据）
-            - DEBUG: 详细信息（具体查询了什么、返回了什么）
-            - ERROR: 失败原因
-
         【5层检查】
             第1层：是否拿到环境变量
             第2层：数据库连接是否成功
@@ -339,21 +334,12 @@ class OkxMissingRepair:
         logger.info("✅【欧易持仓缺失修复区】 成功读取数据库连接信息")
         logger.info(f"   数据库URL: {db_url}")
 
-        # ----- 第3层：测试数据库连接（执行简单查询）-----
+        # ----- 第3层：测试数据库连接是否成功 -----
         try:
-            # 使用 SELECT 1 测试连接
             test_result = self._query_database("SELECT 1", db_url, db_token)
-            
-            # 检查是否真的拿到数据
-            if not test_result:
-                logger.error("❌【欧易持仓缺失修复区】 数据库连接失败：查询返回空结果")
+            if test_result is None:
+                logger.error("❌【欧易持仓缺失修复区】 数据库连接失败（网络问题或令牌错误）")
                 return False
-            
-            rows = test_result.get('rows', [])
-            if not rows or len(rows) == 0:
-                logger.error("❌【欧易持仓缺失修复区】 数据库连接失败：无法执行查询")
-                return False
-            
             logger.info("✅【欧易持仓缺失修复区】 数据库连接成功")
         except Exception as e:
             logger.error(f"❌【欧易持仓缺失修复区】 数据库连接异常: {e}")
@@ -366,8 +352,8 @@ class OkxMissingRepair:
                 db_url, db_token
             )
             
-            if not table_check:
-                logger.error("❌【欧易持仓缺失修复区】 检查持仓表失败：查询返回空")
+            if table_check is None:
+                logger.error("❌【欧易持仓缺失修复区】 查询持仓表失败")
                 return False
             
             table_rows = table_check.get('rows', [])
@@ -419,6 +405,7 @@ class OkxMissingRepair:
                 logger.warning("⚠️【欧易持仓缺失修复区】 持仓表是空的")
         except Exception as e:
             logger.warning(f"⚠️【欧易持仓缺失修复区】 查询所有数据失败: {e}")
+            # 继续执行，不因为调试查询失败而终止
 
         # ----- 第6层：查询欧意数据（尝试不同写法）-----
         try:
@@ -428,8 +415,8 @@ class OkxMissingRepair:
             
             result = self._query_database(sql, db_url, db_token)
 
-            if not result:
-                logger.error("❌【欧易持仓缺失修复区】 查询返回空结果")
+            if result is None:
+                logger.error("❌【欧易持仓缺失修复区】 查询欧意数据失败")
                 return False
 
             rows = result.get('rows', [])
@@ -470,7 +457,7 @@ class OkxMissingRepair:
             logger.info(f"   开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
             logger.info(f"   ID: {self.cache.get('id')}")
             
-            # 打印关键字段（DEBUG级别）
+            # 打印关键字段
             logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
             logger.info(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
             logger.info(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
@@ -515,8 +502,8 @@ class OkxMissingRepair:
             snapshot_total = 0
         has_new = (snapshot_total != cache_total)
 
-        logger.debug(f" 【欧易持仓缺失修复区】  缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
-        logger.debug(f" 【欧易持仓缺失修复区】  有无历史: {has_history}, 有无新结算: {has_new}")
+        logger.info(f" 【欧易持仓缺失修复区】  缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
+        logger.info(f" 【欧易持仓缺失修复区】  有无历史: {has_history}, 有无新结算: {has_new}")
 
         # 保存门外数据供后续步骤使用
         self._snapshot_data = snapshot_data
@@ -822,9 +809,9 @@ class OkxMissingRepair:
 
         try:
             response = requests.post(
-                f"{db_url}/v2/pipeline",  # 使用传入的db_url
+                f"{db_url}/v2/pipeline",
                 headers={
-                    "Authorization": f"Bearer {db_token}",  # 使用传入的db_token
+                    "Authorization": f"Bearer {db_token}",
                     "Content-Type": "application/json"
                 },
                 json=payload,
@@ -846,4 +833,47 @@ class OkxMissingRepair:
         except Exception as e:
             logger.error(f"❌【欧易持仓缺失修复区】 数据库查询未知错误: {e}")
             return None
-    
+
+    def _row_to_dict(self, row: List, cols: List) -> Dict:
+        """
+        将数据库行转换为字典
+        ==================================================
+        Turso返回的数据格式：
+            cols: [{"name": "字段名"}, ...]
+            rows: [[{"value": "值"}, ...], ...]
+        ==================================================
+        """
+        result = {}
+        for i, col in enumerate(cols):
+            if i < len(row):
+                col_name = col.get('name') if isinstance(col, dict) else col
+                value_cell = row[i]
+                if isinstance(value_cell, dict):
+                    value = value_cell.get('value')
+                else:
+                    value = value_cell
+                result[col_name] = value
+        return result
+
+    def _update_funding_fields(self, snapshot_data: Dict):
+        """
+        更新4个资金费字段（用于情况B）
+        ==================================================
+        当无历史但有新结算时，直接把存储区的4个资金费字段
+        覆盖到缓存。
+        ==================================================
+        """
+        fields = [
+            FIELD_FUNDING_THIS,
+            FIELD_FUNDING_TOTAL,
+            FIELD_FUNDING_COUNT,
+            FIELD_FUNDING_TIME
+        ]
+
+        update_count = 0
+        for field in fields:
+            if field in snapshot_data and snapshot_data[field] is not None:
+                self.cache[field] = snapshot_data[field]
+                update_count += 1
+
+        logger.info(f" 【欧易持仓缺失修复区】  已更新 {update_count} 个资金费字段")
