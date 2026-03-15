@@ -314,6 +314,10 @@ class BinanceSemiRepair:
         # 保存到缓存
         self.cache = binance_data.copy()
         logger.info(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+        # 在 self.cache = binance_data.copy() 之后加一行
+        logger.info(f"🔥 【币安修复区】【半成品修复】缓存数据中的字段: {list(self.cache.keys())}")
+        logger.info(f"🔥 【币安修复区】【半成品修复】杠杆值: {self.cache.get(FIELD_LEVERAGE)}")
+        logger.info(f"🔥 【币安修复区】【半成品修复】开仓保证金: {self.cache.get(FIELD_OPEN_MARGIN)}")
         return True
 
     async def _step2_get_prices(self) -> bool:
@@ -411,9 +415,9 @@ class BinanceSemiRepair:
         direction = cache.get(FIELD_OPEN_DIRECTION)
 
         # === 调试日志：打印关键变量的值和类型 ===
-        logger.info(f"🔥【DEBUG】position_size={position_size}, 类型={type(position_size)}")
-        logger.info(f"🔥【DEBUG】leverage={leverage}, 类型={type(leverage)}, 布尔值={bool(leverage)}")
-        logger.info(f"🔥【DEBUG】open_margin={open_margin}, 类型={type(open_margin)}, 布尔值={bool(open_margin)}")
+        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】position_size={position_size}, 类型={type(position_size)}")
+        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】leverage={leverage}, 类型={type(leverage)}, 布尔值={bool(leverage)}")
+        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】open_margin={open_margin}, 类型={type(open_margin)}, 布尔值={bool(open_margin)}")
         
         # === 确保所有数值类型正确 ===
         try:
