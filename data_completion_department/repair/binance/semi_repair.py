@@ -242,7 +242,7 @@ class BinanceSemiRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄【币安修复区】【半成品修复】 修复循环开始")
+        logger.debug("🔄【币安修复区】【半成品修复】 修复循环开始")
 
         while self.is_running:
             try:
@@ -286,7 +286,7 @@ class BinanceSemiRepair:
         if not step1_success:
             # step1失败只有一种情况：杠杆字段为空，数据未就绪
             # 这是正常现象，等待下次循环即可
-            logger.debug("⏳【币安修复区】【半成品修复】 数据未就绪（杠杆为空），跳过本次修复，等待下次循环")
+            logger.info("⏳【币安修复区】【半成品修复】 数据未就绪（杠杆为空），跳过本次修复，等待下次循环")
             return
 
         # 第2步：获取行情数据（必须成功，否则无法修复）
@@ -394,7 +394,7 @@ class BinanceSemiRepair:
         self.cache[FIELD_LATEST_PRICE] = latest_price
         self.cache[FIELD_MARK_PRICE] = mark_price
 
-        logger.info(f"✅ 【币安修复区】【半成品修复】第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
+        logger.debug(f"✅ 【币安修复区】【半成品修复】第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
         return True
 
     async def _step3_calc_fields(self):
@@ -434,7 +434,7 @@ class BinanceSemiRepair:
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
         ==================================================
         """
-        logger.info("【币安修复区】【半成品修复】第3步：计算6个字段（按条跳过）")
+        logger.debug("【币安修复区】【半成品修复】第3步：计算6个字段（按条跳过）")
 
         cache = self.cache
 
@@ -457,137 +457,137 @@ class BinanceSemiRepair:
             if all(v is not None for v in [mark_price, open_price]) and open_price != 0:
                 try:
                     mark_pnl_percent = (float(mark_price) - float(open_price)) * 100 / float(open_price)
-                    cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
+                    cache[FIELD_MARK_PNL_PERCENT] = round(mark_pnl_percent, 4)
                     calc_success.append("标记价涨跌盈亏幅")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 标记价涨跌盈亏幅计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 标记价涨跌盈亏幅计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
             # ---------- 2. 最新价涨跌盈亏幅 ----------
             if all(v is not None for v in [latest_price, open_price]) and open_price != 0:
                 try:
                     latest_pnl_percent = (float(latest_price) - float(open_price)) * 100 / float(open_price)
-                    cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent
+                    cache[FIELD_LATEST_PNL_PERCENT] = round(latest_pnl_percent, 4)
                     calc_success.append("最新价涨跌盈亏幅")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价涨跌盈亏幅计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价涨跌盈亏幅计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
             # ---------- 3. 最新价保证金 ----------
             if all(v is not None for v in [latest_price, position_size, leverage]) and leverage != 0:
                 try:
                     latest_margin = (float(latest_price) * float(position_size)) / float(leverage)
-                    cache[FIELD_LATEST_MARGIN] = latest_margin
+                    cache[FIELD_LATEST_MARGIN] = round(latest_margin, 4)
                     calc_success.append("最新价保证金")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价保证金计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价保证金计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价保证金：缺少必要字段或杠杆为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价保证金：缺少必要字段或杠杆为0")
 
             # ---------- 4. 最新价仓位价值 ----------
             if all(v is not None for v in [latest_price, position_size]):
                 try:
                     latest_position_value = float(latest_price) * float(position_size)
-                    cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value
+                    cache[FIELD_LATEST_POSITION_VALUE] = round(latest_position_value, 4)
                     calc_success.append("最新价仓位价值")
                 except (TypeError, ValueError) as e:
-                    logger.debug(f"⚠️ 最新价仓位价值计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价仓位价值计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价仓位价值：缺少必要字段")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价仓位价值：缺少必要字段")
 
             # ---------- 5. 最新价浮盈 ----------
             if all(v is not None for v in [latest_price, position_size, open_position_value]):
                 try:
                     latest_pnl = (float(latest_price) * float(position_size)) - float(open_position_value)
-                    cache[FIELD_LATEST_PNL] = latest_pnl
+                    cache[FIELD_LATEST_PNL] = round(latest_pnl, 4)
                     calc_success.append("最新价浮盈")
                 except (TypeError, ValueError) as e:
-                    logger.debug(f"⚠️ 最新价浮盈计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价浮盈计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价浮盈：缺少必要字段")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价浮盈：缺少必要字段")
 
             # ---------- 6. 最新价浮盈百分比 ----------
             if all(v is not None for v in [latest_price, position_size, open_position_value, open_margin]) and open_margin != 0:
                 try:
                     latest_pnl_percent_of_margin = ((float(latest_price) * float(position_size) - float(open_position_value)) * 100) / float(open_margin)
-                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
+                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = round(latest_pnl_percent_of_margin, 4)
                     calc_success.append("最新价浮盈百分比")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价浮盈百分比计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价浮盈百分比计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
 
         else:  # direction == "SHORT" (包括默认情况)
             # ---------- 1. 标记价涨跌盈亏幅 ----------
             if all(v is not None for v in [mark_price, open_price]) and open_price != 0:
                 try:
                     mark_pnl_percent = (float(open_price) - float(mark_price)) * 100 / float(open_price)
-                    cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
+                    cache[FIELD_MARK_PNL_PERCENT] = round(mark_pnl_percent, 4)
                     calc_success.append("标记价涨跌盈亏幅")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 标记价涨跌盈亏幅计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 标记价涨跌盈亏幅计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
             # ---------- 2. 最新价涨跌盈亏幅 ----------
             if all(v is not None for v in [latest_price, open_price]) and open_price != 0:
                 try:
                     latest_pnl_percent = (float(open_price) - float(latest_price)) * 100 / float(open_price)
-                    cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent
+                    cache[FIELD_LATEST_PNL_PERCENT] = round(latest_pnl_percent, 4)
                     calc_success.append("最新价涨跌盈亏幅")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价涨跌盈亏幅计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价涨跌盈亏幅计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
             # ---------- 3. 最新价保证金 ----------
             if all(v is not None for v in [latest_price, position_size, leverage]) and leverage != 0:
                 try:
                     latest_margin = (float(latest_price) * float(position_size)) / float(leverage)
-                    cache[FIELD_LATEST_MARGIN] = latest_margin
+                    cache[FIELD_LATEST_MARGIN] = round(latest_margin, 4)
                     calc_success.append("最新价保证金")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价保证金计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价保证金计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价保证金：缺少必要字段或杠杆为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价保证金：缺少必要字段或杠杆为0")
 
             # ---------- 4. 最新价仓位价值 ----------
             if all(v is not None for v in [latest_price, position_size]):
                 try:
                     latest_position_value = float(latest_price) * float(position_size)
-                    cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value
+                    cache[FIELD_LATEST_POSITION_VALUE] = round(latest_position_value, 4)
                     calc_success.append("最新价仓位价值")
                 except (TypeError, ValueError) as e:
-                    logger.debug(f"⚠️ 最新价仓位价值计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价仓位价值计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价仓位价值：缺少必要字段")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价仓位价值：缺少必要字段")
 
             # ---------- 5. 最新价浮盈 ----------
             if all(v is not None for v in [latest_price, position_size, open_position_value]):
                 try:
                     latest_pnl = float(open_position_value) - (float(latest_price) * float(position_size))
-                    cache[FIELD_LATEST_PNL] = latest_pnl
+                    cache[FIELD_LATEST_PNL] = round(latest_pnl, 4)
                     calc_success.append("最新价浮盈")
                 except (TypeError, ValueError) as e:
-                    logger.debug(f"⚠️ 最新价浮盈计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价浮盈计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价浮盈：缺少必要字段")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价浮盈：缺少必要字段")
 
             # ---------- 6. 最新价浮盈百分比 ----------
             if all(v is not None for v in [latest_price, position_size, open_position_value, open_margin]) and open_margin != 0:
                 try:
                     latest_pnl_percent_of_margin = ((float(open_position_value) - (float(latest_price) * float(position_size))) * 100) / float(open_margin)
-                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
+                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = round(latest_pnl_percent_of_margin, 4)
                     calc_success.append("最新价浮盈百分比")
                 except (TypeError, ValueError, ZeroDivisionError) as e:
-                    logger.debug(f"⚠️ 最新价浮盈百分比计算失败: {e}")
+                    logger.debug(f"⚠️【币安修复区】【半成品修复】 最新价浮盈百分比计算失败: {e}")
             else:
-                logger.debug("⏩ 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
+                logger.debug("⏩【币安修复区】【半成品修复】 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
 
         # 日志输出
-        logger.info(f"✅【币安修复区】【半成品修复】 第3步完成，成功计算 {len(calc_success)} 个字段: {calc_success}")
+        logger.debug(f"✅【币安修复区】【半成品修复】 第3步完成，成功计算 {len(calc_success)} 个字段: {calc_success}")
 
     async def _step4_merge_and_push(self):
         """
@@ -609,7 +609,7 @@ class BinanceSemiRepair:
             - 最新价浮盈百分比
         ==================================================
         """
-        logger.info("【币安修复区】【半成品修复】第4步：融合修复并推送")
+        logger.debug("【币安修复区】【半成品修复】第4步：融合修复并推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
@@ -640,7 +640,7 @@ class BinanceSemiRepair:
                 merged_data[field] = self.cache[field]
                 fill_count += 1
 
-        logger.info(f"📦【币安修复区】【半成品修复】 已填充 {fill_count} 个字段")
+        logger.debug(f"📦【币安修复区】【半成品修复】 已填充 {fill_count} 个字段")
 
         # 打标签推送
         await self.scheduler.handle({
