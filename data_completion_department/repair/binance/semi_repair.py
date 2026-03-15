@@ -193,7 +193,7 @@ class BinanceSemiRepair:
         old_info = self.current_info
         self.current_info = info
 
-        logger.info(f"📨【币安修复区】【半成品修复】 门外标签更新: {old_info} → {info}")
+        logger.debug(f"📨【币安修复区】【半成品修复】 门外标签更新: {old_info} → {info}")
 
         if info == INFO_BINANCE_SEMI:
             await self._start_repair()
@@ -361,7 +361,7 @@ class BinanceSemiRepair:
         注意：这一步必须成功，否则无法进行任何计算
         ==================================================
         """
-        logger.info("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
+        logger.debug("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
 
         contract = self.cache.get(FIELD_OPEN_CONTRACT)
         if not contract:
