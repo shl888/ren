@@ -126,17 +126,9 @@ class BinanceMissingRepair:
         # 只存1条数据，覆盖更新
         self.cache = None              # 类型: Dict or None
 
-        # ===== 数据库连接信息（从环境变量读取）=====
-        # 修复区需要直接读取数据库，不经过database.py
-        self.db_url = os.getenv('TURSO_DATABASE_URL')
-        self.db_token = os.getenv('TURSO_DATABASE_TOKEN')
-
-        if not self.db_url or not self.db_token:
-            logger.error("❌ 环境变量TURSO_DATABASE_URL和TURSO_DATABASE_TOKEN未设置")
-
-        # ===== 测试数据库连接 =====
-        if self.db_url and self.db_token:
-            self._test_database_connection()
+        # ===== 【修改】不再在初始化时读取和存储数据库连接信息 =====
+        # 数据库连接改为按需使用，只在第1步缓存为空时才读取环境变量
+        # 这样可以避免不必要的数据库连接，也符合"用完即弃"的原则
 
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
@@ -317,49 +309,190 @@ class BinanceMissingRepair:
         """
         第1步：获取缓存数据
         ==================================================
-        规则：
-            - 如果已经有缓存，直接用
-            - 如果没有缓存，从数据库持仓区读取1条币安数据
+        【修改说明】
+        按照"按需连接"原则重构：
+            1. 先检查缓存是否有数据
+            2. 如果有缓存，直接使用，不需要连接数据库
+            3. 如果没缓存，才去连接数据库读取
 
-        数据库查询：
-            SELECT * FROM active_positions WHERE 交易所 = 'binance'
-
-        注意：
-            数据库表字段全是中文，SQL必须用中文字段名
+        【5层检查】
+            第1层：是否拿到环境变量
+            第2层：数据库连接是否成功
+            第3层：持仓表是否存在
+            第4层：表中有什么数据
+            第5层：是否找到币安数据并提取成功
         ==================================================
         """
+        # ----- 第1层：检查缓存 -----
         if self.cache is not None:
-            logger.debug("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
+            logger.info("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
             return True
 
-        logger.info("第1步：【币安修复区】【持仓缺失修复】缓存为空，从数据库读取币安持仓数据")
+        logger.info("🔍【币安修复区】【持仓缺失修复】 第1步：缓存为空，准备从数据库读取")
 
-        if not self.db_url or not self.db_token:
-            logger.error("❌【币安修复区】【持仓缺失修复】 数据库连接信息不完整，无法读取")
+        # ----- 第2层：获取数据库连接信息（按需读取环境变量）-----
+        db_url = os.getenv('TURSO_DATABASE_URL')
+        db_token = os.getenv('TURSO_DATABASE_TOKEN')
+
+        if not db_url:
+            logger.error("❌【币安修复区】【持仓缺失修复】 环境变量 TURSO_DATABASE_URL 未设置")
+            return False
+        
+        if not db_token:
+            logger.error("❌【币安修复区】【持仓缺失修复】 环境变量 TURSO_DATABASE_TOKEN 未设置")
             return False
 
-        try:
-            sql = "SELECT * FROM active_positions WHERE 交易所 = 'binance' LIMIT 1"
-            result = self._query_database(sql)
+        logger.info("✅【币安修复区】【持仓缺失修复】 成功读取数据库连接信息")
+        logger.info(f"   数据库URL: {db_url}")
 
-            if not result:
-                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库查询失败或无数据")
+        # ----- 第3层：测试数据库连接是否成功 -----
+        try:
+            test_result = self._query_database("SELECT 1", db_url, db_token)
+            if test_result is None:
+                logger.error("❌【币安修复区】【持仓缺失修复】 数据库连接失败（网络问题或令牌错误）")
+                return False
+            logger.info("✅【币安修复区】【持仓缺失修复】 数据库连接成功")
+        except Exception as e:
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库连接异常: {e}")
+            return False
+
+        # ----- 第4层：检查所有表 -----
+        try:
+            tables_result = self._query_database(
+                "SELECT name FROM sqlite_master WHERE type='table'", 
+                db_url, db_token
+            )
+            
+            if tables_result is None:
+                logger.error("❌【币安修复区】【持仓缺失修复】 查询表失败")
+                return False
+            
+            rows = tables_result.get('rows', [])
+            cols = tables_result.get('cols', [])
+            
+            all_tables = []
+            for row in rows:
+                if row and len(row) > 0:
+                    if isinstance(row[0], dict):
+                        table_name = row[0].get('value')
+                    else:
+                        table_name = row[0]
+                    all_tables.append(table_name)
+            
+            logger.info(f"📋【币安修复区】【持仓缺失修复】 数据库中的所有表: {all_tables}")
+            
+            if 'active_positions' not in all_tables:
+                logger.error("❌【币安修复区】【持仓缺失修复】 数据库中没有 active_positions 表")
+                return False
+            
+            logger.info("✅【币安修复区】【持仓缺失修复】 持仓表存在")
+        except Exception as e:
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 检查表失败: {e}")
+            return False
+
+        # ----- 第5层：查看表中所有数据 -----
+        try:
+            all_data = self._query_database(
+                "SELECT 交易所, 开仓合约名, id FROM active_positions", 
+                db_url, db_token
+            )
+            
+            if all_data and 'rows' in all_data:
+                rows = all_data.get('rows', [])
+                cols = all_data.get('cols', [])
+                
+                logger.info(f"📊【币安修复区】【持仓缺失修复】 active_positions 表共有 {len(rows)} 条数据")
+                
+                # 找出交易所字段的索引位置
+                exchange_idx = None
+                for i, col in enumerate(cols):
+                    if isinstance(col, dict):
+                        col_name = col.get('name')
+                    else:
+                        col_name = col
+                    if col_name == '交易所':
+                        exchange_idx = i
+                        break
+                
+                if exchange_idx is not None:
+                    exchanges = []
+                    for row in rows:
+                        if row and len(row) > exchange_idx:
+                            if isinstance(row[exchange_idx], dict):
+                                exchange = row[exchange_idx].get('value')
+                            else:
+                                exchange = row[exchange_idx]
+                            exchanges.append(exchange)
+                    
+                    logger.info(f"📋【币安修复区】【持仓缺失修复】 表中的交易所值: {exchanges}")
+                else:
+                    logger.warning("⚠️【币安修复区】【持仓缺失修复】 找不到'交易所'字段")
+            else:
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 active_positions 表是空的")
+        except Exception as e:
+            logger.warning(f"⚠️【币安修复区】【持仓缺失修复】 查询所有数据失败: {e}")
+            # 继续执行，不因为调试查询失败而终止
+
+        # ----- 第6层：查询币安数据（尝试不同写法）-----
+        try:
+            # 先尝试小写 binance
+            sql = "SELECT * FROM active_positions WHERE 交易所 = 'binance' LIMIT 1"
+            logger.info(f"🔍【币安修复区】【持仓缺失修复】 执行查询: {sql}")
+            
+            result = self._query_database(sql, db_url, db_token)
+
+            if result is None:
+                logger.error("❌【币安修复区】【持仓缺失修复】 查询币安数据失败")
                 return False
 
             rows = result.get('rows', [])
-            if not rows:
-                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库中没有币安持仓数据")
-                return False
-
             cols = result.get('cols', [])
+            
+            # 如果没有找到数据，尝试其他可能的写法
+            if not rows:
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 查询成功，但没有找到交易所为 'binance' 的数据")
+                
+                # 尝试其他可能的交易所名称
+                test_exchanges = ['BINANCE', 'Binance', '币安']
+                found = False
+                
+                for test_exchange in test_exchanges:
+                    logger.info(f"🔍【币安修复区】【持仓缺失修复】 尝试查询: {test_exchange}")
+                    test_result = self._query_database(
+                        f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
+                        db_url, db_token
+                    )
+                    
+                    if test_result and test_result.get('rows'):
+                        logger.info(f"✅【币安修复区】【持仓缺失修复】 找到数据！交易所字段实际为: {test_exchange}")
+                        rows = test_result.get('rows', [])
+                        cols = test_result.get('cols', [])
+                        found = True
+                        break
+                
+                if not found:
+                    logger.error("❌【币安修复区】【持仓缺失修复】 尝试了所有可能的交易所名称，都没有找到数据")
+                    return False
+
+            # ----- 第7层：提取数据到缓存 -----
             row = rows[0]
             self.cache = self._row_to_dict(row, cols)
 
-            logger.debug(f"✅【币安修复区】【持仓缺失修复】 第1步：从数据库读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据")
+            logger.info(f"   交易所: {self.cache.get(FIELD_EXCHANGE)}")
+            logger.info(f"   开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"   ID: {self.cache.get('id')}")
+            
+            # 打印关键字段
+            logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
+            logger.info(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
+            logger.info(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
+            logger.info(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
+            
             return True
 
         except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 第1步：读取数据库失败: {e}")
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 第1步：读取数据库失败: {e}", exc_info=True)
             return False
 
     async def _step2_check_funding(self) -> Optional[str]:
@@ -525,7 +658,7 @@ class BinanceMissingRepair:
             4. 最新价仓位价值
             5. 最新价浮盈
             6. 最新价浮盈百分比
-            7. 标记价浮盈百分比
+            7. 标记价浮盈百分比（用缓存中的标记价重新计算，不从存储区取）
             8. 平均资金费率
 
         计算公式（严格按照你的文档，每个字段独立计算）：
@@ -537,7 +670,7 @@ class BinanceMissingRepair:
             最新价仓位价值 = 最新价 * 持仓币数
             最新价浮盈 = 最新价 * 持仓币数 - 开仓价仓位价值
             最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
-            标记价浮盈百分比 = 标记价浮盈 * 100 / 开仓保证金
+            标记价浮盈百分比 = (标记价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
             平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
 
         当开仓方向为 "SHORT" 时：
@@ -547,7 +680,7 @@ class BinanceMissingRepair:
             最新价仓位价值 = 最新价 * 持仓币数
             最新价浮盈 = 开仓价仓位价值 - (最新价 * 持仓币数)
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
-            标记价浮盈百分比 = 标记价浮盈 * 100 / 开仓保证金
+            标记价浮盈百分比 = [开仓价仓位价值 - (标记价 * 持仓币数)] * 100 / 开仓保证金
             平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
         ==================================================
         """
@@ -563,7 +696,6 @@ class BinanceMissingRepair:
         open_price = cache.get(FIELD_OPEN_PRICE, 0) or 0
         open_position_value = cache.get(FIELD_OPEN_POSITION_VALUE, 0) or 0
         open_margin = cache.get(FIELD_OPEN_MARGIN, 1) or 1
-        mark_pnl = cache.get(FIELD_MARK_PNL, 0) or 0
         total_funding = cache.get(FIELD_FUNDING_TOTAL, 0) or 0
         direction = cache.get(FIELD_OPEN_DIRECTION)
 
@@ -589,8 +721,8 @@ class BinanceMissingRepair:
             # 6. 最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
             latest_pnl_percent_of_margin = ((latest_price * position_size - open_position_value) * 100 / open_margin) if open_margin else 0
 
-            # 7. 标记价浮盈百分比 = 标记价浮盈 * 100 / 开仓保证金
-            mark_pnl_percent_of_margin = (mark_pnl * 100 / open_margin) if open_margin else 0
+            # 7. 标记价浮盈百分比 = (标记价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
+            mark_pnl_percent_of_margin = ((mark_price * position_size - open_position_value) * 100 / open_margin) if open_margin else 0
 
             # 8. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
@@ -616,8 +748,8 @@ class BinanceMissingRepair:
             # 6. 最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
             latest_pnl_percent_of_margin = ((open_position_value - latest_price * position_size) * 100 / open_margin) if open_margin else 0
 
-            # 7. 标记价浮盈百分比 = 标记价浮盈 * 100 / 开仓保证金
-            mark_pnl_percent_of_margin = (mark_pnl * 100 / open_margin) if open_margin else 0
+            # 7. 标记价浮盈百分比 = [开仓价仓位价值 - (标记价 * 持仓币数)] * 100 / 开仓保证金
+            mark_pnl_percent_of_margin = ((open_position_value - mark_price * position_size) * 100 / open_margin) if open_margin else 0
 
             # 8. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
@@ -629,7 +761,7 @@ class BinanceMissingRepair:
         cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value         # 4. 最新价仓位价值
         cache[FIELD_LATEST_PNL] = latest_pnl                               # 5. 最新价浮盈
         cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin  # 6. 最新价浮盈百分比
-        cache[FIELD_MARK_PNL_PERCENT_OF_MARGIN] = mark_pnl_percent_of_margin    # 7. 标记价浮盈百分比
+        cache[FIELD_MARK_PNL_PERCENT_OF_MARGIN] = mark_pnl_percent_of_margin    # 7. 标记价浮盈百分比（重新计算）
         cache[FIELD_AVG_FUNDING_RATE] = avg_funding_rate                   # 8. 平均资金费率
 
         logger.debug(f" 【币安修复区】【持仓缺失修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
@@ -757,43 +889,69 @@ class BinanceMissingRepair:
 
         return market_data.get(contract)
 
-    def _query_database(self, sql: str, params: List = None) -> Optional[Dict]:
+    def _query_database(self, sql: str, db_url: str, db_token: str, params: List = None) -> Optional[Dict]:
         """
         查询Turso数据库
         ==================================================
-        执行SQL查询，返回结果。
-        如果查询失败，返回None并记录错误。
+        【修改说明】
+        接收数据库连接信息作为参数，而不是使用实例变量。
+        这样符合"按需连接、用完即弃"的原则。
+
+        使用正确的Turso API返回格式解析：
+            {
+                "results": [
+                    {
+                        "type": "ok",
+                        "response": {
+                            "type": "execute",
+                            "result": {
+                                "cols": [...],
+                                "rows": [...]   # 数据在这里！
+                            }
+                        }
+                    }
+                ]
+            }
+
+        :param sql: SQL查询语句
+        :param db_url: 数据库URL
+        :param db_token: 数据库令牌
+        :param params: 查询参数列表
+        :return: 包含 cols 和 rows 的结果字典，失败返回None
         ==================================================
         """
         if params is None:
             params = []
 
+        # 转换参数格式
         args = []
         for p in params:
             if p is None:
                 args.append({"type": "null", "value": None})
-            elif isinstance(p, (int, float)):
-                args.append({"type": "integer", "value": p})
             else:
                 args.append({"type": "text", "value": str(p)})
 
+        # 构建请求体
+        request_item = {
+            "type": "execute",
+            "stmt": {
+                "sql": sql
+            }
+        }
+        
+        # 只有在有参数时才添加 args
+        if args:
+            request_item["stmt"]["args"] = args
+        
         payload = {
-            "requests": [
-                {
-                    "type": "execute",
-                    "stmt": {
-                        "sql": sql,
-                        "args": args
-                    }
-                }
-            ]
+            "requests": [request_item]
         }
 
         try:
             response = requests.post(
-                f"{self.db_url}/v2/pipeline",
+                f"{db_url}/v2/pipeline",
                 headers={
-                    "Authorization": f"Bearer {self.db_token}",
+                    "Authorization": f"Bearer {db_token}",
                     "Content-Type": "application/json"
                 },
                 json=payload,
@@ -802,15 +960,19 @@ class BinanceMissingRepair:
             response.raise_for_status()
             result = response.json()
 
+            # ✅ 正确的解析路径：results[0].response.result
             if result and 'results' in result and len(result['results']) > 0:
-                return result['results'][0].get('result', {})
+                first_result = result['results'][0]
+                if 'response' in first_result and 'result' in first_result['response']:
+                    return first_result['response']['result']  # 返回 {cols, rows}
+            
             return None
 
         except requests.exceptions.Timeout:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库查询超时: {sql[:50]}...")
+            logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库查询超时: {sql[:50]}...")
             return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库请求失败: {e}")
+            logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库请求失败: {e}")
             return None
         except Exception as e:
             logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库查询未知错误: {e}")
@@ -858,14 +1020,3 @@ class BinanceMissingRepair:
                 update_count += 1
 
         logger.debug(f" 【币安修复区】【持仓缺失修复】  已更新 {update_count} 个资金费字段")
-
-    def _test_database_connection(self):
-        """测试数据库连接是否正常"""
-        try:
-            result = self._query_database("SELECT 1")
-            if result:
-                logger.info("✅【币安修复区】【持仓缺失修复】 数据库连接测试成功")
-            else:
-                logger.warning("⚠️【币安修复区】【持仓缺失修复】 数据库连接测试返回空结果")
-        except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库连接测试失败: {e}")

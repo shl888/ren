@@ -313,7 +313,7 @@ class BinanceSemiRepair:
 
         # 保存到缓存
         self.cache = binance_data.copy()
-        logger.debug(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+        logger.info(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
         return True
 
     async def _step2_get_prices(self) -> bool:
@@ -327,7 +327,7 @@ class BinanceSemiRepair:
         把这两个值覆盖到缓存中
         ==================================================
         """
-        logger.debug("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
+        logger.info("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
 
         contract = self.cache.get(FIELD_OPEN_CONTRACT)
         if not contract:
@@ -360,7 +360,7 @@ class BinanceSemiRepair:
         self.cache[FIELD_LATEST_PRICE] = latest_price
         self.cache[FIELD_MARK_PRICE] = mark_price
 
-        logger.debug(f"✅ 【币安修复区】【半成品修复】第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
+        logger.info(f"✅ 【币安修复区】【半成品修复】第2步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
         return True
 
     async def _step3_calc_fields(self):
@@ -396,7 +396,7 @@ class BinanceSemiRepair:
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
         ==================================================
         """
-        logger.debug("【币安修复区】【半成品修复】第3步：计算6个字段（严格按照原始方案，独立计算）")
+        logger.info("【币安修复区】【半成品修复】第3步：计算6个字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -461,7 +461,7 @@ class BinanceSemiRepair:
         cache[FIELD_LATEST_PNL] = latest_pnl
         cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
 
-        logger.debug(f" 【币安修复区】【半成品修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
+        logger.info(f" 【币安修复区】【半成品修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
                    f"最新价涨跌盈亏幅: {latest_pnl_percent:.2f}%, "
                    f"最新价保证金: {latest_margin:.2f}, "
                    f"最新价仓位价值: {latest_position_value:.2f}, "
@@ -489,7 +489,7 @@ class BinanceSemiRepair:
             - 最新价浮盈百分比 (计算得到)
         ==================================================
         """
-        logger.debug("【币安修复区】【半成品修复】第4步：融合修复并推送")
+        logger.info("【币安修复区】【半成品修复】第4步：融合修复并推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
@@ -519,7 +519,7 @@ class BinanceSemiRepair:
                 merged_data[field] = self.cache[field]
                 fill_count += 1
 
-        logger.debug(f" 【币安修复区】【半成品修复】  已填充 {fill_count} 个字段")
+        logger.info(f" 【币安修复区】【半成品修复】  已填充 {fill_count} 个字段")
 
         # 打标签推送
         await self.scheduler.handle({
