@@ -345,45 +345,77 @@ class OkxMissingRepair:
             logger.error(f"❌【欧易持仓缺失修复区】 数据库连接异常: {e}")
             return False
 
-        # ----- 第4层：检查持仓表是否存在 -----
+        # ----- 第4层：检查所有表 -----
         try:
-            table_check = self._query_database(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='active_positions'", 
+            tables_result = self._query_database(
+                "SELECT name FROM sqlite_master WHERE type='table'", 
                 db_url, db_token
             )
             
-            if table_check is None:
-                logger.error("❌【欧易持仓缺失修复区】 查询持仓表失败")
+            if tables_result is None:
+                logger.error("❌【欧易持仓缺失修复区】 查询表失败")
                 return False
             
-            table_rows = table_check.get('rows', [])
-            if not table_rows:
+            rows = tables_result.get('rows', [])
+            cols = tables_result.get('cols', [])
+            
+            all_tables = []
+            for row in rows:
+                if row and len(row) > 0:
+                    if isinstance(row[0], dict):
+                        table_name = row[0].get('value')
+                    else:
+                        table_name = row[0]
+                    all_tables.append(table_name)
+            
+            logger.info(f"📋【欧易持仓缺失修复区】 数据库中的所有表: {all_tables}")
+            
+            if 'active_positions' not in all_tables:
                 logger.error("❌【欧易持仓缺失修复区】 数据库中没有 active_positions 表")
                 return False
             
             logger.info("✅【欧易持仓缺失修复区】 持仓表存在")
         except Exception as e:
-            logger.error(f"❌【欧易持仓缺失修复区】 检查持仓表失败: {e}")
+            logger.error(f"❌【欧易持仓缺失修复区】 检查表失败: {e}")
             return False
 
-        # ----- 第5层：查看表中所有数据（调试用，帮助定位问题）-----
+        # ----- 第5层：查看表中所有数据 -----
         try:
             all_data = self._query_database(
-                "SELECT 交易所, 开仓合约名, id FROM active_positions", 
+                "SELECT * FROM active_positions", 
                 db_url, db_token
             )
             
-            if all_data and all_data.get('rows'):
+            if all_data and 'rows' in all_data:
                 rows = all_data.get('rows', [])
                 cols = all_data.get('cols', [])
                 
-                logger.info(f"📊【欧易持仓缺失修复区】 持仓表中共有 {len(rows)} 条数据")
+                logger.info(f"📊【欧易持仓缺失修复区】 active_positions 表共有 {len(rows)} 条数据")
+                
+                # 打印列名
+                column_names = []
+                for col in cols:
+                    if isinstance(col, dict):
+                        column_names.append(col.get('name'))
+                    else:
+                        column_names.append(col)
+                logger.info(f"   列名: {column_names}")
+                
+                # 打印前几条数据
+                for i, row in enumerate(rows[:3]):  # 只打印前3条
+                    row_data = {}
+                    for j, col in enumerate(column_names):
+                        if j < len(row):
+                            if isinstance(row[j], dict):
+                                row_data[col] = row[j].get('value')
+                            else:
+                                row_data[col] = row[j]
+                    logger.info(f"   第{i+1}条: {row_data}")
                 
                 # 找出交易所字段的索引位置
                 exchange_idx = None
-                for i, col in enumerate(cols):
-                    col_name = col.get('name') if isinstance(col, dict) else col
-                    if col_name == '交易所':
+                for i, col in enumerate(column_names):
+                    if col == '交易所':
                         exchange_idx = i
                         break
                 
@@ -391,7 +423,6 @@ class OkxMissingRepair:
                     exchanges = []
                     for row in rows:
                         if row and len(row) > exchange_idx:
-                            # 解析Turso的数据格式：{"type": "text", "value": "值"}
                             if isinstance(row[exchange_idx], dict):
                                 exchange = row[exchange_idx].get('value')
                             else:
@@ -402,7 +433,7 @@ class OkxMissingRepair:
                 else:
                     logger.warning("⚠️【欧易持仓缺失修复区】 找不到'交易所'字段")
             else:
-                logger.warning("⚠️【欧易持仓缺失修复区】 持仓表是空的")
+                logger.warning("⚠️【欧易持仓缺失修复区】 active_positions 表是空的")
         except Exception as e:
             logger.warning(f"⚠️【欧易持仓缺失修复区】 查询所有数据失败: {e}")
             # 继续执行，不因为调试查询失败而终止
@@ -770,14 +801,27 @@ class OkxMissingRepair:
         接收数据库连接信息作为参数，而不是使用实例变量。
         这样符合"按需连接、用完即弃"的原则。
 
-        执行SQL查询，返回结果。
-        如果查询失败，返回None并记录错误。
+        使用正确的Turso API返回格式解析：
+            {
+                "results": [
+                    {
+                        "type": "ok",
+                        "response": {
+                            "type": "execute",
+                            "result": {
+                                "cols": [...],
+                                "rows": [...]   # 数据在这里！
+                            }
+                        }
+                    }
+                ]
+            }
 
         :param sql: SQL查询语句
         :param db_url: 数据库URL
         :param db_token: 数据库令牌
         :param params: 查询参数列表
-        :return: 查询结果字典，失败返回None
+        :return: 包含 cols 和 rows 的结果字典，失败返回None
         ==================================================
         """
         if params is None:
@@ -820,8 +864,12 @@ class OkxMissingRepair:
             response.raise_for_status()
             result = response.json()
 
+            # ✅ 正确的解析路径：results[0].response.result
             if result and 'results' in result and len(result['results']) > 0:
-                return result['results'][0].get('result', {})
+                first_result = result['results'][0]
+                if 'response' in first_result and 'result' in first_result['response']:
+                    return first_result['response']['result']  # 返回 {cols, rows}
+            
             return None
 
         except requests.exceptions.Timeout:
