@@ -155,7 +155,7 @@ class Scheduler:
         # 提取交易所信息（用于日志）
         exchange = data.get('交易所', 'unknown')
 
-        logger.info(f"📨【调度区】 收到数据标签: {tag} - {exchange}")
+        logger.debug(f"📨【调度区】 收到数据标签: {tag} - {exchange}")
 
         # ===== 根据标签处理 =====
         if tag in [TAG_CLOSED, TAG_COMPLETE]:
@@ -195,7 +195,7 @@ class Scheduler:
         ==================================================
         """
         info = message['info']
-        logger.info(f"📨 【调度区】收到信息标签: {info}")
+        logger.debug(f"📨 【调度区】收到信息标签: {info}")
 
         # ===== 币安相关信息标签 =====
         if info in [INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED]:
