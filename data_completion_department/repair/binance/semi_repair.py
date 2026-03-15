@@ -24,11 +24,23 @@
    - user_data：获取最新的币安数据（用于第4步融合）
 2. 本文件缓存：保存修复过程中的中间数据
 
-【修复流程 - 共4步】（完全按照你的设计文档）
+【修复流程 - 共4步】
 第1步：获取缓存数据（从门外存储区或直接用缓存）
 第2步：从行情数据提取最新价和标记价
-第3步：计算6个字段（根据多空方向）- 【严格按照原始公式，独立计算】
+第3步：计算6个字段（根据多空方向）
 第4步：融合修复并推送
+
+【关键逻辑 - 数据延迟处理】
+杠杆和开仓保证金这两个字段，是通过HTTP请求获取的，会有延迟。
+修复流程启动后：
+    第1次循环：缓存空 → 从存储区读数据 → 杠杆为空 → 跳过本次修复（循环继续）
+    第N次循环：缓存空 → 从存储区读数据 → 杠杆有值了 → 存入缓存 → 继续修复
+    后续循环：缓存有数据 → 直接用缓存 → 不再读存储区
+
+【核心原则 - 空值处理】
+每条计算独立进行，用到的字段只要有一个为空，就跳过这条计算，不赋值。
+其他计算不受影响，照常进行。
+绝不硬设默认值，绝不因为一个字段为空就终止全部流程。
 ==================================================
 """
 
@@ -255,10 +267,10 @@ class BinanceSemiRepair:
         """
         执行一次修复流程
         ==================================================
-        完全按照你的4步设计文档：
+        完全按照4步设计文档：
             第1步：获取缓存数据（从门外存储区或直接用缓存）
             第2步：从行情数据提取最新价和标记价
-            第3步：计算6个字段（根据多空方向）- 【严格按照原始公式，不复用任何中间结果】
+            第3步：计算6个字段（根据多空方向）- 每条计算独立，缺字段就跳过该条
             第4步：融合修复并推送
         ==================================================
         """
@@ -269,15 +281,23 @@ class BinanceSemiRepair:
             logger.warning("⚠️【币安修复区】【半成品修复】 门外还没有存储区数据，等待下次循环")
             return
 
-        if not await self._step1_get_cache():
-            logger.error("❌【币安修复区】【半成品修复】 第1步失败：无法获取缓存数据，本次修复终止")
+        # 第1步：获取缓存数据（处理数据延迟）
+        step1_success = await self._step1_get_cache()
+        if not step1_success:
+            # step1失败只有一种情况：杠杆字段为空，数据未就绪
+            # 这是正常现象，等待下次循环即可
+            logger.debug("⏳【币安修复区】【半成品修复】 数据未就绪（杠杆为空），跳过本次修复，等待下次循环")
             return
 
+        # 第2步：获取行情数据（必须成功，否则无法修复）
         if not await self._step2_get_prices():
             logger.error("❌【币安修复区】【半成品修复】 第2步失败：无法获取行情数据，本次修复终止")
             return
 
-        await self._step3_calc_fields()
+        # 第3步：计算字段 - 每条计算独立，缺字段就跳过该条
+        await self._step3_calc_fields()  # 永远不返回False，因为它是独立计算的
+
+        # 第4步：融合推送
         await self._step4_merge_and_push()
 
         logger.debug("✅【币安修复区】【半成品修复】一次修复执行完成")
@@ -288,36 +308,44 @@ class BinanceSemiRepair:
         """
         第1步：获取缓存数据
         ==================================================
+        【核心逻辑 - 处理数据延迟】
+
         规则：
-            - 如果已经有缓存，直接用
-            - 如果没有缓存，从门外存储区读取1条币安数据
+            - 如果有缓存，直接用（返回True）
+            - 如果没有缓存，从存储区读取币安数据
+            - 读取后，检查杠杆字段是否为空
+                - 如果杠杆为空：说明数据未就绪，返回False（跳过本次修复）
+                - 如果杠杆有值：存入缓存，返回True（继续修复）
 
-        数据来源：
-            从门外存储区快照的 user_data 中获取最新的币安数据
-
-        注意：
-            只取1条就够了，不需要多次获取
+        为什么只检查杠杆？
+            因为杠杆和开仓保证金都是延迟到达的字段，
+            只要杠杆有值，开仓保证金一定有值（它们是同一批数据）
         ==================================================
         """
+        # 情况1：已经有缓存，直接用
         if self.cache is not None:
             logger.debug("✅【币安修复区】【半成品修复】 第1步：使用现有缓存")
             return True
 
+        # 情况2：缓存为空，从门外存储区读取币安数据
         logger.debug("【币安修复区】【半成品修复】第1步：缓存为空，从门外存储区读取币安数据")
 
-        # 从门外存储区获取币安数据
         binance_data = self._get_binance_from_snapshot()
         if not binance_data:
             logger.warning("⚠️【币安修复区】【半成品修复】 门外存储区中没有币安数据")
             return False
 
-        # 保存到缓存
+        # 【关键检查】杠杆字段是否为空
+        leverage = binance_data.get(FIELD_LEVERAGE)
+        if leverage is None:
+            # 杠杆为空，说明数据未就绪（HTTP请求延迟）
+            # 这是正常现象，返回False让本次修复跳过，循环继续
+            logger.debug("⏳【币安修复区】【半成品修复】 杠杆字段为空，数据未就绪，等待下次循环")
+            return False
+
+        # 杠杆有值了，说明数据已就绪，存入缓存
         self.cache = binance_data.copy()
-        logger.info(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
-        # 在 self.cache = binance_data.copy() 之后加一行
-        logger.info(f"🔥 【币安修复区】【半成品修复】缓存数据中的字段: {list(self.cache.keys())}")
-        logger.info(f"🔥 【币安修复区】【半成品修复】杠杆值: {self.cache.get(FIELD_LEVERAGE)}")
-        logger.info(f"🔥 【币安修复区】【半成品修复】开仓保证金: {self.cache.get(FIELD_OPEN_MARGIN)}")
+        logger.info(f"✅【币安修复区】【半成品修复】 第1步：从门外存储区读取到币安数据，杠杆={leverage}，开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
         return True
 
     async def _step2_get_prices(self) -> bool:
@@ -329,6 +357,8 @@ class BinanceSemiRepair:
             - binance_mark_price  → 对应币安数据的标记价
 
         把这两个值覆盖到缓存中
+
+        注意：这一步必须成功，否则无法进行任何计算
         ==================================================
         """
         logger.info("【币安修复区】【半成品修复】第2步：从行情数据提取最新价和标记价")
@@ -371,9 +401,13 @@ class BinanceSemiRepair:
         """
         第3步：计算6个字段
         ==================================================
-        【严格按照原始方案，独立计算，不复用任何中间结果】
+        【核心原则 - 按条跳过】
 
-        需要计算的字段：
+        每条计算独立进行，用到的字段只要有一个为空，就跳过这条计算，不赋值。
+        其他计算不受影响，照常进行。
+        绝不硬设默认值，绝不因为一个字段为空就终止全部流程。
+
+        需要计算的6个字段：
             1. 标记价涨跌盈亏幅
             2. 最新价涨跌盈亏幅
             3. 最新价保证金
@@ -381,9 +415,9 @@ class BinanceSemiRepair:
             5. 最新价浮盈
             6. 最新价浮盈百分比
 
-        计算公式（严格按照你的文档，每个字段独立计算）：
-
-        当开仓方向为 "LONG" 时：
+        计算公式（严格按方向）：
+        
+        LONG多头：
             标记价涨跌盈亏幅 = (标记价 - 开仓价) * 100 / 开仓价
             最新价涨跌盈亏幅 = (最新价 - 开仓价) * 100 / 开仓价
             最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
@@ -391,7 +425,7 @@ class BinanceSemiRepair:
             最新价浮盈 = 最新价 * 持仓币数 - 开仓价仓位价值
             最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
 
-        当开仓方向为 "SHORT" 时：
+        SHORT空头：
             标记价涨跌盈亏幅 = (开仓价 - 标记价) * 100 / 开仓价
             最新价涨跌盈亏幅 = (开仓价 - 最新价) * 100 / 开仓价
             最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
@@ -400,100 +434,160 @@ class BinanceSemiRepair:
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
         ==================================================
         """
-        logger.info("【币安修复区】【半成品修复】第3步：计算6个字段（严格按照原始方案，独立计算）")
+        logger.info("【币安修复区】【半成品修复】第3步：计算6个字段（按条跳过）")
 
         cache = self.cache
 
-        # 获取原始字段值（直接从缓存读取，不复用任何计算结果）
-        latest_price = cache.get(FIELD_LATEST_PRICE, 0)
-        mark_price = cache.get(FIELD_MARK_PRICE, 0)
-        position_size = cache.get(FIELD_POSITION_SIZE, 0) or 0
-        leverage = cache.get(FIELD_LEVERAGE, 1) or 1
-        open_price = cache.get(FIELD_OPEN_PRICE, 0) or 0
-        open_position_value = cache.get(FIELD_OPEN_POSITION_VALUE, 0) or 0
-        open_margin = cache.get(FIELD_OPEN_MARGIN, 1) or 1
+        # ===== 获取所有可能用到的字段（不检查空值，后面每条计算自己检查）=====
         direction = cache.get(FIELD_OPEN_DIRECTION)
+        latest_price = cache.get(FIELD_LATEST_PRICE)
+        mark_price = cache.get(FIELD_MARK_PRICE)
+        position_size = cache.get(FIELD_POSITION_SIZE)
+        leverage = cache.get(FIELD_LEVERAGE)
+        open_price = cache.get(FIELD_OPEN_PRICE)
+        open_position_value = cache.get(FIELD_OPEN_POSITION_VALUE)
+        open_margin = cache.get(FIELD_OPEN_MARGIN)
 
-        # === 调试日志：打印关键变量的值和类型 ===
-        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】position_size={position_size}, 类型={type(position_size)}")
-        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】leverage={leverage}, 类型={type(leverage)}, 布尔值={bool(leverage)}")
-        logger.info(f"🔥【币安修复区】【半成品修复】【DEBUG】open_margin={open_margin}, 类型={type(open_margin)}, 布尔值={bool(open_margin)}")
-        
-        # === 确保所有数值类型正确 ===
-        try:
-            latest_price = float(latest_price)
-            mark_price = float(mark_price)
-            position_size = float(position_size) if position_size else 0
-            leverage = float(leverage) if leverage else 1
-            open_price = float(open_price) if open_price else 0
-            open_position_value = float(open_position_value) if open_position_value else 0
-            open_margin = float(open_margin) if open_margin else 1
-        except (ValueError, TypeError) as e:
-            logger.error(f"❌ 数据类型转换失败: {e}")
-            return
+        # 记录哪些计算成功了，用于日志
+        calc_success = []
 
-        # 根据方向计算 - 每个字段独立计算，严格按照原始公式
+        # ===== 根据方向计算 =====
         if direction == "LONG":
-            # 多头 - 严格按照原始公式，独立计算每个字段
+            # ---------- 1. 标记价涨跌盈亏幅 ----------
+            if all(v is not None for v in [mark_price, open_price]) and open_price != 0:
+                try:
+                    mark_pnl_percent = (float(mark_price) - float(open_price)) * 100 / float(open_price)
+                    cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
+                    calc_success.append("标记价涨跌盈亏幅")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 标记价涨跌盈亏幅计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
-            # 1. 标记价涨跌盈亏幅 = (标记价 - 开仓价) * 100 / 开仓价
-            mark_pnl_percent = (mark_price - open_price) * 100 / open_price if open_price else 0
+            # ---------- 2. 最新价涨跌盈亏幅 ----------
+            if all(v is not None for v in [latest_price, open_price]) and open_price != 0:
+                try:
+                    latest_pnl_percent = (float(latest_price) - float(open_price)) * 100 / float(open_price)
+                    cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent
+                    calc_success.append("最新价涨跌盈亏幅")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价涨跌盈亏幅计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
-            # 2. 最新价涨跌盈亏幅 = (最新价 - 开仓价) * 100 / 开仓价
-            latest_pnl_percent = (latest_price - open_price) * 100 / open_price if open_price else 0
+            # ---------- 3. 最新价保证金 ----------
+            if all(v is not None for v in [latest_price, position_size, leverage]) and leverage != 0:
+                try:
+                    latest_margin = (float(latest_price) * float(position_size)) / float(leverage)
+                    cache[FIELD_LATEST_MARGIN] = latest_margin
+                    calc_success.append("最新价保证金")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价保证金计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价保证金：缺少必要字段或杠杆为0")
 
-            # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
-            latest_margin = (latest_price * position_size) / leverage if leverage else 0
+            # ---------- 4. 最新价仓位价值 ----------
+            if all(v is not None for v in [latest_price, position_size]):
+                try:
+                    latest_position_value = float(latest_price) * float(position_size)
+                    cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value
+                    calc_success.append("最新价仓位价值")
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"⚠️ 最新价仓位价值计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价仓位价值：缺少必要字段")
 
-            # 4. 最新价仓位价值 = 最新价 * 持仓币数
-            latest_position_value = latest_price * position_size
+            # ---------- 5. 最新价浮盈 ----------
+            if all(v is not None for v in [latest_price, position_size, open_position_value]):
+                try:
+                    latest_pnl = (float(latest_price) * float(position_size)) - float(open_position_value)
+                    cache[FIELD_LATEST_PNL] = latest_pnl
+                    calc_success.append("最新价浮盈")
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"⚠️ 最新价浮盈计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价浮盈：缺少必要字段")
 
-            # 5. 最新价浮盈 = 最新价 * 持仓币数 - 开仓价仓位价值
-            latest_pnl = (latest_price * position_size) - open_position_value
+            # ---------- 6. 最新价浮盈百分比 ----------
+            if all(v is not None for v in [latest_price, position_size, open_position_value, open_margin]) and open_margin != 0:
+                try:
+                    latest_pnl_percent_of_margin = ((float(latest_price) * float(position_size) - float(open_position_value)) * 100) / float(open_margin)
+                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
+                    calc_success.append("最新价浮盈百分比")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价浮盈百分比计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
 
-            # 6. 最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
-            latest_pnl_percent_of_margin = ((latest_price * position_size - open_position_value) * 100) / open_margin if open_margin else 0
+        else:  # direction == "SHORT" (包括默认情况)
+            # ---------- 1. 标记价涨跌盈亏幅 ----------
+            if all(v is not None for v in [mark_price, open_price]) and open_price != 0:
+                try:
+                    mark_pnl_percent = (float(open_price) - float(mark_price)) * 100 / float(open_price)
+                    cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
+                    calc_success.append("标记价涨跌盈亏幅")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 标记价涨跌盈亏幅计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过标记价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
-        else:  # direction == "SHORT"
-            # 空头 - 严格按照原始公式，独立计算每个字段
+            # ---------- 2. 最新价涨跌盈亏幅 ----------
+            if all(v is not None for v in [latest_price, open_price]) and open_price != 0:
+                try:
+                    latest_pnl_percent = (float(open_price) - float(latest_price)) * 100 / float(open_price)
+                    cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent
+                    calc_success.append("最新价涨跌盈亏幅")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价涨跌盈亏幅计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价涨跌盈亏幅：缺少必要字段或开仓价为0")
 
-            # 1. 标记价涨跌盈亏幅 = (开仓价 - 标记价) * 100 / 开仓价
-            mark_pnl_percent = (open_price - mark_price) * 100 / open_price if open_price else 0
+            # ---------- 3. 最新价保证金 ----------
+            if all(v is not None for v in [latest_price, position_size, leverage]) and leverage != 0:
+                try:
+                    latest_margin = (float(latest_price) * float(position_size)) / float(leverage)
+                    cache[FIELD_LATEST_MARGIN] = latest_margin
+                    calc_success.append("最新价保证金")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价保证金计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价保证金：缺少必要字段或杠杆为0")
 
-            # 2. 最新价涨跌盈亏幅 = (开仓价 - 最新价) * 100 / 开仓价
-            latest_pnl_percent = (open_price - latest_price) * 100 / open_price if open_price else 0
+            # ---------- 4. 最新价仓位价值 ----------
+            if all(v is not None for v in [latest_price, position_size]):
+                try:
+                    latest_position_value = float(latest_price) * float(position_size)
+                    cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value
+                    calc_success.append("最新价仓位价值")
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"⚠️ 最新价仓位价值计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价仓位价值：缺少必要字段")
 
-            # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
-            latest_margin = (latest_price * position_size) / leverage if leverage else 0
+            # ---------- 5. 最新价浮盈 ----------
+            if all(v is not None for v in [latest_price, position_size, open_position_value]):
+                try:
+                    latest_pnl = float(open_position_value) - (float(latest_price) * float(position_size))
+                    cache[FIELD_LATEST_PNL] = latest_pnl
+                    calc_success.append("最新价浮盈")
+                except (TypeError, ValueError) as e:
+                    logger.debug(f"⚠️ 最新价浮盈计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价浮盈：缺少必要字段")
 
-            # 4. 最新价仓位价值 = 最新价 * 持仓币数
-            latest_position_value = latest_price * position_size
+            # ---------- 6. 最新价浮盈百分比 ----------
+            if all(v is not None for v in [latest_price, position_size, open_position_value, open_margin]) and open_margin != 0:
+                try:
+                    latest_pnl_percent_of_margin = ((float(open_position_value) - (float(latest_price) * float(position_size))) * 100) / float(open_margin)
+                    cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
+                    calc_success.append("最新价浮盈百分比")
+                except (TypeError, ValueError, ZeroDivisionError) as e:
+                    logger.debug(f"⚠️ 最新价浮盈百分比计算失败: {e}")
+            else:
+                logger.debug("⏩ 跳过最新价浮盈百分比：缺少必要字段或开仓保证金为0")
 
-            # 5. 最新价浮盈 = 开仓价仓位价值 - (最新价 * 持仓币数)
-            latest_pnl = open_position_value - (latest_price * position_size)
-
-            # 6. 最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
-            latest_pnl_percent_of_margin = ((open_position_value - latest_price * position_size) * 100) / open_margin if open_margin else 0
-
-        # === 调试日志：打印计算结果 ===
-        logger.error(f"🔥【DEBUG】latest_margin计算结果={latest_margin}")
-        logger.error(f"🔥【DEBUG】latest_pnl_percent_of_margin计算结果={latest_pnl_percent_of_margin}")
-
-        # 保存计算结果到缓存 - 每个字段只赋值一次
-        cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
-        cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent
-        cache[FIELD_LATEST_MARGIN] = latest_margin
-        cache[FIELD_LATEST_POSITION_VALUE] = latest_position_value
-        cache[FIELD_LATEST_PNL] = latest_pnl
-        cache[FIELD_LATEST_PNL_PERCENT_OF_MARGIN] = latest_pnl_percent_of_margin
-
-        logger.info(f" 【币安修复区】【半成品修复】  计算完成 - 标记价涨跌盈亏幅: {mark_pnl_percent:.2f}%, "
-                   f"最新价涨跌盈亏幅: {latest_pnl_percent:.2f}%, "
-                   f"最新价保证金: {latest_margin:.2f}, "
-                   f"最新价仓位价值: {latest_position_value:.2f}, "
-                   f"最新价浮盈: {latest_pnl:.2f}, "
-                   f"最新价浮盈百分比: {latest_pnl_percent_of_margin:.2f}%, "
-                   f"开仓方向: {direction}")
+        # 日志输出
+        logger.info(f"✅【币安修复区】【半成品修复】 第3步完成，成功计算 {len(calc_success)} 个字段: {calc_success}")
 
     async def _step4_merge_and_push(self):
         """
@@ -501,18 +595,18 @@ class BinanceSemiRepair:
         ==================================================
         做了三件事：
             1. 从门外存储区读取最新的币安数据
-            2. 把缓存中的8个字段值填充进去
+            2. 把缓存中的8个字段值填充进去（有值的才填充，空值不覆盖）
             3. 打上"持仓完整"标签推送给调度器
 
         需要填充的8个字段：
-            - 最新价 (已从行情获取)
-            - 标记价 (已从行情获取)
-            - 标记价涨跌盈亏幅 (计算得到)
-            - 最新价涨跌盈亏幅 (计算得到)
-            - 最新价保证金 (计算得到)
-            - 最新价仓位价值 (计算得到)
-            - 最新价浮盈 (计算得到)
-            - 最新价浮盈百分比 (计算得到)
+            - 最新价
+            - 标记价
+            - 标记价涨跌盈亏幅
+            - 最新价涨跌盈亏幅
+            - 最新价保证金
+            - 最新价仓位价值
+            - 最新价浮盈
+            - 最新价浮盈百分比
         ==================================================
         """
         logger.info("【币安修复区】【半成品修复】第4步：融合修复并推送")
@@ -526,7 +620,7 @@ class BinanceSemiRepair:
         # 创建副本（要推送的数据）
         merged_data = latest_binance.copy()
 
-        # 要填充的8个字段（严格按照设计文档）
+        # 要填充的8个字段
         fields_to_fill = [
             FIELD_LATEST_PRICE,                    # 1. 最新价
             FIELD_MARK_PRICE,                      # 2. 标记价
@@ -539,13 +633,14 @@ class BinanceSemiRepair:
         ]
 
         # 从缓存中获取这些字段的值，填充到合并数据中
+        # 【重要】只填充有值的字段，空值不覆盖
         fill_count = 0
         for field in fields_to_fill:
             if field in self.cache and self.cache[field] is not None:
                 merged_data[field] = self.cache[field]
                 fill_count += 1
 
-        logger.info(f" 【币安修复区】【半成品修复】  已填充 {fill_count} 个字段")
+        logger.info(f"📦【币安修复区】【半成品修复】 已填充 {fill_count} 个字段")
 
         # 打标签推送
         await self.scheduler.handle({
@@ -554,7 +649,7 @@ class BinanceSemiRepair:
         })
 
         contract = merged_data.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 【币安修复区】【半成品修复】已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.info(f"✅【币安修复区】【半成品修复】 已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 
