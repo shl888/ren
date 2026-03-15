@@ -533,8 +533,8 @@ class OkxMissingRepair:
             snapshot_total = 0
         has_new = (snapshot_total != cache_total)
 
-        logger.info(f" 【欧易持仓缺失修复区】  缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
-        logger.info(f" 【欧易持仓缺失修复区】  有无历史: {has_history}, 有无新结算: {has_new}")
+        logger.debug(f" 【欧易持仓缺失修复区】  缓存累计资金费: {cache_total}, 门外存储区累计资金费: {snapshot_total}")
+        logger.debug(f" 【欧易持仓缺失修复区】  有无历史: {has_history}, 有无新结算: {has_new}")
 
         # 保存门外数据供后续步骤使用
         self._snapshot_data = snapshot_data
@@ -775,7 +775,7 @@ class OkxMissingRepair:
 
         exchange = data_copy.get(FIELD_EXCHANGE, 'unknown')
         contract = data_copy.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 已推送持仓完整数据: {exchange} - {contract}")
+        logger.info(f"✅ 【欧易持仓缺失修复区】已推送持仓完整数据: {exchange} - {contract}")
 
     # ==================== 辅助方法 ====================
 
