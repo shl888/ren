@@ -125,7 +125,7 @@ class BinanceRepairArea:
             logger.warning("⚠️【币安修复区】 收到空标签")
             return
             
-        logger.info(f"📨 币安修复区收到标签: {info}")
+        logger.debug(f"📨 币安修复区收到标签: {info}")
         
         # 使用常量判断
         if info == INFO_BINANCE_SEMI:
