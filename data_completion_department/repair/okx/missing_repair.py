@@ -825,4 +825,25 @@ class OkxMissingRepair:
                 f"{db_url}/v2/pipeline",  # 使用传入的db_url
                 headers={
                     "Authorization": f"Bearer {db_token}",  # 使用传入的db_token
-                    "Content-Type":
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=10
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            if result and 'results' in result and len(result['results']) > 0:
+                return result['results'][0].get('result', {})
+            return None
+
+        except requests.exceptions.Timeout:
+            logger.error(f"❌ 【欧易持仓缺失修复区】数据库查询超时: {sql[:50]}...")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"❌ 【欧易持仓缺失修复区】数据库请求失败: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌【欧易持仓缺失修复区】 数据库查询未知错误: {e}")
+            return None
+    
