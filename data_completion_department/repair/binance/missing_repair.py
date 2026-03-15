@@ -325,7 +325,7 @@ class BinanceMissingRepair:
         """
         # ----- 第1层：检查缓存 -----
         if self.cache is not None:
-            logger.info("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
+            logger.debug("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
             return True
 
         logger.info("🔍【币安修复区】【持仓缺失修复】 第1步：缓存为空，准备从数据库读取")
@@ -343,7 +343,7 @@ class BinanceMissingRepair:
             return False
 
         logger.info("✅【币安修复区】【持仓缺失修复】 成功读取数据库连接信息")
-        logger.info(f"   数据库URL: {db_url}")
+        logger.debug(f"   数据库URL: {db_url}")
 
         # ----- 第3层：测试数据库连接是否成功 -----
         try:
@@ -437,7 +437,7 @@ class BinanceMissingRepair:
         try:
             # 先尝试小写 binance
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'binance' LIMIT 1"
-            logger.info(f"🔍【币安修复区】【持仓缺失修复】 执行查询: {sql}")
+            logger.debug(f"🔍【币安修复区】【持仓缺失修复】 执行查询: {sql}")
             
             result = self._query_database(sql, db_url, db_token)
 
@@ -457,14 +457,14 @@ class BinanceMissingRepair:
                 found = False
                 
                 for test_exchange in test_exchanges:
-                    logger.info(f"🔍【币安修复区】【持仓缺失修复】 尝试查询: {test_exchange}")
+                    logger.debug(f"🔍【币安修复区】【持仓缺失修复】 尝试查询: {test_exchange}")
                     test_result = self._query_database(
                         f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
                         db_url, db_token
                     )
                     
                     if test_result and test_result.get('rows'):
-                        logger.info(f"✅【币安修复区】【持仓缺失修复】 找到数据！交易所字段实际为: {test_exchange}")
+                        logger.debug(f"✅【币安修复区】【持仓缺失修复】 找到数据！交易所字段实际为: {test_exchange}")
                         rows = test_result.get('rows', [])
                         cols = test_result.get('cols', [])
                         found = True
@@ -484,10 +484,10 @@ class BinanceMissingRepair:
             logger.info(f"   ID: {self.cache.get('id')}")
             
             # 打印关键字段
-            logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
-            logger.info(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
-            logger.info(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
-            logger.info(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
+            logger.debug(f"   开仓时间: {self.cache.get('开仓时间')}")
+            logger.debug(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
+            logger.debug(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
+            logger.debug(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
             
             return True
 
@@ -538,23 +538,23 @@ class BinanceMissingRepair:
 
         if not has_history and not has_new:
             # 情况A：无历史 + 无新结算
-            logger.debug(" 【币安修复区】【持仓缺失修复】  情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.info(" 【币安修复区】【持仓缺失修复】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         elif not has_history and has_new:
             # 情况B：无历史 + 有新结算
-            logger.debug(" 【币安修复区】【持仓缺失修复】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.info(" 【币安修复区】【持仓缺失修复】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
 
         elif has_history and not has_new:
             # 情况C：有历史 + 无新结算
-            logger.debug(" 【币安修复区】【持仓缺失修复】  情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.info(" 【币安修复区】【持仓缺失修复】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         else:  # has_history and has_new
             # 情况D：有历史 + 有新结算
-            logger.debug("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.info("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -705,54 +705,70 @@ class BinanceMissingRepair:
 
             # 1. 标记价涨跌盈亏幅 = (标记价 - 开仓价) * 100 / 开仓价
             mark_pnl_percent = (mark_price - open_price) * 100 / open_price if open_price else 0
+            mark_pnl_percent = round(mark_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 2. 最新价涨跌盈亏幅 = (最新价 - 开仓价) * 100 / 开仓价
             latest_pnl_percent = (latest_price - open_price) * 100 / open_price if open_price else 0
+            latest_pnl_percent = round(latest_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
             latest_margin = (latest_price * position_size / leverage) if leverage else 0
+            latest_margin = round(latest_margin, 4)  # 四舍五入保留4位小数
 
             # 4. 最新价仓位价值 = 最新价 * 持仓币数
             latest_position_value = latest_price * position_size
+            latest_position_value = round(latest_position_value, 4)  # 四舍五入保留4位小数
 
             # 5. 最新价浮盈 = 最新价 * 持仓币数 - 开仓价仓位价值
             latest_pnl = (latest_price * position_size) - open_position_value
+            latest_pnl = round(latest_pnl, 4)  # 四舍五入保留4位小数
 
             # 6. 最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
             latest_pnl_percent_of_margin = ((latest_price * position_size - open_position_value) * 100 / open_margin) if open_margin else 0
+            latest_pnl_percent_of_margin = round(latest_pnl_percent_of_margin, 4)  # 四舍五入保留4位小数
 
             # 7. 标记价浮盈百分比 = (标记价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
             mark_pnl_percent_of_margin = ((mark_price * position_size - open_position_value) * 100 / open_margin) if open_margin else 0
+            mark_pnl_percent_of_margin = round(mark_pnl_percent_of_margin, 4)  # 四舍五入保留4位小数
 
             # 8. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
+            avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
         else:  # direction == "SHORT"
             # 空头 - 严格按照原始公式，独立计算每个字段
 
             # 1. 标记价涨跌盈亏幅 = (开仓价 - 标记价) * 100 / 开仓价
             mark_pnl_percent = (open_price - mark_price) * 100 / open_price if open_price else 0
+            mark_pnl_percent = round(mark_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 2. 最新价涨跌盈亏幅 = (开仓价 - 最新价) * 100 / 开仓价
             latest_pnl_percent = (open_price - latest_price) * 100 / open_price if open_price else 0
+            latest_pnl_percent = round(latest_pnl_percent, 4)  # 四舍五入保留4位小数
 
             # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
             latest_margin = (latest_price * position_size / leverage) if leverage else 0
+            latest_margin = round(latest_margin, 4)  # 四舍五入保留4位小数
 
             # 4. 最新价仓位价值 = 最新价 * 持仓币数
             latest_position_value = latest_price * position_size
+            latest_position_value = round(latest_position_value, 4)  # 四舍五入保留4位小数
 
             # 5. 最新价浮盈 = 开仓价仓位价值 - (最新价 * 持仓币数)
             latest_pnl = open_position_value - (latest_price * position_size)
+            latest_pnl = round(latest_pnl, 4)  # 四舍五入保留4位小数
 
             # 6. 最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
             latest_pnl_percent_of_margin = ((open_position_value - latest_price * position_size) * 100 / open_margin) if open_margin else 0
+            latest_pnl_percent_of_margin = round(latest_pnl_percent_of_margin, 4)  # 四舍五入保留4位小数
 
             # 7. 标记价浮盈百分比 = [开仓价仓位价值 - (标记价 * 持仓币数)] * 100 / 开仓保证金
             mark_pnl_percent_of_margin = ((open_position_value - mark_price * position_size) * 100 / open_margin) if open_margin else 0
+            mark_pnl_percent_of_margin = round(mark_pnl_percent_of_margin, 4)  # 四舍五入保留4位小数
 
             # 8. 平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
+            avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
         # 保存计算结果到缓存 - 每个字段只赋值一次，使用正确的常量名
         cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent                    # 1. 标记价涨跌盈亏幅
