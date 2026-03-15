@@ -1,4 +1,3 @@
-
 """
 私人HTTP数据获取器 - 严格零缓存模式
 完全模仿private_ws_pool的架构和交互方式
@@ -117,7 +116,7 @@ class PrivateHTTPFetcher:
         受控调度器 - 严格按照时间顺序执行
         1. 等待2分钟（让其他模块先运行）
         2. 尝试获取账户资产（5次指数退避重试）
-        3. 账户成功后启动自适应频率的账户数据获取任务
+        3. 账户成功后启动自适应频率的账户数据获取任务（监控模式，不阻塞）
         """
         while self.running:
             try:
@@ -151,20 +150,35 @@ class PrivateHTTPFetcher:
                         await asyncio.sleep(1)
 
                     if self.running and not self.in_restart_cooldown:
-                        # 🔴 修改：启动自适应频率的账户数据获取任务
+                        # 启动自适应频率的账户数据获取任务
                         account_task = asyncio.create_task(
                             self._fetch_account_adaptive_freq())
                         self.fetch_tasks.append(account_task)
                         logger.info(
                             "✅ [HTTP获取器] 自适应频率账户数据获取已启动（有持仓1秒/无持仓60秒）")
                         
-                        # 等待任务完成（正常情况下会一直运行直到被取消或遇到错误）
-                        await account_task
+                        # ========== ✅ 修复：改为监控模式，不阻塞 ==========
+                        logger.info("👀 [HTTP获取器] 进入监控模式，每秒检查任务状态")
                         
-                        # 如果任务正常结束（非取消），说明遇到了需要重启的错误
-                        if self.running and not self.in_restart_cooldown:
-                            logger.warning("⚠️ [HTTP获取器] 账户任务结束，触发重启")
-                            await self._handle_restart("账户任务结束")
+                        # 监控任务状态，但不阻塞调度器
+                        while self.running and not self.in_restart_cooldown:
+                            # 检查任务是否已结束（异常退出或被取消）
+                            if account_task.done():
+                                # 获取异常信息（如果有）
+                                try:
+                                    account_task.result()  # 这会抛出异常如果任务出错了
+                                except asyncio.CancelledError:
+                                    logger.info("📢 [HTTP获取器] 账户任务被取消")
+                                    break
+                                except Exception as e:
+                                    logger.error(f"❌ [HTTP获取器] 账户任务异常退出: {e}")
+                                    await self._handle_restart(f"账户任务异常: {e}")
+                                    break
+                            
+                            # 每秒检查一次，不阻塞事件循环
+                            await asyncio.sleep(1)
+                        
+                        logger.info("🔄 [HTTP获取器] 退出监控模式，准备重启或重新调度")
                 else:
                     logger.warning("⚠️ [HTTP获取器] 账户获取5次尝试均失败，触发重启")
                     if self.running:
