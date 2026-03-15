@@ -410,6 +410,24 @@ class BinanceSemiRepair:
         open_margin = cache.get(FIELD_OPEN_MARGIN, 1) or 1
         direction = cache.get(FIELD_OPEN_DIRECTION)
 
+        # === 调试日志：打印关键变量的值和类型 ===
+        logger.info(f"🔥【DEBUG】position_size={position_size}, 类型={type(position_size)}")
+        logger.info(f"🔥【DEBUG】leverage={leverage}, 类型={type(leverage)}, 布尔值={bool(leverage)}")
+        logger.info(f"🔥【DEBUG】open_margin={open_margin}, 类型={type(open_margin)}, 布尔值={bool(open_margin)}")
+        
+        # === 确保所有数值类型正确 ===
+        try:
+            latest_price = float(latest_price)
+            mark_price = float(mark_price)
+            position_size = float(position_size) if position_size else 0
+            leverage = float(leverage) if leverage else 1
+            open_price = float(open_price) if open_price else 0
+            open_position_value = float(open_position_value) if open_position_value else 0
+            open_margin = float(open_margin) if open_margin else 1
+        except (ValueError, TypeError) as e:
+            logger.error(f"❌ 数据类型转换失败: {e}")
+            return
+
         # 根据方向计算 - 每个字段独立计算，严格按照原始公式
         if direction == "LONG":
             # 多头 - 严格按照原始公式，独立计算每个字段
@@ -421,7 +439,7 @@ class BinanceSemiRepair:
             latest_pnl_percent = (latest_price - open_price) * 100 / open_price if open_price else 0
 
             # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
-            latest_margin = (latest_price * position_size / leverage) if leverage else 0
+            latest_margin = (latest_price * position_size) / leverage if leverage else 0
 
             # 4. 最新价仓位价值 = 最新价 * 持仓币数
             latest_position_value = latest_price * position_size
@@ -430,7 +448,7 @@ class BinanceSemiRepair:
             latest_pnl = (latest_price * position_size) - open_position_value
 
             # 6. 最新价浮盈百分比 = (最新价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
-            latest_pnl_percent_of_margin = ((latest_price * position_size - open_position_value) * 100 / open_margin) if open_margin else 0
+            latest_pnl_percent_of_margin = ((latest_price * position_size - open_position_value) * 100) / open_margin if open_margin else 0
 
         else:  # direction == "SHORT"
             # 空头 - 严格按照原始公式，独立计算每个字段
@@ -442,7 +460,7 @@ class BinanceSemiRepair:
             latest_pnl_percent = (open_price - latest_price) * 100 / open_price if open_price else 0
 
             # 3. 最新价保证金 = 最新价 * 持仓币数 ÷ 杠杆
-            latest_margin = (latest_price * position_size / leverage) if leverage else 0
+            latest_margin = (latest_price * position_size) / leverage if leverage else 0
 
             # 4. 最新价仓位价值 = 最新价 * 持仓币数
             latest_position_value = latest_price * position_size
@@ -451,7 +469,11 @@ class BinanceSemiRepair:
             latest_pnl = open_position_value - (latest_price * position_size)
 
             # 6. 最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
-            latest_pnl_percent_of_margin = ((open_position_value - latest_price * position_size) * 100 / open_margin) if open_margin else 0
+            latest_pnl_percent_of_margin = ((open_position_value - latest_price * position_size) * 100) / open_margin if open_margin else 0
+
+        # === 调试日志：打印计算结果 ===
+        logger.error(f"🔥【DEBUG】latest_margin计算结果={latest_margin}")
+        logger.error(f"🔥【DEBUG】latest_pnl_percent_of_margin计算结果={latest_pnl_percent_of_margin}")
 
         # 保存计算结果到缓存 - 每个字段只赋值一次
         cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent
