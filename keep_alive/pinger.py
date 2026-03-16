@@ -1,77 +1,126 @@
-import urllib.request
+import aiohttp  # ✅ [蚂蚁基因修复] 导入aiohttp
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 import time
 import random
-from urllib.error import URLError, HTTPError
-import socket
 from .config import Config
 
 class Pinger:
-    """Ping执行器 - 优化版"""
+    """Ping执行器 - 异步优化版"""
     
     @staticmethod
-    def ping_single(url, timeout=None):
-        """执行单次ping"""
+    async def ping_single_async(url, timeout=None, session=None):
+        """异步执行单次ping"""
         if timeout is None:
             timeout = Config.REQUEST_TIMEOUT
         
+        # ✅ [蚂蚁基因修复] 创建或使用传入的session
+        close_session = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            close_session = True
+        
         try:
-            req = urllib.request.Request(url)
-            req.add_header('User-Agent', Config.get_random_user_agent())
+            headers = {'User-Agent': Config.get_random_user_agent()}
             
-            response = urllib.request.urlopen(req, timeout=timeout)
-            status = response.getcode()
-            
-            # 读取少量数据确认响应
-            if status == 200 or status == 204:
-                try:
-                    response.read(100)  # 只读100字节
-                except:
-                    pass  # 读取失败也视为成功（有响应）
-                return True, url  # 返回成功和使用的URL
-            
-            return False, url
-            
-        except (URLError, HTTPError, socket.timeout, ConnectionError):
+            async with session.get(url, headers=headers, timeout=timeout) as response:
+                status = response.status
+                
+                # 读取少量数据确认响应
+                if status == 200 or status == 204:
+                    try:
+                        await response.content.read(100)  # ✅ [蚂蚁基因修复] 异步读取
+                    except:
+                        pass  # 读取失败也视为成功（有响应）
+                    return True, url
+                
+                return False, url
+                
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             # 静默处理常见网络错误
             return False, url
         except Exception:
             return False, url
+        finally:
+            if close_session:
+                await session.close()
     
     @classmethod
-    def ping_with_retry(cls, url, max_retries=None):
-        """带重试的ping（快速版）"""
+    async def ping_with_retry_async(cls, url, max_retries=None, session=None):
+        """异步带重试的ping（快速版）"""
         if max_retries is None:
             max_retries = Config.MAX_RETRIES
         
-        for attempt in range(max_retries + 1):  # 包括首次尝试
-            success, used_url = cls.ping_single(url)
-            if success:
-                return True, used_url
-            
-            # 快速重试等待（如果还有重试次数）
-            if attempt < max_retries:
-                time.sleep(1)  # 只等1秒
+        # ✅ [蚂蚁基因修复] 创建或使用传入的session
+        close_session = False
+        if session is None:
+            session = aiohttp.ClientSession()
+            close_session = True
+        
+        try:
+            for attempt in range(max_retries + 1):  # 包括首次尝试
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                success, used_url = await cls.ping_single_async(url, session=session)
+                if success:
+                    return True, used_url
+                
+                # 快速重试等待（如果还有重试次数）
+                if attempt < max_retries:
+                    await asyncio.sleep(1)  # ✅ [蚂蚁基因修复] 异步sleep
+        finally:
+            if close_session:
+                await session.close()
         
         return False, url
     
     @classmethod
-    def self_ping(cls):
-        """执行自ping - 带端点回退策略"""
-        # 按优先级尝试所有端点
-        for endpoint in Config.SELF_ENDPOINTS:
-            success, used_url = cls.ping_with_retry(endpoint, max_retries=1)
-            if success:
-                return True, used_url
-            # 立即尝试下一个端点，不等待
+    async def self_ping_async(cls):
+        """异步自ping - 带端点回退策略"""
+        # ✅ [蚂蚁基因修复] 创建一个共享session，避免重复创建
+        async with aiohttp.ClientSession() as session:
+            # 按优先级尝试所有端点
+            for endpoint in Config.SELF_ENDPOINTS:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                success, used_url = await cls.ping_with_retry_async(
+                    endpoint, max_retries=1, session=session
+                )
+                if success:
+                    return True, used_url
+                # 立即尝试下一个端点，不等待
         
         return False, "all_failed"
     
     @classmethod
-    def external_ping(cls):
-        """执行外ping - 保持不变"""
+    async def external_ping_async(cls):
+        """异步外ping - 保持不变"""
         target = Config.get_random_external_target()
-        success, used_url = cls.ping_with_retry(target, max_retries=2)
-        return success, used_url
+        
+        # ✅ [蚂蚁基因修复] 创建一个新的session
+        async with aiohttp.ClientSession() as session:
+            success, used_url = await cls.ping_with_retry_async(
+                target, max_retries=2, session=session
+            )
+            return success, used_url
+    
+    # ✅ [蚂蚁基因修复] 保留同步版本供非异步代码调用（内部使用run_in_executor）
+    @classmethod
+    def self_ping(cls):
+        """同步自ping（兼容旧代码）"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(cls.self_ping_async())
+        finally:
+            loop.close()
+    
+    @classmethod
+    def external_ping(cls):
+        """同步外ping（兼容旧代码）"""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(cls.external_ping_async())
+        finally:
+            loop.close()
     
     @staticmethod
     def detect_uptimerobot(request_headers):
