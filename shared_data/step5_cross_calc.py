@@ -6,11 +6,12 @@
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from collections import defaultdict
 from datetime import datetime
-import time
 from decimal import Decimal, getcontext
 
 # 设置Decimal精度
@@ -83,9 +84,10 @@ class Step5CrossCalc:
         self.log_interval = 120  # 2分钟，单位：秒
         self.process_count = 0
     
-    def process(self, platform_results: List) -> List[CrossPlatformData]:
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, platform_results: List) -> List[CrossPlatformData]:
         """
-        处理Step4的单平台数据，只做数据计算，不做业务过滤
+        异步处理Step4的单平台数据，只做数据计算，不做业务过滤
         """
         # 频率控制：只偶尔显示处理日志
         current_time = time.time()
@@ -102,6 +104,7 @@ class Step5CrossCalc:
         # 按symbol分组
         grouped = defaultdict(list)
         for item in platform_results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             # 只检查基本格式，不判断业务合理性
             if self._is_basic_valid(item):
                 grouped[item.symbol].append(item)
@@ -116,8 +119,9 @@ class Step5CrossCalc:
         
         # 合并每个合约的OKX和币安数据
         for symbol, items in grouped.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
-                cross_data = self._merge_pair(symbol, items)
+                cross_data = await self._merge_pair(symbol, items)  # ✅ 改为异步调用
                 if cross_data:
                     cross_results.append(cross_data)
             except Exception as e:
@@ -132,7 +136,7 @@ class Step5CrossCalc:
             logger.info(f"✅【流水线步骤5】Step5计算完成，共生成 {actual_contracts} 个合约的跨平台数据")
             
             # 只显示当前批次的统计
-            self._log_batch_statistics(total_contracts, actual_contracts, cross_results)
+            await self._log_batch_statistics(total_contracts, actual_contracts, cross_results)  # ✅ 改为异步调用
             
             self.last_log_time = current_time
             self.process_count = 0
@@ -141,11 +145,12 @@ class Step5CrossCalc:
         
         return cross_results
     
-    def _log_batch_statistics(self, total_contracts: int, actual_contracts: int, results: List[CrossPlatformData]):
-        """打印当前批次的统计结果"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _log_batch_statistics(self, total_contracts: int, actual_contracts: int, results: List[CrossPlatformData]):
+        """异步打印当前批次的统计结果"""
         # 数据处理结果验证
         if results:
-            self._validate_data_quality(results)
+            await self._validate_data_quality(results)  # ✅ 改为异步调用
             
             # 总结
             if total_contracts > 0:
@@ -154,8 +159,9 @@ class Step5CrossCalc:
             logger.info(f"✅【流水线步骤5】成功计算 {actual_contracts} 个合约的跨平台数据")
             logger.info(f"✅【流水线步骤5】成功生成 {actual_contracts} 个双平台合约的{actual_contracts}条成品数据")
     
-    def _validate_data_quality(self, results: List[CrossPlatformData]):
-        """验证数据处理结果（只做统计，不做过滤）"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _validate_data_quality(self, results: List[CrossPlatformData]):
+        """异步验证数据处理结果（只做统计，不做过滤）"""
         total_count = len(results)
         
         # 统计各种计算的完整性
@@ -166,6 +172,7 @@ class Step5CrossCalc:
         price_to_mark_count = 0
         
         for item in results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.trade_price_diff is not None:
                 trade_price_diff_count += 1
             if item.trade_price_diff_percent is not None:
@@ -255,12 +262,20 @@ class Step5CrossCalc:
     
     # ==================== _merge_pair 方法 ====================
     
-    def _merge_pair(self, symbol: str, items: List) -> Optional[CrossPlatformData]:
-        """合并OKX和币安数据"""
+    # ✅ [蚂蚁基因修复] 改为异步方法，并修复生成器表达式
+    async def _merge_pair(self, symbol: str, items: List) -> Optional[CrossPlatformData]:
+        """异步合并OKX和币安数据"""
         
-        # 分离OKX和币安数据
-        okx_item = next((item for item in items if item.exchange == "okx"), None)
-        binance_item = next((item for item in items if item.exchange == "binance"), None)
+        # ✅ [蚂蚁基因修复] 将生成器表达式改为显式循环，并在循环内让出
+        okx_item = None
+        binance_item = None
+        
+        for item in items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+            if item.exchange == "okx":
+                okx_item = item
+            elif item.exchange == "binance":
+                binance_item = item
         
         # 必须两个平台都有数据
         if not okx_item or not binance_item:
