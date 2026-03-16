@@ -1,3 +1,4 @@
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 import time
 import sys
 from .config import Config
@@ -7,7 +8,7 @@ from .monitor import Monitor
 from .utils import print_banner, format_time, format_timestamp, check_simple_memory
 
 class KeepAlive:
-    """保活主类 - 优化版"""
+    """保活主类 - 异步优化版"""
     
     def __init__(self, background_mode=False):
         self.background_mode = background_mode
@@ -15,7 +16,7 @@ class KeepAlive:
         
         # 初始化组件
         self.config = Config
-        self.pinger = Pinger
+        self.pinger = Pinger()
         self.monitor = Monitor(max_history=10)  # ✅ 只保留10条记录
         self.scheduler = Scheduler(self.monitor)  # ✅ 传入monitor
         
@@ -25,18 +26,19 @@ class KeepAlive:
             print(f"[保活] 端点策略: {len(self.config.SELF_ENDPOINTS)}个优先级")
             print(f"[保活] 记录限制: 最近{self.monitor.recent_results.maxlen}条")
     
-    def run_cycle(self):
-        """执行一个保活周期"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def run_cycle(self):
+        """异步执行一个保活周期"""
         cycle_start = time.time()
         timestamp = format_timestamp(cycle_start)
         
         print(f"[{timestamp}] 开始保活周期...")
         
-        # 步骤1: 自ping（带端点回退）
-        self_ping_success, self_endpoint = self.pinger.self_ping()
+        # 步骤1: 自ping（带端点回退）- 异步调用
+        self_ping_success, self_endpoint = await self.pinger.self_ping_async()
         
-        # 步骤2: 外ping（保持不变）
-        external_ping_success, external_endpoint = self.pinger.external_ping()
+        # 步骤2: 外ping（保持不变）- 异步调用
+        external_ping_success, external_endpoint = await self.pinger.external_ping_async()
         
         # 判断本次周期是否成功
         cycle_success = self_ping_success or external_ping_success
@@ -73,17 +75,19 @@ class KeepAlive:
         
         return cycle_success
     
-    def _run_main_loop(self):
-        """主运行循环"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _run_main_loop(self):
+        """异步主运行循环"""
         print("[保活] 🚀 开始保活循环...")
         
         cycle_count = 0
         try:
             while self.running:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
                 cycle_count += 1
                 
                 # 执行一个周期
-                self.run_cycle()
+                await self.run_cycle()
                 
                 # 计算并等待下次执行
                 next_interval, reason = self.scheduler.calculate_interval()
@@ -93,30 +97,32 @@ class KeepAlive:
                 print(f"      间隔: {format_time(next_interval)} ({reason})")
                 print("-" * 50)
                 
-                # 等待（支持优雅中断）
-                self._sleep_with_interrupt(next_interval)
+                # 异步等待（支持优雅中断）
+                await self._sleep_with_interrupt(next_interval)
                 
-        except KeyboardInterrupt:
-            print("\n[保活] 🛑 手动停止")
+        except asyncio.CancelledError:  # ✅ [蚂蚁基因修复] 捕获取消异常
+            print("\n[保活] 🛑 任务被取消")
             self.stop()
         except Exception as e:
             print(f"[错误] ❗ 运行异常: {e}")
             print("[保活] ⏳ 30秒后重启...")
-            time.sleep(30)
-            self._run_main_loop()  # 重启
+            await asyncio.sleep(30)
+            await self._run_main_loop()  # 重启
     
-    def _sleep_with_interrupt(self, seconds):
-        """可中断的睡眠"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _sleep_with_interrupt(self, seconds):
+        """异步可中断的睡眠"""
         interval = 1  # 每次检查间隔
         for _ in range(int(seconds / interval)):
             if not self.running:
                 break
-            time.sleep(interval)
+            await asyncio.sleep(interval)  # ✅ [蚂蚁基因修复] 异步sleep
     
-    def run(self):
-        """运行入口"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def run(self):
+        """异步运行入口"""
         # 直接开始主循环（HTTP就绪检查在外部完成）
-        self._run_main_loop()
+        await self._run_main_loop()
     
     def stop(self):
         """停止保活"""
