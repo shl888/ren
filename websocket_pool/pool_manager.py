@@ -88,6 +88,7 @@ class SimpleSymbolFetcher:
     async def _fetch_with_retry(self, exchange_name: str, url: str, parser_func: Callable) -> List[str]:
         """通用重试获取函数 - 3次重试，每次新连接"""
         for attempt in range(1, 4):  # 3次重试
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 # 每次创建新会话，强制新连接（换IP）
                 async with aiohttp.ClientSession() as session:
@@ -113,7 +114,9 @@ class SimpleSymbolFetcher:
                         # 200成功
                         if resp.status == 200:
                             data = await resp.json()
-                            symbols = await parser_func(data)
+                            # ✅ [蚂蚁基因修复] 将同步解析函数放到线程池执行
+                            loop = asyncio.get_event_loop()
+                            symbols = await loop.run_in_executor(None, parser_func, data)
                             
                             if symbols:
                                 logger.info(f"✅ [{exchange_name}] HTTP获取成功: {len(symbols)}个合约 (第{attempt}次)")
@@ -143,8 +146,9 @@ class SimpleSymbolFetcher:
         logger.error(f"❌ [{exchange_name}] 所有3次尝试失败")
         return []
     
-    async def _parse_binance(self, data: dict) -> List[str]:
-        """解析币安返回数据"""
+    # ✅ [蚂蚁基因修复] 将解析函数改为同步，因为会在线程池中执行
+    def _parse_binance_sync(self, data: dict) -> List[str]:
+        """同步解析币安返回数据（在线程池中执行）"""
         symbols = []
         for s in data.get('symbols', []):
             if (s.get('contractType') == 'PERPETUAL' and 
@@ -153,8 +157,8 @@ class SimpleSymbolFetcher:
                 symbols.append(s.get('symbol'))
         return symbols
     
-    async def _parse_okx(self, data: dict) -> List[str]:
-        """解析欧意返回数据"""
+    def _parse_okx_sync(self, data: dict) -> List[str]:
+        """同步解析欧意返回数据（在线程池中执行）"""
         if data.get('code') != '0':
             logger.warning(f"[欧意] API返回错误码: {data.get('code')}")
             return []
@@ -167,7 +171,7 @@ class SimpleSymbolFetcher:
         return await self._fetch_with_retry(
             exchange_name="币安",
             url=self.BINANCE_URL,
-            parser_func=self._parse_binance
+            parser_func=self._parse_binance_sync
         )
     
     async def fetch_okx(self) -> List[str]:
@@ -175,7 +179,7 @@ class SimpleSymbolFetcher:
         return await self._fetch_with_retry(
             exchange_name="欧意",
             url=self.OKX_URL,
-            parser_func=self._parse_okx
+            parser_func=self._parse_okx_sync
         )
 
 # ============ 【WebSocket连接池管理器类】============
@@ -250,6 +254,7 @@ class WebSocketPoolManager:
         
         tasks = []
         for exchange_name in ["binance", "okx"]:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             task = asyncio.create_task(
                 self._fetch_exchange_symbols_with_fallback(exchange_name)
             )
@@ -258,6 +263,7 @@ class WebSocketPoolManager:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for i, exchange_name in enumerate(["binance", "okx"]):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             result = results[i]
             if isinstance(result, Exception):
                 logger.error(f"❌[{exchange_name}] 获取合约失败: {result}")
@@ -323,7 +329,11 @@ class WebSocketPoolManager:
             logger.warning("⚠️ 至少一个交易所无合约，无法进行双平台匹配")
             return {}
         
-        common_result = self._find_common_symbols_precise(binance_symbols, okx_symbols)
+        # ✅ [蚂蚁基因修复] 将同步匹配函数放到线程池执行
+        loop = asyncio.get_event_loop()
+        common_result = await loop.run_in_executor(
+            None, self._find_common_symbols_precise_sync, binance_symbols, okx_symbols
+        )
         
         if common_result and common_result.get("binance") and common_result.get("okx"):
             self._common_symbols_cache = common_result
@@ -347,6 +357,7 @@ class WebSocketPoolManager:
         
         tasks = []
         for exchange_name in ["binance", "okx"]:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if common_symbols and exchange_name in common_symbols:
                 symbols = common_symbols[exchange_name]
                 mode = "双平台模式"
@@ -424,8 +435,9 @@ class WebSocketPoolManager:
     
     # ============ 精确双平台匹配核心方法 ============
     
-    def _find_common_symbols_precise(self, binance_symbols: List[str], okx_symbols: List[str]) -> Dict[str, List[str]]:
-        """精确查找双平台共有合约"""
+    # ✅ [蚂蚁基因修复] 改为同步方法，因为会在线程池中执行
+    def _find_common_symbols_precise_sync(self, binance_symbols: List[str], okx_symbols: List[str]) -> Dict[str, List[str]]:
+        """同步精确查找双平台共有合约（在线程池中执行）"""
         binance_coin_to_contract = {}
         okx_coin_to_contract = {}
         
@@ -527,6 +539,7 @@ class WebSocketPoolManager:
         status = {}
         
         for exchange_name, pool in self.exchange_pools.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
                 pool_status = await pool.get_status()
                 status[exchange_name] = pool_status
@@ -546,6 +559,7 @@ class WebSocketPoolManager:
         logger.info("⚠️ 正在关闭所有WebSocket连接池...")
         
         for exchange_name, pool in self.exchange_pools.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
                 await pool.shutdown()
             except Exception as e:
