@@ -229,8 +229,12 @@ class PipelineManager:
             try:
                 from data_completion_department import receive_market_data
                 
-                # 直接转成列表，不组装字典
-                market_data_list = [result.__dict__ for result in step5_results]
+                # ✅ [蚂蚁基因修复] 将列表推导式改为循环添加，并在循环内让出CPU
+                market_data_list = []
+                for result in step5_results:
+                    await asyncio.sleep(0)  # 每个迭代让出CPU
+                    market_data_list.append(result.__dict__)
+                
                 await receive_market_data(market_data_list)
                 
                 logger.debug(f"📤【 公开数据处理管理员】已推送 {len(market_data_list)} 个合约的行情数据到数据完成部门")
@@ -277,6 +281,7 @@ class PipelineManager:
     async def _monitor_system(self):
         """监控系统运行状态（包含每小时重置检查）"""
         while self.system_running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 # 每分钟报告一次状态
                 await asyncio.sleep(60)
