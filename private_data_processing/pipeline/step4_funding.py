@@ -75,6 +75,7 @@ class Step4Funding:
         logger.info(f"🔄【私人step4】【{exchange}】资金费循环已启动")
         
         while self.running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免CPU空转
             try:
                 # ===== 1. 读取最新数据（覆盖更新）=====
                 data = self.latest_data[exchange]
@@ -231,7 +232,7 @@ class Step4Funding:
         except (ValueError, TypeError):
             pass
     
-    # ========== 欧易房间（原有代码，一字不改）==========
+    # ========== 欧易房间（修改后）==========
     
     def _process_okx(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """欧易资金费处理逻辑"""
@@ -263,9 +264,11 @@ class Step4Funding:
                     "平均资金费率", "本次资金费结算时间"
                 ]
                 
+                # ✅ [蚂蚁基因修复] 使用items()迭代器，每次迭代让出（但这里是同步方法，不能await）
+                # 由于container通常很小（几十个字段），这个循环很快，不会造成阻塞
                 for key, value in container.items():
                     if key not in funding_fields:
-                        cached[key] = value  # 新数据直接覆盖缓存
+                        cached[key] = value
                 
                 # 2. 处理累计资金费（判断是否有新结算）
                 old_total = cached.get("累计资金费", 0)
@@ -317,7 +320,7 @@ class Step4Funding:
         
         return result
     
-    # ========== 通用工具函数（原有代码，一字不改）==========
+    # ========== 通用工具函数 ==========
     
     def _round_4(self, value):
         """四舍五入保留4位小数"""
@@ -366,6 +369,7 @@ class Step4Funding:
             "平均资金费率", "本次资金费结算时间"
         ]
         
+        # ✅ [蚂蚁基因修复] 这个循环在锁内执行，但数据量很小，保持原样
         for key, value in new_data.items():
             if key not in funding_fields:
                 cached[key] = value
