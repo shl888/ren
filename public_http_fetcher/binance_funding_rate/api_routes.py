@@ -50,10 +50,10 @@ async def get_settlement_public(request: web.Request) -> web.Response:
         
         formatted_data = []
         for symbol, data_dict in funding_data.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             # ✅ 正确解析结构：data_dict = {"funding_settlement": {...}}
             funding_info = data_dict.get('funding_settlement', {})
             raw_data = funding_info.get('raw_data', {})  # ⚠️ 关键：从raw_data获取
-            
             
             # ✅ 统一为raw_data格式
             formatted_data.append({
