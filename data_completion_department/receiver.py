@@ -318,7 +318,7 @@ class DataCompletionReceiver:
         推送规则：
             - 创建快照副本，避免推送过程中数据被修改
             - 遍历所有订阅者，为每个订阅者创建异步任务
-            - 不等待订阅者处理完成，立即返回
+            - 等待所有推送完成，但每个推送是独立的
         
         推送格式：
             {
@@ -338,14 +338,15 @@ class DataCompletionReceiver:
             'timestamp': datetime.now().isoformat()
         }
         
-        # ✅ [蚂蚁基因修复] 改为并行推送：创建所有任务，然后并行执行
+        # 创建所有推送任务
         tasks = []
         for callback in self.subscribers:
             tasks.append(self._push_to_subscriber(callback, snapshot))
         
-        # 并行执行所有推送任务，不等待结果
+        # ✅ [蚂蚁基因修复] 等待所有推送完成
+        # 这样不会阻塞太久，因为 _push_to_subscriber 内部是 create_task
         if tasks:
-            asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
+            await asyncio.gather(*tasks, return_exceptions=True)
     
     async def _push_to_subscriber(self, callback: Callable, snapshot: dict = None):
         """
