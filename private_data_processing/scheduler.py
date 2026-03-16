@@ -136,6 +136,7 @@ class PrivateDataScheduler:
             # ===== 🔴 关键修改：只转发，不等待！ =====
             # 对每条提取结果，创建独立任务执行后续步骤
             for result in results:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免大量结果阻塞事件循环
                 asyncio.create_task(self._process_single_result(result))
             
             # 立即返回，不等待任何任务完成！
@@ -229,7 +230,11 @@ class PrivateDataScheduler:
             
             # ===== 关键步骤：把数字字段转换为Python数字类型 =====
             # 供大脑模块计算使用
-            converted_container = self._convert_numeric_fields(container)
+            # ✅ [蚂蚁基因修复] 将同步的转换方法放到线程池执行，避免阻塞事件循环
+            loop = asyncio.get_event_loop()
+            converted_container = await loop.run_in_executor(
+                None, self._convert_numeric_fields, container
+            )
             
             # 组装数据包
             completion_data = {
@@ -331,6 +336,7 @@ class PrivateDataScheduler:
         none_count = 0
         
         for key, value in converted.items():
+            # 这个循环在同步方法中，但此方法现在在线程池中执行，不会阻塞事件循环
             if value is None:
                 # None 保持 None
                 none_count += 1
@@ -376,6 +382,7 @@ class PrivateDataScheduler:
         # 记录关键字段示例
         sample_fields = ['交易所', '开仓合约名', '杠杆', '开仓价', '开仓时间']
         for field in sample_fields:
+            # 这个循环很小（只有5个字段），不会造成阻塞，保持原样
             if field in converted:
                 logger.debug(f" 【私人调度器】 📌 {field}: {converted[field]} ({type(converted[field]).__name__})")
         
