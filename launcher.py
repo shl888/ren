@@ -347,6 +347,8 @@ async def main():
         
         # ==================== 15. 启动数据完成部门模块 ====================
         logger.info("【启动文件】========== 开始启动【数据完成部门】模块 ==========")
+        # 【已注释】暂时不启动数据完成部门模块，用于测试
+        '''
         try:
             from data_completion_department import (
                 get_receiver,
@@ -399,7 +401,7 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动数据完成模块失败: {e}")
             logger.error(traceback.format_exc())
-        
+        '''
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
