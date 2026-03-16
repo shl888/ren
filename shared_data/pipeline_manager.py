@@ -177,7 +177,7 @@ class PipelineManager:
             self._check_hourly_reset()
             
             # ✅ 步骤0：币安历史费率限流
-            step0_results = self.step0.process(water_data)
+            step0_results = await self.step0.process(water_data)
             
             # 记录Step0统计
             step0_status = self.step0.get_status()
@@ -192,27 +192,27 @@ class PipelineManager:
                 return
             
             # ✅ 步骤1：过滤提取（接收Step0的输出！）
-            step1_results = self.step1.process(step0_results)
+            step1_results = await self.step1.process(step0_results)
             if not step1_results:
                 return
             
             # 步骤2：融合
-            step2_results = self.step2.process(step1_results)
+            step2_results = await self.step2.process(step1_results)
             if not step2_results:
                 return
             
             # 步骤3：对齐
-            step3_results = self.step3.process(step2_results)
+            step3_results = await self.step3.process(step2_results)
             if not step3_results:
                 return
             
             # 步骤4：计算
-            step4_results = self.step4.process(step3_results)
+            step4_results = await self.step4.process(step3_results)
             if not step4_results:
                 return
             
             # 步骤5：跨平台计算
-            step5_results = self.step5.process(step4_results)
+            step5_results = await self.step5.process(step4_results)
             if not step5_results:
                 return
             
