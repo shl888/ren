@@ -3,6 +3,7 @@
 """
 from aiohttp import web
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 from datetime import datetime
 from data_completion_department.receiver import get_receiver
 
@@ -17,7 +18,9 @@ def setup_data_completion_routes(app: web.Application):
     async def get_data_summary(request):
         """获取所有数据的大纲（按来源分类）"""
         try:
-            data = receiver.get_data_summary()
+            # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, receiver.get_data_summary)
             return web.json_response(data)
         except Exception as e:
             logger.error(f"获取数据大纲失败: {e}")
@@ -30,7 +33,9 @@ def setup_data_completion_routes(app: web.Application):
     async def get_public_market_data(request):
         """获取公开市场数据详情"""
         try:
-            data = receiver.get_public_market_data()
+            # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, receiver.get_public_market_data)
             return web.json_response(data)
         except Exception as e:
             logger.error(f"获取行情数据失败: {e}")
@@ -43,7 +48,9 @@ def setup_data_completion_routes(app: web.Application):
     async def get_private_user_data(request):
         """获取私人用户数据详情"""
         try:
-            data = receiver.get_private_user_data()
+            # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, receiver.get_private_user_data)
             return web.json_response(data)
         except Exception as e:
             logger.error(f"获取私人数据失败: {e}")
