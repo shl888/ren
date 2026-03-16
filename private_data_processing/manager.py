@@ -209,7 +209,7 @@ class PrivateDataProcessor:
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
                             logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
-                        await self._feed_full_storage_to_step1()
+#                        await self._feed_full_storage_to_step1()
                         return
                     
                     if category == '12_取消止盈':
@@ -224,7 +224,6 @@ class PrivateDataProcessor:
                     if category in ['13_止损过期(被触发)', '14_止损过期(被取消)', 
                                     '15_止盈过期(被触发)', '16_止盈过期(被取消)']:
                         logger.debug(f"⏭️【私人数据处理】 [币安订单] 过期事件不缓存: {category}")
-                        await self._feed_full_storage_to_step1()
                         return
                     
                     # 按分类存储
