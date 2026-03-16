@@ -68,6 +68,7 @@ class PrivateDataProcessor:
                 current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                 
                 for k in current_keys:
+                    time.sleep(0)  # ✅ [蚂蚁基因修复] 线程中让出CPU时间片，避免长时间占用线程资源
                     del classified[k]
                 
                 if current_keys:
@@ -99,6 +100,7 @@ class PrivateDataProcessor:
                     order_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
                     
                     for k in order_keys:
+                        time.sleep(0)  # ✅ [蚂蚁基因修复] 线程中让出CPU时间片，避免长时间占用线程资源
                         del classified[k]
                     
                     if order_keys:
@@ -239,6 +241,7 @@ class PrivateDataProcessor:
                     if order_id:
                         existing = False
                         for item in classified[classified_key]:
+                            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
                             if item['data']['o'].get('i') == order_id:
                                 existing = True
                                 logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
@@ -346,6 +349,7 @@ class PrivateDataProcessor:
                         if order_id and order_id != 'unknown':
                             existing = False
                             for item in classified[classified_key]:
+                                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
                                 item_data = item.get('data', {})
                                 if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
                                     if item_data['data'][0].get('ordId') == order_id:
@@ -461,6 +465,7 @@ class PrivateDataProcessor:
         try:
             formatted_data = {}
             for key, data in self.memory_store['private_data'].items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步方法中的循环让出CPU，避免数据量大时阻塞
                 if key in ['binance_order_update', 'okx_order_update']:
                     classified = data.get('classified', {})
                     summary = {}
@@ -513,6 +518,7 @@ class PrivateDataProcessor:
         try:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步方法中的循环让出CPU，避免数据量大时阻塞
                 if key.startswith(f"{exchange.lower()}_"):
                     
                     if key in ['binance_order_update', 'okx_order_update']:
