@@ -35,7 +35,7 @@
 import os
 import logging
 import asyncio
-import requests
+import aiohttp  # ✅ [蚂蚁基因修复] 改用异步HTTP库
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -130,10 +130,27 @@ class BinanceMissingRepair:
         # 数据库连接改为按需使用，只在第1步缓存为空时才读取环境变量
         # 这样可以避免不必要的数据库连接，也符合"用完即弃"的原则
 
+        # ✅ [蚂蚁基因修复] 添加aiohttp会话管理
+        self._session = None
+
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
 
         logger.info("✅【币安修复区】【持仓缺失修复】 修复区初始化完成")
+
+    # ✅ [蚂蚁基因修复] 获取或创建aiohttp会话
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """获取或创建aiohttp会话"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    # ✅ [蚂蚁基因修复] 关闭会话
+    async def close(self):
+        """关闭aiohttp会话"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            logger.debug("🔌【币安修复区】【持仓缺失修复】 HTTP会话已关闭")
 
     # ==================== 对外入口 ====================
 
@@ -244,6 +261,7 @@ class BinanceMissingRepair:
         logger.info("🔄【币安修复区】【持仓缺失修复】 修复循环开始")
 
         while self.is_running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_BINANCE_MISSING:
                     logger.info("【币安修复区】【持仓缺失修复】门外标签已不是币安持仓缺失，停止修复循环")
@@ -347,7 +365,7 @@ class BinanceMissingRepair:
 
         # ----- 第3层：测试数据库连接是否成功 -----
         try:
-            test_result = self._query_database("SELECT 1", db_url, db_token)
+            test_result = await self._query_database("SELECT 1", db_url, db_token)
             if test_result is None:
                 logger.error("❌【币安修复区】【持仓缺失修复】 数据库连接失败（网络问题或令牌错误）")
                 return False
@@ -358,7 +376,7 @@ class BinanceMissingRepair:
 
         # ----- 第4层：检查所有表 -----
         try:
-            tables_result = self._query_database(
+            tables_result = await self._query_database(
                 "SELECT name FROM sqlite_master WHERE type='table'", 
                 db_url, db_token
             )
@@ -372,6 +390,7 @@ class BinanceMissingRepair:
             
             all_tables = []
             for row in rows:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if row and len(row) > 0:
                     if isinstance(row[0], dict):
                         table_name = row[0].get('value')
@@ -392,7 +411,7 @@ class BinanceMissingRepair:
 
         # ----- 第5层：查看表中所有数据 -----
         try:
-            all_data = self._query_database(
+            all_data = await self._query_database(
                 "SELECT 交易所, 开仓合约名, id FROM active_positions", 
                 db_url, db_token
             )
@@ -406,6 +425,7 @@ class BinanceMissingRepair:
                 # 找出交易所字段的索引位置
                 exchange_idx = None
                 for i, col in enumerate(cols):
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     if isinstance(col, dict):
                         col_name = col.get('name')
                     else:
@@ -417,6 +437,7 @@ class BinanceMissingRepair:
                 if exchange_idx is not None:
                     exchanges = []
                     for row in rows:
+                        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                         if row and len(row) > exchange_idx:
                             if isinstance(row[exchange_idx], dict):
                                 exchange = row[exchange_idx].get('value')
@@ -439,7 +460,7 @@ class BinanceMissingRepair:
             sql = "SELECT * FROM active_positions WHERE 交易所 = 'binance' LIMIT 1"
             logger.debug(f"🔍【币安修复区】【持仓缺失修复】 执行查询: {sql}")
             
-            result = self._query_database(sql, db_url, db_token)
+            result = await self._query_database(sql, db_url, db_token)
 
             if result is None:
                 logger.error("❌【币安修复区】【持仓缺失修复】 查询币安数据失败")
@@ -457,8 +478,9 @@ class BinanceMissingRepair:
                 found = False
                 
                 for test_exchange in test_exchanges:
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     logger.debug(f"🔍【币安修复区】【持仓缺失修复】 尝试查询: {test_exchange}")
-                    test_result = self._query_database(
+                    test_result = await self._query_database(
                         f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
                         db_url, db_token
                     )
@@ -823,6 +845,7 @@ class BinanceMissingRepair:
             # 尝试提取，如果提取不到或为空值，保留原缓存值
             extract_count = 0
             for field in fields_to_extract:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if field in latest_binance and latest_binance[field] is not None and latest_binance[field] != '':
                     self.cache[field] = latest_binance[field]
                     extract_count += 1
@@ -905,13 +928,15 @@ class BinanceMissingRepair:
 
         return market_data.get(contract)
 
-    def _query_database(self, sql: str, db_url: str, db_token: str, params: List = None) -> Optional[Dict]:
+    async def _query_database(self, sql: str, db_url: str, db_token: str, params: List = None) -> Optional[Dict]:
         """
-        查询Turso数据库
+        ✅ [蚂蚁基因修复] 异步查询Turso数据库
         ==================================================
         【修改说明】
         接收数据库连接信息作为参数，而不是使用实例变量。
         这样符合"按需连接、用完即弃"的原则。
+        
+        使用异步 aiohttp 替代同步 requests
 
         使用正确的Turso API返回格式解析：
             {
@@ -942,6 +967,7 @@ class BinanceMissingRepair:
         # 转换参数格式
         args = []
         for p in params:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if p is None:
                 args.append({"type": "null", "value": None})
             else:
@@ -963,8 +989,10 @@ class BinanceMissingRepair:
             "requests": [request_item]
         }
 
+        session = await self._get_session()
+
         try:
-            response = requests.post(
+            async with session.post(
                 f"{db_url}/v2/pipeline",
                 headers={
                     "Authorization": f"Bearer {db_token}",
@@ -972,22 +1000,23 @@ class BinanceMissingRepair:
                 },
                 json=payload,
                 timeout=10
-            )
-            response.raise_for_status()
-            result = response.json()
+            ) as response:
+                
+                response.raise_for_status()
+                result = await response.json()
 
-            # ✅ 正确的解析路径：results[0].response.result
-            if result and 'results' in result and len(result['results']) > 0:
-                first_result = result['results'][0]
-                if 'response' in first_result and 'result' in first_result['response']:
-                    return first_result['response']['result']  # 返回 {cols, rows}
-            
-            return None
+                # ✅ 正确的解析路径：results[0].response.result
+                if result and 'results' in result and len(result['results']) > 0:
+                    first_result = result['results'][0]
+                    if 'response' in first_result and 'result' in first_result['response']:
+                        return first_result['response']['result']  # 返回 {cols, rows}
+                
+                return None
 
-        except requests.exceptions.Timeout:
+        except asyncio.TimeoutError:
             logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库查询超时: {sql[:50]}...")
             return None
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库请求失败: {e}")
             return None
         except Exception as e:
@@ -1006,9 +1035,12 @@ class BinanceMissingRepair:
         result = {}
         for i, col in enumerate(cols):
             if i < len(row):
-                col_name = col.get('name')
+                col_name = col.get('name') if isinstance(col, dict) else col
                 value_cell = row[i]
-                value = value_cell.get('value') if value_cell else None
+                if isinstance(value_cell, dict):
+                    value = value_cell.get('value')
+                else:
+                    value = value_cell
                 result[col_name] = value
         return result
 
