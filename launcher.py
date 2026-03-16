@@ -295,9 +295,11 @@ async def main():
             data_receiver = get_receiver()
             logger.info("✅ 【启动文件】【数据完成部门】接收存储区已初始化")
             
-            # 2. 创建数据库实例
+            # 2. 创建数据库实例 - ✅ [蚂蚁基因修复] 改为异步初始化
             logger.debug("【启动文件】创建【数据完成部门】的数据库区实例...")
             database = Database()
+            # 异步初始化数据库（连接测试、建表等）
+            await database.initialize()
             logger.info("✅ 【启动文件】【数据完成部门】数据库区已初始化")
             
             # 3. 创建调度器
@@ -379,6 +381,7 @@ async def main():
         logger.info("=" * 60)
         
         while brain.running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             await asyncio.sleep(1)
         
     except KeyboardInterrupt:
