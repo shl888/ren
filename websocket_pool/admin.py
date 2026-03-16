@@ -72,6 +72,7 @@ class WebSocketAdmin:
         logger.info("[管理员] 🔕 进入纯被动模式，等待连接池直接请求")
         
         while self._running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 # ✅ 什么都不做，只保持循环运行
                 # 重启请求通过 handle_restart_request() 直接调用
@@ -171,6 +172,7 @@ class WebSocketAdmin:
             }
             
             for exchange, ex_status in internal_status.items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if isinstance(ex_status, dict):
                     masters = ex_status.get("masters", [])
                     warm_standbys = ex_status.get("warm_standbys", [])
@@ -213,6 +215,7 @@ class WebSocketAdmin:
             # 检查主连接
             issues = []
             for exchange, exchange_info in status.get("exchanges", {}).items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 masters_connected = exchange_info.get("masters_connected", 0)
                 masters_total = exchange_info.get("masters_total", 0)
                 
