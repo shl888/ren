@@ -33,6 +33,7 @@
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio用于并行执行
 from typing import Dict
 from .semi_repair import BinanceSemiRepair
 from .missing_repair import BinanceMissingRepair
@@ -103,9 +104,12 @@ class BinanceRepairArea:
             
         self.latest_snapshot = snapshot
         
-        # 分发给两个修复文件
-        await self.semi_repair.update_snapshot(snapshot)
-        await self.missing_repair.update_snapshot(snapshot)
+        # ✅ [蚂蚁基因修复] 改为并行执行，两个修复文件同时更新快照
+        await asyncio.gather(
+            self.semi_repair.update_snapshot(snapshot),
+            self.missing_repair.update_snapshot(snapshot),
+            return_exceptions=True  # 一个失败不影响另一个
+        )
         
         logger.debug(f"📦 币安修复区收到存储区快照，时间戳: {snapshot.get('timestamp')}")
     
@@ -135,9 +139,12 @@ class BinanceRepairArea:
             await self.missing_repair.handle_info(info)
             
         elif info == INFO_BINANCE_CLOSED:
-            # 同时发给两个文件，关闭所有修复流程
-            await self.semi_repair.handle_info(info)
-            await self.missing_repair.handle_info(info)
+            # ✅ [蚂蚁基因修复] 改为并行执行，同时通知两个文件关闭修复流程
+            await asyncio.gather(
+                self.semi_repair.handle_info(info),
+                self.missing_repair.handle_info(info),
+                return_exceptions=True  # 一个失败不影响另一个
+            )
             
         else:
             logger.warning(f"⚠️ 币安修复区收到未知信息标签: {info}")
