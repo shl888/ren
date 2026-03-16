@@ -67,6 +67,7 @@ class PrivateWebSocketConnection:
             # 取消所有任务
             tasks = [self.health_check_task, self.heartbeat_task, self.receive_task]
             for task in tasks:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU，避免任务取消过程阻塞
                 if task:
                     task.cancel()
                     try:
@@ -105,6 +106,7 @@ class PrivateWebSocketConnection:
         """通用带重试的连接方法"""
         # 快速重试
         for attempt in range(max_quick_retries):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免重试循环阻塞
             try:
                 logger.error(f"[私人连接池] {self.connection_id} 快速重试第{attempt + 1}次")
                 await connect_func()
@@ -118,6 +120,7 @@ class PrivateWebSocketConnection:
         
         # 慢速重试
         for attempt in range(max_slow_retries):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免重试循环阻塞
             try:
                 logger.error(f"[私人连接池] {self.connection_id} 慢速重试第{attempt + 1}次")
                 await connect_func()
@@ -196,6 +199,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     async def _try_multiple_servers(self):
         """币安尝试多个服务器"""
         for server_index, server_url in enumerate(self.backup_servers):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免服务器切换循环阻塞
             logger.info(f"[私人连接池] 币安私人 尝试服务器 {server_index + 1}/{len(self.backup_servers)}")
             self.ws_url = server_url
             
@@ -241,6 +245,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
     async def _active_probe_loop(self):
         """主动探测循环 - 核心检测逻辑"""
         while self.connected:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免极端情况下循环饿死
             try:
                 await asyncio.sleep(self.probe_interval)
                 
@@ -263,7 +268,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.probe_counter += 1
                 probe_id = 99900 + (self.probe_counter % 100)
                 
-                # ✅ 关键：使用LIST_SUBSCRIPTIONS（币安必响应）
+                # 使用LIST_SUBSCRIPTIONS（币安必响应）
                 probe_msg = {
                     "method": "LIST_SUBSCRIPTIONS",
                     "id": probe_id
@@ -274,7 +279,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 self.waiting_for_probe = True
                 self.probe_ids.add(probe_id)
                 
-                # 🔥 发送失败 = 连接已死
+                # 发送失败 = 连接已死
                 await self.ws.send(json.dumps(probe_msg))
                 
             except asyncio.CancelledError:
@@ -289,6 +294,7 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
         """接收消息 - 处理探测响应"""
         try:
             async for message in self.ws:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步迭代循环内让出CPU，避免消息风暴时阻塞
                 self.last_message_time = datetime.now()
                 self.message_counter += 1
                 
@@ -299,25 +305,25 @@ class BinancePrivateConnection(PrivateWebSocketConnection):
                 try:
                     data = json.loads(message)
                     
-                    # ✅ 核心逻辑：只检查ID，不问内容
+                    # 核心逻辑：只检查ID，不问内容
                     msg_id = data.get('id')
                     if msg_id and msg_id in self.probe_ids:
-                        # 🎯 有回音 = 连接活（不管内容是什么）
+                        # 有回音 = 连接活（不管内容是什么）
                         self.waiting_for_probe = False
                         self.probe_ids.discard(msg_id)
                         logger.debug(f"[私人连接池] 币安探测 收到响应 ID={msg_id}")
-                        continue  # ⚠️ 重要：不转发探测响应
+                        continue  # 不转发探测响应
                     
                     # 正常业务消息
                     event_type = data.get('e', 'unknown')
                     formatted_data = {
                         'exchange': 'binance',
-                        'data_type': self._map_binance_event_type(event_type),  # ← 使用映射
+                        'data_type': self._map_binance_event_type(event_type),
                         'timestamp': datetime.now().isoformat(),
                         'data': data
                     }
                     
-                    # 🔴【修改】异步转发，不等待
+                    # 异步转发，不等待
                     asyncio.create_task(self.data_callback(formatted_data))
                     
                 except json.JSONDecodeError:
@@ -423,6 +429,8 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         if not connect_success:
             return False
         
+        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 步骤间主动让出，避免连续操作阻塞
+        
         # 2. 认证
         auth_success = await self._authenticate_with_fallback()
         if not auth_success:
@@ -430,11 +438,14 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
             return False
         
         self.authenticated = True
+        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 步骤间主动让出
         
         # 3. 订阅
         subscribe_success = await self._smart_subscribe()
         if not subscribe_success:
             logger.warning("[私人连接池] 欧意私人 订阅部分失败，但连接已建立")
+        
+        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 步骤间主动让出
         
         # 4. 启动接收任务
         self.receive_task = asyncio.create_task(self._receive_messages())
@@ -577,6 +588,7 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
         """接收欧意私人消息 - 极简版：收到就推，不做任何处理"""
         try:
             async for message in self.ws:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步迭代循环内让出CPU，避免消息风暴时阻塞
                 # 只记录必要信息
                 self.last_message_time = datetime.now()
                 self.message_counter += 1
@@ -607,10 +619,10 @@ class OKXPrivateConnection(PrivateWebSocketConnection):
                     }
                     data_type = channel_mapping.get(channel, 'unknown')
                     
-                    # 🔴【关键修改】使用create_task异步推送，不等待，且使用映射后的data_type
+                    # 使用create_task异步推送，不等待
                     asyncio.create_task(self.data_callback({
                         'exchange': 'okx',
-                        'data_type': data_type,  # ← 使用映射后的类型
+                        'data_type': data_type,
                         'timestamp': datetime.now().isoformat(),
                         'data': data
                     }))
