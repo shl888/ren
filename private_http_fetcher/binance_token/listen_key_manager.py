@@ -1,4 +1,3 @@
-# listen_key_manager.py
 """
 ListenKey管理器 - 推送版本
 """
@@ -86,6 +85,7 @@ class ListenKeyManager:
         await self._execute_and_update_timestamp()
         
         while self.running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间循环阻塞
             try:
                 # 🎯 1. 计算距离下次续期还需等待多久
                 wait_seconds = self._calculate_wait_time()
@@ -217,6 +217,7 @@ class ListenKeyManager:
         max_retries = 10  # 最多尝试10次
         
         while self.running and retry_count < max_retries:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免重试循环阻塞
             retry_count += 1
             
             api_creds = await self.brain.get_api_credentials(exchange)
@@ -238,6 +239,7 @@ class ListenKeyManager:
         attempts = []
         
         for attempt in range(self.max_token_retries):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免重试循环阻塞
             attempt_num = attempt + 1
             logger.info(f"🔄 第{attempt_num}/{self.max_token_retries}次尝试执行令牌操作: {operation}")
             
