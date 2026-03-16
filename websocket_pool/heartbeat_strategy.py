@@ -122,6 +122,7 @@ class OkxHeartbeatStrategy(HeartbeatStrategy):
         
         # 循环核心条件：策略本身在运行，且底层连接是活跃的
         while self._running and self.connection.connected:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 # 1. 等待一个心跳间隔
                 await asyncio.sleep(self._ping_interval)
@@ -240,5 +241,3 @@ def create_heartbeat_strategy(exchange: str, connection) -> Optional[HeartbeatSt
         return OkxHeartbeatStrategy(connection)
     # 币安和其他交易所返回None，websockets库会自动处理协议层心跳
     return None
-    
-    
