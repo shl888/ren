@@ -5,6 +5,7 @@
 from aiohttp import web
 import datetime
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 
 from ..auth import require_auth
 
@@ -22,11 +23,12 @@ async def system_monitor_placeholder(request: web.Request) -> web.Response:
 async def get_system_health(request: web.Request) -> web.Response:
     """获取系统健康状态（公开访问）"""
     try:
-        # 导入可能缺失的模块
         from system_monitor.collector import SystemMonitor
         
         monitor = SystemMonitor()
-        data = monitor.check_health()
+        # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, monitor.check_health)
         
         # 只返回基本信息，不暴露敏感数据
         safe_data = {
@@ -56,7 +58,9 @@ async def get_system_metrics(request: web.Request) -> web.Response:
         from system_monitor.collector import SystemMonitor
         
         monitor = SystemMonitor()
-        data = monitor.collect_light()
+        # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, monitor.collect_light)
         
         return web.json_response({
             "success": True,
@@ -80,7 +84,9 @@ async def get_system_status(request: web.Request) -> web.Response:
         from system_monitor.collector import SystemMonitor
         
         monitor = SystemMonitor()
-        data = monitor.collect_all()
+        # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, monitor.collect_all)
         
         return web.json_response({
             "success": True,
