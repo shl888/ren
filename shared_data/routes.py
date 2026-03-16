@@ -5,6 +5,7 @@ shared_data 路由模块 - 公开市场数据查询接口
 from aiohttp import web
 import datetime
 import logging
+import asyncio
 from typing import Dict, Any
 
 from .data_store import data_store
@@ -12,7 +13,7 @@ from .data_store import data_store
 logger = logging.getLogger(__name__)
 
 
-# ============ 辅助函数 ============
+# ============ 辅助函数（保持同步，但会在线程池中调用）============
 def _calculate_data_age(timestamp_str: str) -> float:
     """计算数据年龄（秒）"""
     if not timestamp_str:
@@ -50,7 +51,7 @@ def _calculate_data_age(timestamp_str: str) -> float:
 
 
 def _count_data_types(exchange_data: Dict) -> Dict[str, int]:
-    """统计数据类型数量"""
+    """统计数据类型数量（同步函数，在线程池中执行）"""
     stats = {
         "total_symbols": 0,
         "ticker": 0,
@@ -76,7 +77,7 @@ def _count_data_types(exchange_data: Dict) -> Dict[str, int]:
 
 
 def _get_sample_data(exchange_data: Dict, sample_size: int, show_types: bool = False) -> Dict:
-    """获取抽样数据"""
+    """获取抽样数据（同步函数，在线程池中执行）"""
     if not exchange_data:
         return {}
     
@@ -119,9 +120,14 @@ async def get_all_public_data(request: web.Request) -> web.Response:
         binance_all_data = await data_store.get_market_data("binance", get_latest=False)
         okx_all_data = await data_store.get_market_data("okx", get_latest=False)
         
+        # ✅ [蚂蚁基因修复] 在线程池中执行同步函数
+        loop = asyncio.get_event_loop()
+        
         # 统计不同类型的数据量
-        binance_stats = _count_data_types(binance_all_data)
-        okx_stats = _count_data_types(okx_all_data)
+        binance_stats, okx_stats = await asyncio.gather(
+            loop.run_in_executor(None, _count_data_types, binance_all_data),
+            loop.run_in_executor(None, _count_data_types, okx_all_data)
+        )
         
         # 准备返回的数据
         response_data = {
@@ -144,9 +150,15 @@ async def get_all_public_data(request: web.Request) -> web.Response:
                 "okx": okx_all_data
             }
         else:
+            # ✅ [蚂蚁基因修复] 在线程池中执行抽样函数
+            binance_sample, okx_sample = await asyncio.gather(
+                loop.run_in_executor(None, _get_sample_data, binance_all_data, sample_size, show_types),
+                loop.run_in_executor(None, _get_sample_data, okx_all_data, sample_size, show_types)
+            )
+            
             response_data['sample'] = {
-                "binance": _get_sample_data(binance_all_data, sample_size, show_types),
-                "okx": _get_sample_data(okx_all_data, sample_size, show_types)
+                "binance": binance_sample,
+                "okx": okx_sample
             }
             
             # 动态提示
@@ -197,11 +209,16 @@ async def get_public_symbol_data(request: web.Request) -> web.Response:
                 "hint": "可能是: 1. 交易对名称错误 2. 该交易对未被订阅 3. 数据尚未到达"
             }, status=404)
         
-        # 计算数据年龄
+        # ✅ [蚂蚁基因修复] 获取事件循环
+        loop = asyncio.get_event_loop()
+        
+        # 计算数据年龄 - 在线程池中执行同步函数
         for data_type, data_content in data.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if isinstance(data_content, dict) and 'timestamp' in data_content:
                 timestamp = data_content['timestamp']
-                age_seconds = _calculate_data_age(timestamp)
+                # ✅ [蚂蚁基因修复] 在线程池中执行年龄计算
+                age_seconds = await loop.run_in_executor(None, _calculate_data_age, timestamp)
                 data_content['age_seconds'] = age_seconds
         
         response = {
@@ -245,4 +262,3 @@ def setup_public_data_routes(app: web.Application):
     logger.info("   GET /api/public/data/all")
     logger.info("   GET /api/public/data/{exchange}/{symbol}")
     logger.info("=" * 60)
-    
