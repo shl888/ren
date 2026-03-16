@@ -174,15 +174,15 @@ async def run_private_pipeline(brain):
     except Exception as e:
         logger.error(f"❌ 私人数据处理线程异常: {e}")
 
-# async def run_completion_module(brain):
-#     """运行数据完成部门模块"""
-#     logger.info("✅【数据完成部门线程】已启动")
-#     try:
-#         # 数据完成部门已经在运行，只需要保持
-#         while brain.running:
-#             await asyncio.sleep(1)
-#     except Exception as e:
-#         logger.error(f"❌ 数据完成部门线程异常: {e}")
+async def run_completion_module(brain):
+    """运行数据完成部门模块"""
+    logger.info("✅【数据完成部门线程】已启动")
+    try:
+        # 数据完成部门已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 数据完成部门线程异常: {e}")
 
 # ==================== 主启动函数 ====================
 async def main():
@@ -347,8 +347,6 @@ async def main():
         
         # ==================== 15. 启动数据完成部门模块 ====================
         logger.info("【启动文件】========== 开始启动【数据完成部门】模块 ==========")
-        # 【已注释】暂时不启动数据完成部门模块，用于测试
-        '''
         try:
             from data_completion_department import (
                 get_receiver,
@@ -401,7 +399,7 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动数据完成模块失败: {e}")
             logger.error(traceback.format_exc())
-        '''
+        
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
@@ -445,14 +443,13 @@ async def main():
         ))
         logger.info("  ├─ 私人数据处理线程已启动")
         
-        # 【已注释】暂时不启动数据完成部门线程，用于测试
         # 5. 数据完成部门线程
-        # if brain.data_scheduler:
-        #     module_threads.append(run_async_in_thread(
-        #         lambda: run_completion_module(brain),
-        #         "Completion"
-        #     ))
-        #     logger.info("  └─ 数据完成部门线程已启动")
+        if brain.data_scheduler:
+            module_threads.append(run_async_in_thread(
+                lambda: run_completion_module(brain),
+                "Completion"
+            ))
+            logger.info("  └─ 数据完成部门线程已启动")
         
         logger.info(f"✅ 共启动 {len(module_threads)} 个模块线程")
         logger.info("=" * 60)
@@ -468,14 +465,13 @@ async def main():
                 if not thread.is_alive():
                     logger.error(f"⚠️ 模块线程 {thread.name} 已停止，尝试重启...")
                     # 重启线程
-                    functions = [run_public_websocket, run_private_websocket, 
-                               run_public_pipeline, run_private_pipeline]
-                    if i < len(functions):
-                        new_thread = run_async_in_thread(
-                            functions[i](brain),
-                            thread.name
-                        )
-                        module_threads[i] = new_thread
+                    new_thread = run_async_in_thread(
+                        [run_public_websocket, run_private_websocket, 
+                         run_public_pipeline, run_private_pipeline, 
+                         run_completion_module][i](brain),
+                        thread.name
+                    )
+                    module_threads[i] = new_thread
         
     except KeyboardInterrupt:
         logger.info("收到键盘中断")
