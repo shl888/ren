@@ -1,5 +1,6 @@
 """
 极简启动器 - 重构版：接管所有模块启动
+支持单线程/多线程一键切换
 """
 
 import asyncio
@@ -10,6 +11,12 @@ import os
 import signal
 from datetime import datetime
 import threading
+
+# ==================== 运行模式配置 ====================
+# True  = 多线程模式（生产环境，榨干CPU）
+# False = 单线程模式（调试模式，方便定位问题）
+MULTI_THREAD_MODE = True  # 默认多线程
+# ====================================================
 
 # ==================== 强制启动标记 ====================
 print("🚨🚨🚨 LAUNCHER.PY 开始执行", file=sys.stderr)
@@ -106,11 +113,21 @@ async def safe_get_pool_status(pool):
         logger.error(f"获取连接池状态失败: {e}")
         return {'connections': {}}
 
-# ==================== 【新增】多线程模块运行函数 ====================
+# ==================== 多线程模式相关函数 ====================
+# 只有在 MULTI_THREAD_MODE = True 时才使用这些函数
+
 def run_async_in_thread(coro_func, name, daemon=True):
     """
     在独立线程中运行异步函数
     每个线程有自己的事件循环
+    
+    Args:
+        coro_func: 要运行的异步函数
+        name: 线程名称
+        daemon: 是否为守护线程
+    
+    Returns:
+        threading.Thread: 启动的线程对象
     """
     def target():
         try:
@@ -128,9 +145,12 @@ def run_async_in_thread(coro_func, name, daemon=True):
     thread.start()
     return thread
 
-# ==================== 【新增】各模块的运行函数 ====================
+
+# ==================== 各模块的运行函数（多线程用）====================
+# 这些函数在单线程模式下不会用到
+
 async def run_public_websocket(brain):
-    """运行公共WebSocket模块"""
+    """运行公共WebSocket模块（多线程用）"""
     logger.info("🌐【公共WebSocket线程】已启动")
     try:
         # 如果已有ws_admin，让它运行
@@ -145,7 +165,7 @@ async def run_public_websocket(brain):
         logger.error(f"❌ 公共WebSocket线程异常: {e}")
 
 async def run_private_websocket(brain):
-    """运行私人WebSocket模块"""
+    """运行私人WebSocket模块（多线程用）"""
     logger.info("🔒【私人WebSocket线程】已启动")
     try:
         # 私人连接池已经在运行，只需要保持
@@ -155,7 +175,7 @@ async def run_private_websocket(brain):
         logger.error(f"❌ 私人WebSocket线程异常: {e}")
 
 async def run_public_pipeline(brain):
-    """运行公开数据处理流水线"""
+    """运行公开数据处理流水线（多线程用）"""
     logger.info("📊【公开数据处理线程】已启动")
     try:
         # pipeline_manager 已经在运行，只需要保持
@@ -165,7 +185,7 @@ async def run_public_pipeline(brain):
         logger.error(f"❌ 公开数据处理线程异常: {e}")
 
 async def run_private_pipeline(brain):
-    """运行私人数据处理流水线"""
+    """运行私人数据处理流水线（多线程用）"""
     logger.info("📝【私人数据处理线程】已启动")
     try:
         # 私人数据处理模块已经在运行，只需要保持
@@ -175,7 +195,7 @@ async def run_private_pipeline(brain):
         logger.error(f"❌ 私人数据处理线程异常: {e}")
 
 async def run_completion_module(brain):
-    """运行数据完成部门模块"""
+    """运行数据完成部门模块（多线程用）"""
     logger.info("✅【数据完成部门线程】已启动")
     try:
         # 数据完成部门已经在运行，只需要保持
@@ -183,6 +203,7 @@ async def run_completion_module(brain):
             await asyncio.sleep(1)
     except Exception as e:
         logger.error(f"❌ 数据完成部门线程异常: {e}")
+
 
 # ==================== 主启动函数 ====================
 async def main():
@@ -196,6 +217,10 @@ async def main():
     
     logger.info("🚨🚨🚨 MAIN 函数开始执行")
     
+    # 显示当前运行模式
+    mode_str = "多线程" if MULTI_THREAD_MODE else "单线程"
+    logger.info(f"⚙️ 运行模式: {mode_str}")
+    
     # 启动保活服务（已经在独立线程中）
     start_keep_alive_background()
     
@@ -204,7 +229,7 @@ async def main():
     logger.info("=" * 60)
     
     brain = None
-    module_threads = []  # 保存所有模块线程
+    module_threads = []  # 保存所有模块线程（仅多线程模式用）
     
     try:
         # ==================== 验证环境变量 ====================
@@ -406,72 +431,86 @@ async def main():
         logger.info("🎉 所有模块初始化完成！")
         logger.info("=" * 60)
         
-        # ==================== 16. 多模块并行运行 ====================
-        logger.info("🚀 进入多模块并行运行模式...")
-        
-        # 启动各个模块的独立线程
-        module_threads = []
-        
-        # 1. 公共WebSocket线程
-        if brain.ws_admin:
-            module_threads.append(run_async_in_thread(
-                lambda: run_public_websocket(brain),
-                "PublicWS"
-            ))
-            logger.info("  ├─ 公共WebSocket线程已启动")
-        
-        # 2. 私人WebSocket线程
-        if brain.private_pool:
-            module_threads.append(run_async_in_thread(
-                lambda: run_private_websocket(brain),
-                "PrivateWS"
-            ))
-            logger.info("  ├─ 私人WebSocket线程已启动")
-        
-        # 3. 公开数据处理线程
-        if brain.pipeline_manager:
-            module_threads.append(run_async_in_thread(
-                lambda: run_public_pipeline(brain),
-                "Pipeline"
-            ))
-            logger.info("  ├─ 公开数据处理线程已启动")
-        
-        # 4. 私人数据处理线程（如果有）
-        module_threads.append(run_async_in_thread(
-            lambda: run_private_pipeline(brain),
-            "PrivatePipeline"
-        ))
-        logger.info("  ├─ 私人数据处理线程已启动")
-        
-        # 5. 数据完成部门线程
-        if brain.data_scheduler:
-            module_threads.append(run_async_in_thread(
-                lambda: run_completion_module(brain),
-                "Completion"
-            ))
-            logger.info("  └─ 数据完成部门线程已启动")
-        
-        logger.info(f"✅ 共启动 {len(module_threads)} 个模块线程")
-        logger.info("=" * 60)
-        logger.info("🛑 按 Ctrl+C 停止")
-        logger.info("=" * 60)
-        
-        # 主线程只做监控
-        while brain.running:
-            await asyncio.sleep(5)
+        # ==================== 16. 根据模式选择运行方式 ====================
+        if MULTI_THREAD_MODE:
+            # ===== 多线程模式 =====
+            logger.info("🚀 进入多模块并行运行模式...")
             
-            # 检查所有线程是否健康
-            for i, thread in enumerate(module_threads):
-                if not thread.is_alive():
-                    logger.error(f"⚠️ 模块线程 {thread.name} 已停止，尝试重启...")
-                    # 重启线程
-                    new_thread = run_async_in_thread(
-                        [run_public_websocket, run_private_websocket, 
-                         run_public_pipeline, run_private_pipeline, 
-                         run_completion_module][i](brain),
-                        thread.name
-                    )
-                    module_threads[i] = new_thread
+            # 启动各个模块的独立线程
+            module_threads = []
+            
+            # 1. 公共WebSocket线程
+            if brain.ws_admin:
+                module_threads.append(run_async_in_thread(
+                    lambda: run_public_websocket(brain),
+                    "PublicWS"
+                ))
+                logger.info("  ├─ 公共WebSocket线程已启动")
+            
+            # 2. 私人WebSocket线程
+            if brain.private_pool:
+                module_threads.append(run_async_in_thread(
+                    lambda: run_private_websocket(brain),
+                    "PrivateWS"
+                ))
+                logger.info("  ├─ 私人WebSocket线程已启动")
+            
+            # 3. 公开数据处理线程
+            if brain.pipeline_manager:
+                module_threads.append(run_async_in_thread(
+                    lambda: run_public_pipeline(brain),
+                    "Pipeline"
+                ))
+                logger.info("  ├─ 公开数据处理线程已启动")
+            
+            # 4. 私人数据处理线程（如果有）
+            module_threads.append(run_async_in_thread(
+                lambda: run_private_pipeline(brain),
+                "PrivatePipeline"
+            ))
+            logger.info("  ├─ 私人数据处理线程已启动")
+            
+            # 5. 数据完成部门线程
+            if brain.data_scheduler:
+                module_threads.append(run_async_in_thread(
+                    lambda: run_completion_module(brain),
+                    "Completion"
+                ))
+                logger.info("  └─ 数据完成部门线程已启动")
+            
+            logger.info(f"✅ 共启动 {len(module_threads)} 个模块线程")
+            logger.info("=" * 60)
+            logger.info("🛑 按 Ctrl+C 停止")
+            logger.info("=" * 60)
+            
+            # 主线程只做监控
+            while brain.running:
+                await asyncio.sleep(5)
+                
+                # 检查所有线程是否健康
+                for i, thread in enumerate(module_threads):
+                    if not thread.is_alive():
+                        logger.error(f"⚠️ 模块线程 {thread.name} 已停止，尝试重启...")
+                        # 重启线程
+                        new_thread = run_async_in_thread(
+                            [run_public_websocket, run_private_websocket, 
+                             run_public_pipeline, run_private_pipeline, 
+                             run_completion_module][i](brain),
+                            thread.name
+                        )
+                        module_threads[i] = new_thread
+        
+        else:
+            # ===== 单线程模式 =====
+            logger.info("🚀 进入单事件循环模式（调试模式）...")
+            logger.info("=" * 60)
+            logger.info("🛑 按 Ctrl+C 停止")
+            logger.info("=" * 60)
+            
+            # 主循环 - 所有模块共享同一个事件循环
+            while brain.running:
+                await asyncio.sleep(0)  # 让出CPU
+                await asyncio.sleep(1)  # 每秒唤醒一次
         
     except KeyboardInterrupt:
         logger.info("收到键盘中断")
