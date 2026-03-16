@@ -108,6 +108,7 @@ class PrivateWebSocketPool:
                 logger.debug(f"[私人连接池] 🔍 监控检查开始 at {check_time}")
                 
                 for exchange in ['binance', 'okx']:
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU，避免监控循环阻塞
                     connection = self.connections[exchange]
                     
                     if connection:
@@ -477,3 +478,4 @@ class PrivateWebSocketPool:
         }
         
         return status
+        
