@@ -59,11 +59,11 @@ class ExchangeWebSocketPool:
         if self.exchange == "okx" and symbols_per_connection > 600:
             symbols_per_connection = 600
         
-        # 分组
-        self.symbol_groups = [
-            symbols[i:i + symbols_per_connection]
-            for i in range(0, len(symbols), symbols_per_connection)
-        ]
+        # ✅ [蚂蚁基因修复] 将列表推导式改为分批处理，避免阻塞
+        self.symbol_groups = []
+        for i in range(0, len(symbols), symbols_per_connection):
+            await asyncio.sleep(0)  # 每个迭代让出CPU
+            self.symbol_groups.append(symbols[i:i + symbols_per_connection])
         
         # 检查分组数
         active_connections = self.config.get("active_connections", 3)
@@ -82,7 +82,7 @@ class ExchangeWebSocketPool:
         logger.info(f"[{self.exchange}] ✅【连接池】连接池初始化完成！")
 
     def _balance_symbol_groups(self, target_groups: int):
-        """平衡合约分组"""
+        """平衡合约分组（同步方法，但被异步调用，循环量小）"""
         avg_size = len(self.symbols) // target_groups
         remainder = len(self.symbols) % target_groups
         
@@ -90,6 +90,7 @@ class ExchangeWebSocketPool:
         start = 0
         
         for i in range(target_groups):
+            # 这个循环最多 target_groups 次，通常很小，保持同步
             size = avg_size + (1 if i < remainder else 0)
             if start + size <= len(self.symbols):
                 self.symbol_groups.append(self.symbols[start:start + size])
@@ -100,6 +101,7 @@ class ExchangeWebSocketPool:
         ws_url = self.config.get("ws_public_url")
         
         for i, symbol_group in enumerate(self.symbol_groups):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             conn_id = f"{self.exchange}_master_{i}"
             connection = WebSocketConnection(
                 exchange=self.exchange,
@@ -129,6 +131,7 @@ class ExchangeWebSocketPool:
         warm_standbys_count = self.config.get("warm_standbys_count", 3)
         
         for i in range(warm_standbys_count):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             conn_id = f"{self.exchange}_warm_{i}"
             connection = WebSocketConnection(
                 exchange=self.exchange,
@@ -168,12 +171,14 @@ class ExchangeWebSocketPool:
         loop_count = 0
         
         while True:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             loop_count += 1
             try:
                 # ==== 第1部分：健康监控（每3秒执行） ====
                 
                 # 1. 检查所有主连接
                 for i, master_conn in enumerate(self.master_connections):
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     # 🚨【修复2】更严格的健康检查
                     is_healthy = (
                         master_conn.connected and 
@@ -208,6 +213,7 @@ class ExchangeWebSocketPool:
                 
                 # 2. 检查温备连接
                 for warm_conn in self.warm_standby_connections:
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     if not warm_conn.connected:
                         warm_conn.log_with_role("warning", "❌【连接池】[内部监控]温备连接断开，尝试重连")
                         await warm_conn.connect()
@@ -266,9 +272,11 @@ class ExchangeWebSocketPool:
             }
             
             for conn in self.master_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["masters"].append(await conn.check_health())
             
             for conn in self.warm_standby_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["warm_standbys"].append(await conn.check_health())
             
             await data_store.update_connection_status(
@@ -307,6 +315,7 @@ class ExchangeWebSocketPool:
             standby_index = -1
             
             for i, standby in enumerate(self.warm_standby_connections):
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if standby.connected:
                     b_standby = standby
                     standby_index = i
@@ -466,6 +475,7 @@ class ExchangeWebSocketPool:
             
             # 主连接状态 - 单行格式
             for i, master in enumerate(self.master_connections):
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_icon = "✅" if master.connected else "❌"
                 subscribed_icon = "📡" if master.subscribed else "📭"
                 last_msg = f"{master.last_message_seconds_ago:.1f}秒前"
@@ -474,6 +484,7 @@ class ExchangeWebSocketPool:
             
             # 温备连接状态 - 单行格式
             for i, standby in enumerate(self.warm_standby_connections):
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_icon = "✅" if standby.connected else "❌"
                 has_symbols = "📝" if standby.symbols else "📭"
                 
@@ -497,9 +508,11 @@ class ExchangeWebSocketPool:
             }
             
             for conn in self.master_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["masters"].append(await conn.check_health())
             
             for conn in self.warm_standby_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["warm_standbys"].append(await conn.check_health())
             
             await data_store.update_connection_status(
@@ -549,9 +562,11 @@ class ExchangeWebSocketPool:
             }
             
             for conn in self.master_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["masters"].append(await conn.check_health())
             
             for conn in self.warm_standby_connections:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 status_report["warm_standbys"].append(await conn.check_health())
             
             return status_report
