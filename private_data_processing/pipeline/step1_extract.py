@@ -110,6 +110,7 @@ class Step1Extract:
             # 为每个key创建独立异步任务
             tasks = []
             for key, data_item in full_storage.items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免大量key阻塞事件循环
                 task = asyncio.create_task(self._process_key_parallel(key, data_item))
                 tasks.append(task)
             
