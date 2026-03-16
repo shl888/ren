@@ -4,10 +4,11 @@
 输出：精炼后的6种原始数据
 """
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
+import time
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
 from dataclasses import dataclass
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +83,9 @@ class Step1Filter:
         self._last_hourly_reset = time.time()
         self._hourly_reset_interval = 3600  # 1小时 = 3600秒
     
-    def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
-        """处理原始数据"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, raw_items: List[Dict[str, Any]]) -> List[ExtractedData]:
+        """异步处理原始数据"""
         # 检查是否需要每小时重置统计
         self._check_hourly_reset()
         
@@ -98,6 +100,7 @@ class Step1Filter:
         raw_contract_stats = defaultdict(set)
         
         for item in raw_items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             exchange = item.get("exchange", "unknown")
             data_type = item.get("data_type", "unknown")
             symbol = item.get("symbol", "")
@@ -120,8 +123,9 @@ class Step1Filter:
         self.log_detail_counter = 0  # 重置详细日志计数器
         
         for item in raw_items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
-                extracted = self._extract_item(item)
+                extracted = await self._extract_item(item)  # ✅ [蚂蚁基因修复] 改为异步调用
                 if extracted:
                     results.append(extracted)
                     self.stats[extracted.data_type] += 1
@@ -149,7 +153,7 @@ class Step1Filter:
         return results
     
     def _traverse_path(self, data: Any, path: List[Any]) -> Any:
-        """遍历路径获取数据"""
+        """遍历路径获取数据（保持同步，因为路径很短）"""
         result = data
         for key in path:
             if isinstance(key, int) and isinstance(result, list):
@@ -163,8 +167,9 @@ class Step1Filter:
                 break
         return result
     
-    def _extract_item(self, raw_item: Dict[str, Any]) -> Optional[ExtractedData]:
-        """提取单个数据项"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _extract_item(self, raw_item: Dict[str, Any]) -> Optional[ExtractedData]:
+        """异步提取单个数据项"""
         exchange = raw_item.get("exchange")
         data_type = raw_item.get("data_type")
         symbol = raw_item.get("symbol", "")
@@ -198,6 +203,7 @@ class Step1Filter:
         # 提取字段
         extracted_payload = {}
         for output_key, input_key in fields.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 小循环内也让出CPU
             value = data_source.get(input_key) if isinstance(data_source, dict) else None
             extracted_payload[output_key] = value
         
