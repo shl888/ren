@@ -126,6 +126,7 @@ class PrivateHTTPFetcher:
                 # ========== 第一阶段：等待2分钟 ==========
                 logger.info("⏳ [HTTP获取器] 第一阶段：等待2分钟，让其他模块先运行...")
                 for i in range(120):  # 120秒 = 2分钟
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间循环阻塞
                     if not self.running or self.in_restart_cooldown:
                         return
                     if i % 60 == 0:  # 每分钟记录一次
@@ -145,6 +146,7 @@ class PrivateHTTPFetcher:
                     # 再等待30秒，确保完全冷却
                     logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
                     for i in range(30):
+                        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免冷却循环阻塞
                         if not self.running or self.in_restart_cooldown:
                             break
                         await asyncio.sleep(1)
@@ -217,6 +219,7 @@ class PrivateHTTPFetcher:
 
         # 4次重试（指数退避）
         while retry_count < self.max_account_retries and self.running and not self.in_restart_cooldown:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免重试循环阻塞
             delay = self.account_retry_delays[retry_count]
             logger.info(
                 f"⏳ [HTTP获取器] {delay}秒后重试账户获取（第{retry_count + 2}次尝试）...")
@@ -341,6 +344,7 @@ class PrivateHTTPFetcher:
         await asyncio.sleep(30)
 
         while self.running and not self.in_restart_cooldown:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免高频循环阻塞
             try:
                 request_count += 1
 
@@ -494,6 +498,7 @@ class PrivateHTTPFetcher:
         
         # 1. 取消所有fetch任务
         for task in self.fetch_tasks:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免任务取消阻塞
             if not task.done():
                 task.cancel()
                 try:
@@ -558,13 +563,14 @@ class PrivateHTTPFetcher:
         """推送原始数据到处理模块（不处理）"""
         try:
             from private_data_processing.manager import receive_private_data
-            await receive_private_data({
+            # ✅ [蚂蚁基因修复] 改为异步不阻塞，避免等待接收模块处理
+            asyncio.create_task(receive_private_data({
                 'exchange': 'binance',
                 'data_type': data_type,
                 'data': raw_data,
                 'timestamp': datetime.now().isoformat(),
                 'source': 'http_fetcher'
-            })
+            }))
         except ImportError as e:
             logger.error(f"❌ [HTTP获取器] 无法导入私人数据处理模块: {e}")
         except Exception as e:
@@ -586,6 +592,7 @@ class PrivateHTTPFetcher:
 
         # 取消所有获取任务
         for task in self.fetch_tasks:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免任务取消阻塞
             task.cancel()
             try:
                 await task
