@@ -52,6 +52,7 @@ class OKXContractFetcher:
         logger.info("=" * 60)
         
         for attempt in range(3):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             attempt_num = attempt + 1
             logger.info(f"🔄 第{attempt_num}/3次尝试")
             
@@ -117,11 +118,14 @@ class OKXContractFetcher:
                     instruments = data.get('data', [])
                     result['total_count'] = len(instruments)
                     
-                    # 过滤USDT合约
-                    usdt_contracts = []
-                    for inst in instruments:
-                        if inst.get('settleCcy') == 'USDT':
-                            usdt_contracts.append(inst)
+                    # ✅ [蚂蚁基因修复] 将过滤操作放到线程池执行，避免阻塞事件循环
+                    loop = asyncio.get_event_loop()
+                    
+                    # 使用线程池执行过滤操作
+                    usdt_contracts = await loop.run_in_executor(
+                        None,
+                        lambda: [inst for inst in instruments if inst.get('settleCcy') == 'USDT']
+                    )
                     
                     result['usdt_count'] = len(usdt_contracts)
                     
