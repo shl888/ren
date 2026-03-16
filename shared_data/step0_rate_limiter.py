@@ -2,9 +2,11 @@
 第一步之前：币安历史费率数据限流器
 功能：只针对 binance_funding_settlement 数据类型，限制其进入后续流水线的次数
 ✅ 修复：按数据类型计数，不是按数据条数
+✅ [蚂蚁基因修复] 改为异步类，所有循环内添加让出
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 import time
 from typing import Dict, List, Any
 from collections import defaultdict
@@ -57,9 +59,10 @@ class Step0RateLimiter:
         
         logger.info(f"✅【流水线步骤0】初始化完成，币安历史费率数据限流 {limit_times} 次（按数据类型计数）")
     
-    def process(self, raw_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, raw_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        处理原始数据流，过滤币安历史费率数据
+        异步处理原始数据流，过滤币安历史费率数据
         
         ✅ 严密逻辑：
         1. 先检查本次是否有币安历史费率数据
@@ -93,6 +96,7 @@ class Step0RateLimiter:
         binance_funding_symbols = set()
         
         for item in raw_items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             exchange = item.get('exchange', '')
             data_type = item.get('data_type', '')
             
@@ -121,6 +125,7 @@ class Step0RateLimiter:
                 # 显示本次有哪些数据类型（仅调试）
                 type_counter = defaultdict(int)
                 for item in raw_items:
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     key = f"{item.get('exchange', 'unknown')}_{item.get('data_type', 'unknown')}"
                     type_counter[key] += 1
                 
@@ -134,13 +139,14 @@ class Step0RateLimiter:
         # 情况A：该类型已被拦截
         if self.binance_funding_blocked:
             # 拦截所有币安历史费率数据，放行其他数据
-            filtered_items = [
-                item for item in raw_items 
+            filtered_items = []
+            for item in raw_items:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if not (
                     str(item.get('exchange', '')).strip().lower() == 'binance' and 
                     str(item.get('data_type', '')).strip().lower() == 'funding_settlement'
-                )
-            ]
+                ):
+                    filtered_items.append(item)
             
             blocked_count = len(raw_items) - len(filtered_items)
             self.total_blocked += blocked_count
@@ -158,13 +164,14 @@ class Step0RateLimiter:
             self.binance_funding_blocked = True
             
             # 拦截所有币安历史费率数据
-            filtered_items = [
-                item for item in raw_items 
+            filtered_items = []
+            for item in raw_items:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if not (
                     str(item.get('exchange', '')).strip().lower() == 'binance' and 
                     str(item.get('data_type', '')).strip().lower() == 'funding_settlement'
-                )
-            ]
+                ):
+                    filtered_items.append(item)
             
             blocked_count = len(raw_items) - len(filtered_items)
             self.total_blocked += blocked_count
@@ -190,12 +197,13 @@ class Step0RateLimiter:
             logger.debug(f"🔍【 流水线步骤0】本次数据量: {len(binance_funding_items)} 条，涉及 {len(binance_funding_symbols)} 个合约")
         
         # 定期输出统计信息
-        self._log_processing_stats(len(binance_funding_items), len(raw_items))
+        await self._log_processing_stats(len(binance_funding_items), len(raw_items))  # ✅ [蚂蚁基因修复] 改为异步调用
         
         return raw_items
     
-    def _log_processing_stats(self, binance_funding_count: int, total_input_count: int) -> None:
-        """记录处理统计信息"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _log_processing_stats(self, binance_funding_count: int, total_input_count: int) -> None:
+        """异步记录处理统计信息"""
         current_time = time.time()
         
         # 定期输出详细统计
