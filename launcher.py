@@ -39,7 +39,7 @@ from smart_brain import set_brain_instance
 
 logger = logging.getLogger(__name__)
 
-# ==================== 新增：全局事件循环管理器 ====================
+# ==================== 全局事件循环管理器 ====================
 class LoopManager:
     """事件循环管理器 - 让线程可以访问主事件循环"""
     
@@ -267,7 +267,7 @@ class ModuleThreadManager:
                 
                 # 2. 创建数据库实例
                 database = Database()
-                # ✅ 现在是在主事件循环中运行，可以正常 await！
+                # 现在是在主事件循环中运行，可以正常 await！
                 await database.initialize()
                 
                 # 3. 创建调度器
@@ -490,9 +490,10 @@ async def main():
         logger.info("🎉 所有模块启动完成！")
         logger.info("=" * 60)
         
-        # 输出连接池状态
-        if brain.private_pool:
-            pool_status = await safe_get_pool_status(brain.private_pool)
+        # 🔥 修复：安全输出连接池状态（使用 getattr 避免属性错误）
+        private_pool = getattr(brain, 'private_pool', None)
+        if private_pool:
+            pool_status = await safe_get_pool_status(private_pool)
             connections = pool_status.get('connections', {})
             
             logger.info(f"🔗 私人连接池状态: 运行中")
@@ -504,6 +505,8 @@ async def main():
                         logger.info(f"  • {exchange}: ⏳ 连接中...")
             else:
                 logger.info(f"  • 连接池正在初始化中，稍后查看状态")
+        else:
+            logger.info(f"🔗 私人连接池: ⏳ 正在初始化...")
         
         # ==================== 主监控循环 ====================
         logger.info("🚀 主监控循环运行中...")
