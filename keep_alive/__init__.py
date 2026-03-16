@@ -9,13 +9,16 @@ from .config import Config
 __version__ = "1.1.0"
 __all__ = ['KeepAlive', 'Config', 'start_with_http_check']
 
+
 def start_with_http_check():
     """
     带HTTP就绪检查的启动函数
     确保HTTP服务就绪后再开始保活循环
     """
     import time
+    import asyncio
     import urllib.request
+    from .core import KeepAlive
     from .config import Config
     
     app_url = Config.APP_URL
@@ -24,7 +27,8 @@ def start_with_http_check():
     if not app_url or "your-app" in app_url:
         print("[保活] ⚠️  APP_URL未正确配置，使用默认保活逻辑")
         keeper = KeepAlive()
-        keeper.run()
+        # ✅ 修复：在同步函数中用 asyncio.run 运行异步代码
+        asyncio.run(keeper.run())
         return
     
     print(f"[保活] 检测到APP_URL: {app_url}")
@@ -40,7 +44,8 @@ def start_with_http_check():
             
             # HTTP就绪，启动保活
             keeper = KeepAlive()
-            await keeper.run()
+            # ✅ 修复：在同步函数中用 asyncio.run 运行异步代码
+            asyncio.run(keeper.run())
             return
             
         except Exception as e:
@@ -53,4 +58,5 @@ def start_with_http_check():
     # 最终尝试（即使HTTP未就绪也启动保活）
     print("[保活] 🚀 启动基础保活模式（HTTP服务可能未完全就绪）")
     keeper = KeepAlive()
-    keeper.run()
+    # ✅ 修复：在同步函数中用 asyncio.run 运行异步代码
+    asyncio.run(keeper.run())
