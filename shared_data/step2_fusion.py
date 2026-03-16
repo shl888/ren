@@ -5,10 +5,11 @@
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
+import time
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from collections import defaultdict
 from dataclasses import dataclass
-import time
 
 # 类型检查时导入，避免循环依赖
 if TYPE_CHECKING:
@@ -43,9 +44,10 @@ class Step2Fusion:
         self.log_interval = 180  # 3分钟，单位：秒
         self.process_count = 0
     
-    def process(self, step1_results: List["ExtractedData"]) -> List[FusedData]:
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, step1_results: List["ExtractedData"]) -> List[FusedData]:
         """
-        处理Step1的提取结果，按交易所+合约名合并
+        异步处理Step1的提取结果，按交易所+合约名合并
         """
         # 重置统计，避免累积
         self.fusion_stats = {
@@ -66,6 +68,7 @@ class Step2Fusion:
         # 按 exchange + symbol 分组
         grouped = defaultdict(list)
         for item in step1_results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             key = f"{item.exchange}_{item.symbol}"
             grouped[key].append(item)
         
@@ -76,8 +79,9 @@ class Step2Fusion:
         exchange_contracts = defaultdict(set)  # 统计成功融合的合约
         
         for key, items in grouped.items():
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
-                fused = self._merge_group(items)
+                fused = await self._merge_group(items)  # ✅ [蚂蚁基因修复] 改为异步调用
                 if fused:
                     results.append(fused)
                     exchange_contracts[fused.exchange].add(fused.symbol)
@@ -127,7 +131,7 @@ class Step2Fusion:
             
             # 验证字段完整性（只针对成功融合的结果）
             if results:
-                self._validate_fields(results)
+                await self._validate_fields(results)  # ✅ [蚂蚁基因修复] 改为异步调用
             
             self.last_log_time = current_time
             # 重置计数（仅用于频率控制）
@@ -137,8 +141,9 @@ class Step2Fusion:
         
         return results
     
-    def _validate_fields(self, results: List[FusedData]):
-        """验证字段完整性"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _validate_fields(self, results: List[FusedData]):
+        """异步验证字段完整性"""
         okx_valid = 0
         binance_valid = 0
         
@@ -146,6 +151,7 @@ class Step2Fusion:
         binance_contracts = []
         
         for item in results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.exchange == "okx":
                 okx_contracts.append(item)
                 # OKX验证：应该有next_settlement_time，没有last_settlement_time
@@ -173,8 +179,9 @@ class Step2Fusion:
             logger.info(f"  • 验证通过: {binance_valid}/{binance_count} ({validation_rate:.1f}%)")
             logger.info(f"  • next_settlement_time正确为空: ✓")
     
-    def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
-        """合并同一组内的所有数据"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _merge_group(self, items: List["ExtractedData"]) -> Optional[FusedData]:
+        """异步合并同一组内的所有数据"""
         if not items:
             return None
         
@@ -192,16 +199,18 @@ class Step2Fusion:
         
         # 按交易所分发处理
         if exchange == "okx":
-            return self._merge_okx(items, fused)
+            return await self._merge_okx(items, fused)  # ✅ [蚂蚁基因修复] 改为异步调用
         elif exchange == "binance":
-            return self._merge_binance(items, fused)
+            return await self._merge_binance(items, fused)  # ✅ [蚂蚁基因修复] 改为异步调用
         else:
             return None
     
-    def _merge_okx(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
-        """合并OKX数据：ticker + funding_rate + mark_price"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _merge_okx(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
+        """异步合并OKX数据：ticker + funding_rate + mark_price"""
         
         for item in items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             payload = item.payload
             
             # 提取合约名（OKX数据里都有）
@@ -228,12 +237,14 @@ class Step2Fusion:
         
         return fused
     
-    def _merge_binance(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
-        """合并币安数据：核心是以mark_price为准"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _merge_binance(self, items: List["ExtractedData"], fused: FusedData) -> Optional[FusedData]:
+        """异步合并币安数据：核心是以mark_price为准"""
         
         # 第一步：找mark_price数据（必须有）
         mark_price_item = None
         for item in items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.data_type == "binance_mark_price":
                 mark_price_item = item
                 break
@@ -254,12 +265,14 @@ class Step2Fusion:
         
         # ticker数据：提取成交价格
         for item in items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.data_type == "binance_ticker":
                 fused.trade_price = item.payload.get("trade_price")  # ✅ renamed
                 break
         
         # funding_settlement数据：填充上次结算时间
         for item in items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.data_type == "binance_funding_settlement":
                 fused.last_settlement_time = self._to_int(item.payload.get("last_settlement_time"))
                 break  # 只取第一个
@@ -267,11 +280,10 @@ class Step2Fusion:
         return fused
     
     def _to_int(self, value: Any) -> Optional[int]:
-        """安全转换为int"""
+        """安全转换为int（保持同步，因为只是简单转换）"""
         if value is None:
             return None
         try:
             return int(value)
         except (ValueError, TypeError):
             return None
-            
