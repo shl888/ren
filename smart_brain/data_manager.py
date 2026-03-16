@@ -1,4 +1,3 @@
-# data_manager.py
 """
 数据管理器 - 简化存储版
 只存储原始数据，不添加额外包装
@@ -188,6 +187,7 @@ class DataManager:
             
             if isinstance(data, list) and len(data) > 0:
                 for item in data:
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     symbol = item.get('symbol', 'unknown')
                     if not symbol or symbol == 'unknown':
                         continue
@@ -355,6 +355,7 @@ class DataManager:
             # 按交易所整理
             user_data = {}
             for key, data in self.memory_store['user_data'].items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 exchange = data.get('exchange')
                 if exchange:
                     user_data[exchange] = data.get('data', {})
@@ -376,6 +377,7 @@ class DataManager:
             # 查找OKX合约面值数据
             contract_data = None
             for key, data in self.memory_store['reference_data'].items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 if 'okx' in key and 'contract' in key:
                     contract_data = data.get('data', {})
                     break
@@ -393,20 +395,25 @@ class DataManager:
     
     async def get_api_credentials_status(self):
         """获取API凭证状态（隐藏敏感信息）"""
-        safe_apis = {}
-        for exchange, creds in self.memory_store['env_apis'].items():
-            safe_apis[exchange] = {
-                "api_key_exists": bool(creds.get('api_key')),
-                "api_secret_exists": bool(creds.get('api_secret')),
-                "passphrase_exists": bool(creds.get('passphrase', '')),
-                "api_key_preview": creds.get('api_key', '')[:5] + "..." if creds.get('api_key') else None
+        try:
+            safe_apis = {}
+            for exchange, creds in self.memory_store['env_apis'].items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                safe_apis[exchange] = {
+                    "api_key_exists": bool(creds.get('api_key')),
+                    "api_secret_exists": bool(creds.get('api_secret')),
+                    "passphrase_exists": bool(creds.get('passphrase', '')),
+                    "api_key_preview": creds.get('api_key', '')[:5] + "..." if creds.get('api_key') else None
+                }
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "apis": safe_apis,
+                "warning": "敏感信息已隐藏，只显示存在性和预览"
             }
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "apis": safe_apis,
-            "warning": "敏感信息已隐藏，只显示存在性和预览"
-        }
+        except Exception as e:
+            logger.error(f"❌【智能大脑】 获取API凭证状态失败: {e}")
+            return {"error": str(e)}
     
     async def get_system_status(self):
         """获取系统状态"""
@@ -582,6 +589,7 @@ class DataManager:
     async def _log_data_status(self):
         """定期记录数据状态"""
         while self.brain.running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 await asyncio.sleep(60)
                 
