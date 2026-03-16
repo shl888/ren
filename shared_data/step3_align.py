@@ -5,10 +5,11 @@
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
+import time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,9 @@ class Step3Align:
         self.log_interval = 300  # 5分钟，单位：秒
         self.process_count = 0
     
-    def process(self, fused_results: List) -> List[AlignedData]:
-        """处理Step2的融合结果 - 使用精确匹配"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, fused_results: List) -> List[AlignedData]:
+        """异步处理Step2的融合结果 - 使用精确匹配"""
         # 频率控制：只偶尔显示处理日志
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
@@ -64,14 +66,15 @@ class Step3Align:
         binance_items = []
         
         for item in fused_results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if item.exchange == "okx":
                 okx_items.append(item)
             elif item.exchange == "binance":
                 binance_items.append(item)
         
-        # 提取币种映射（精确提取）
-        okx_coin_to_item = self._extract_okx_coins(okx_items)
-        binance_coin_to_item = self._extract_binance_coins(binance_items)
+        # 提取币种映射（精确提取）- 异步调用
+        okx_coin_to_item = await self._extract_okx_coins(okx_items)  # ✅ 改为异步调用
+        binance_coin_to_item = await self._extract_binance_coins(binance_items)  # ✅ 改为异步调用
         
         # 找出共同币种（精确匹配）
         common_coins = sorted(list(set(okx_coin_to_item.keys()) & set(binance_coin_to_item.keys())))
@@ -86,16 +89,17 @@ class Step3Align:
         match_errors = []
         
         for coin in common_coins:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             okx_item = okx_coin_to_item.get(coin)
             binance_item = binance_coin_to_item.get(coin)
             
             if okx_item and binance_item:
                 # 验证匹配是否合理（防止错误匹配）
-                is_valid = self._validate_match(okx_item, binance_item, coin)
+                is_valid = await self._validate_match(okx_item, binance_item, coin)  # ✅ 改为异步调用
                 
                 if is_valid:
                     try:
-                        aligned = self._align_item(coin, okx_item, binance_item)
+                        aligned = await self._align_item(coin, okx_item, binance_item)  # ✅ 改为异步调用
                         if aligned:
                             align_results.append(aligned)
                             
@@ -149,11 +153,13 @@ class Step3Align:
         
         return align_results
     
-    def _extract_okx_coins(self, okx_items: List) -> Dict[str, any]:
-        """从OKX合约中提取币种映射"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _extract_okx_coins(self, okx_items: List) -> Dict[str, any]:
+        """从OKX合约中提取币种映射（异步版）"""
         coin_to_item = {}
         
         for item in okx_items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             contract_name = item.contract_name
             if contract_name and "-USDT-SWAP" in contract_name:
                 # 精确提取币种（去掉 -USDT-SWAP）
@@ -163,11 +169,13 @@ class Step3Align:
         
         return coin_to_item
     
-    def _extract_binance_coins(self, binance_items: List) -> Dict[str, any]:
-        """从币安合约中提取币种映射"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _extract_binance_coins(self, binance_items: List) -> Dict[str, any]:
+        """从币安合约中提取币种映射（异步版）"""
         coin_to_item = {}
         
         for item in binance_items:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             contract_name = item.contract_name
             if contract_name and contract_name.endswith("USDT"):
                 # 精确提取币种（去掉 USDT）
@@ -177,8 +185,9 @@ class Step3Align:
         
         return coin_to_item
     
-    def _validate_match(self, okx_item, binance_item, coin: str) -> bool:
-        """验证币种匹配是否合理"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _validate_match(self, okx_item, binance_item, coin: str) -> bool:
+        """异步验证币种匹配是否合理"""
         # 验证OKX合约名格式
         okx_contract = okx_item.contract_name
         if not okx_contract or "-USDT-SWAP" not in okx_contract:
@@ -214,14 +223,16 @@ class Step3Align:
         ]
         
         for correct_coin, wrong_coin in common_mistakes:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 小循环内也让出CPU
             if coin == correct_coin and extracted_binance_coin == wrong_coin:
                 logger.warning(f"发现常见错误匹配: {correct_coin} 匹配到了 {wrong_coin}")
                 return False
         
         return True
     
-    def _align_item(self, symbol: str, okx_item, binance_item) -> Optional[AlignedData]:
-        """对齐单个合约"""
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _align_item(self, symbol: str, okx_item, binance_item) -> Optional[AlignedData]:
+        """异步对齐单个合约"""
         
         aligned = AlignedData(symbol=symbol)
         
@@ -235,8 +246,8 @@ class Step3Align:
             aligned.okx_next_ts = okx_item.next_settlement_time
             
             # 时间转换：UTC时间戳 -> UTC+8 -> 24小时字符串
-            aligned.okx_current_settlement = self._ts_to_str(okx_item.current_settlement_time)
-            aligned.okx_next_settlement = self._ts_to_str(okx_item.next_settlement_time)
+            aligned.okx_current_settlement = await self._ts_to_str(okx_item.current_settlement_time)  # ✅ 改为异步调用
+            aligned.okx_next_settlement = await self._ts_to_str(okx_item.next_settlement_time)  # ✅ 改为异步调用
             aligned.okx_last_settlement = None
         
         # 币安数据
@@ -249,14 +260,15 @@ class Step3Align:
             aligned.binance_current_ts = binance_item.current_settlement_time
             
             # 时间转换
-            aligned.binance_last_settlement = self._ts_to_str(binance_item.last_settlement_time)
-            aligned.binance_current_settlement = self._ts_to_str(binance_item.current_settlement_time)
+            aligned.binance_last_settlement = await self._ts_to_str(binance_item.last_settlement_time)  # ✅ 改为异步调用
+            aligned.binance_current_settlement = await self._ts_to_str(binance_item.current_settlement_time)  # ✅ 改为异步调用
             aligned.binance_next_settlement = None
         
         return aligned
     
-    def _ts_to_str(self, ts: Optional[int]) -> Optional[str]:
-        """时间戳转换：UTC毫秒 -> UTC+8 -> 24小时制字符串"""
+    # ✅ [蚂蚁基因修复] 改为异步方法（虽然简单，但为了统一风格）
+    async def _ts_to_str(self, ts: Optional[int]) -> Optional[str]:
+        """异步时间戳转换：UTC毫秒 -> UTC+8 -> 24小时制字符串"""
         # 增加无效值检查
         if ts is None or ts <= 0:  # 无效或负值时间戳
             return None
@@ -273,4 +285,3 @@ class Step3Align:
         
         except Exception as e:
             return None
-            
