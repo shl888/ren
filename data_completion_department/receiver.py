@@ -237,6 +237,7 @@ class DataCompletionReceiver:
                 
             stored_count = 0
             for item in data_list:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU，避免大量合约阻塞事件循环
                 symbol = item.get('symbol')
                 if not symbol:
                     continue
@@ -337,9 +338,14 @@ class DataCompletionReceiver:
             'timestamp': datetime.now().isoformat()
         }
         
-        # 推送给所有订阅者
+        # ✅ [蚂蚁基因修复] 改为并行推送：创建所有任务，然后并行执行
+        tasks = []
         for callback in self.subscribers:
-            await self._push_to_subscriber(callback, snapshot)
+            tasks.append(self._push_to_subscriber(callback, snapshot))
+        
+        # 并行执行所有推送任务，不等待结果
+        if tasks:
+            asyncio.create_task(asyncio.gather(*tasks, return_exceptions=True))
     
     async def _push_to_subscriber(self, callback: Callable, snapshot: dict = None):
         """
@@ -455,4 +461,3 @@ async def receive_private_data(data):
 async def receive_market_data(data):
     """外部调用入口：接收市场数据"""
     await _global_receiver.receive_market_data(data)
-    
