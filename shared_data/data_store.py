@@ -131,6 +131,7 @@ class DataStore:
     async def _flow_loop(self):
         """放水循环 - 按规则执行"""
         while self.flowing:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             try:
                 # 检查规则是否允许放水
                 if not self.rules["flow"]["enabled"]:
@@ -169,11 +170,14 @@ class DataStore:
         async with self.locks['market_data']:
             # ==================== 简化：所有数据类型统一处理 ====================
             for exchange in ["binance", "okx"]:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 外层循环让出CPU
                 if exchange not in self.market_data:
                     continue
                 
                 for symbol, data_dict in self.market_data[exchange].items():
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 中层循环让出CPU
                     for data_type, data in data_dict.items():
+                        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 内层循环让出CPU
                         # 跳过内部字段
                         if data_type in ['latest', 'store_timestamp']:
                             continue
@@ -254,6 +258,7 @@ class DataStore:
             if not symbol:
                 result = {}
                 for sym, data_dict in self.market_data[exchange].items():
+                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                     if get_latest and 'latest' in data_dict:
                         result[sym] = data_dict.get(data_dict['latest'], {})
                     else:
