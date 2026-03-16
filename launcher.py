@@ -1,5 +1,5 @@
 """
-极简启动器 - 重构版：接管所有模块启动（多线程并行版）
+极简启动器 - 重构版：接管所有模块启动
 """
 
 import asyncio
@@ -10,16 +10,15 @@ import os
 import signal
 from datetime import datetime
 import threading
-from concurrent.futures import ThreadPoolExecutor
 
 # ==================== 强制启动标记 ====================
 print("🚨🚨🚨 LAUNCHER.PY 开始执行", file=sys.stderr)
-sys.stderr.flush()
+sys.stderr.flush()  # 强制刷新，确保输出
 # ====================================================
 
-# ==================== 加载环境变量 ====================
+# ==================== 新增：加载环境变量 ====================
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()  # 从 .env 文件加载环境变量
 # =======================================================
 
 # 设置路径
@@ -35,42 +34,12 @@ from frontend_relay import FrontendRelayServer
 
 from public_http_fetcher.binance_funding_rate import FundingSettlementManager
 from smart_brain.core import SmartBrain
+
+# ✅ 导入设置brain实例的函数
 from smart_brain import set_brain_instance
 
 logger = logging.getLogger(__name__)
 
-# ==================== 全局事件循环管理器 ====================
-class LoopManager:
-    """事件循环管理器 - 让线程可以访问主事件循环"""
-    
-    _main_loop = None
-    _executor = ThreadPoolExecutor(max_workers=4)
-    
-    @classmethod
-    def set_main_loop(cls, loop):
-        """设置主事件循环"""
-        cls._main_loop = loop
-    
-    @classmethod
-    def get_main_loop(cls):
-        """获取主事件循环"""
-        return cls._main_loop
-    
-    @classmethod
-    async def run_in_main(cls, coro):
-        """在主事件循环中运行协程"""
-        if not cls._main_loop:
-            raise RuntimeError("主事件循环未设置")
-        
-        future = asyncio.run_coroutine_threadsafe(coro, cls._main_loop)
-        return await asyncio.wrap_future(future)
-    
-    @classmethod
-    def run_sync_in_thread(cls, func, *args, **kwargs):
-        """在线程池中运行同步函数"""
-        return cls._executor.submit(func, *args, **kwargs)
-
-# 保活服务
 def start_keep_alive_background():
     """启动保活服务（后台线程）"""
     try:
@@ -124,9 +93,11 @@ async def safe_get_pool_status(pool):
             return {'connections': {}}
         
         status = pool.get_status()
+        # 确保 status 是字典
         if not isinstance(status, dict):
             return {'connections': {}}
         
+        # 确保有 connections 键
         if 'connections' not in status:
             status['connections'] = {}
         
@@ -135,408 +106,85 @@ async def safe_get_pool_status(pool):
         logger.error(f"获取连接池状态失败: {e}")
         return {'connections': {}}
 
-# ==================== 模块线程管理器（3线程版）====================
-class ModuleThreadManager:
-    """模块线程管理器 - 3线程优化版"""
-    
-    def __init__(self, brain):
-        self.brain = brain
-        self.threads = []
-        self.modules = {}
-        
-        # 3线程配置
-        self.thread_configs = [
-            {
-                'name': 'thread_1_heavy',
-                'modules': [
-                    ('public_websocket', self._run_public_websocket),
-                    ('public_pipeline', self._run_public_pipeline),
-                ]
-            },
-            {
-                'name': 'thread_2_io',
-                'modules': [
-                    ('private_websocket', self._run_private_websocket),
-                    ('private_pipeline', self._run_private_pipeline),
-                    ('token_manager', self._run_token_manager),
-                ]
-            },
-            {
-                'name': 'thread_3_mixed',
-                'modules': [
-                    ('completion', self._run_completion_module),
-                    ('okx_contract', self._run_okx_contract),
-                    ('account_fetcher', self._run_account_fetcher),
-                ]
-            }
-        ]
-    
-    def _run_in_thread(self, coro_func, *args):
-        """在线程中运行协程（使用主事件循环）- 无超时版"""
-        main_loop = LoopManager.get_main_loop()
-        if not main_loop:
-            logger.error("主事件循环未设置")
-            return
-        
+# ==================== 【新增】多线程模块运行函数 ====================
+def run_async_in_thread(coro_func, name, daemon=True):
+    """
+    在独立线程中运行异步函数
+    每个线程有自己的事件循环
+    """
+    def target():
         try:
-            # 无限等待，不设超时
-            future = asyncio.run_coroutine_threadsafe(
-                coro_func(*args),
-                main_loop
-            )
-            # 等待结果（无限等待）
-            future.result()
+            # 每个线程创建自己的事件循环
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(coro_func())
         except Exception as e:
-            logger.error(f"线程执行失败: {e}")
+            logger.error(f"❌ 线程 {name} 异常退出: {e}")
+            logger.error(traceback.format_exc())
+        finally:
+            loop.close()
     
-    def _run_public_websocket(self):
-        """运行公共WebSocket - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    ws_admin = WebSocketAdmin()
-                    await delayed_ws_init(ws_admin)
-                    self.brain.ws_admin = ws_admin
-                    logger.info("✅ 公共WebSocket启动成功")
-                    
-                    # 成功启动后进入保活循环
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 公共WebSocket启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 公共WebSocket启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_private_websocket(self):
-        """运行私人WebSocket - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    from private_ws_pool import PrivateWebSocketPool
-                    private_pool = PrivateWebSocketPool()
-                    await private_pool.start(self.brain.data_manager)
-                    self.brain.private_pool = private_pool
-                    logger.info("✅ 私人WebSocket连接池启动成功")
-                    
-                    # 成功启动后进入保活循环
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 私人连接池启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 私人连接池启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_public_pipeline(self):
-        """运行公开数据处理 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    await self.brain.pipeline_manager.start()
-                    logger.info("✅ 公开数据处理管道启动成功")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 公开数据处理启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 公开数据处理启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_private_pipeline(self):
-        """运行私人数据处理 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    logger.info("✅ 私人数据处理模块已就绪")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 私人数据处理异常 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 私人数据处理异常，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_token_manager(self):
-        """运行令牌管理器 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    from private_http_fetcher.binance_token.listen_key_manager import ListenKeyManager
-                    token_manager = ListenKeyManager(self.brain.data_manager)
-                    await token_manager.start()
-                    self.brain.token_manager = token_manager
-                    logger.info("✅ 币安令牌任务已启动")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 币安令牌任务启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 币安令牌任务启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_completion_module(self):
-        """运行成品数据完成模块 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    from data_completion_department import (
-                        get_receiver,
-                        DataDetector,
-                        Scheduler,
-                        Database,
-                        BinanceRepairArea,
-                        OkxMissingRepair,
-                    )
-                    
-                    # 1. 创建接收器实例
-                    data_receiver = get_receiver()
-                    
-                    # 2. 创建数据库实例
-                    database = Database()
-                    await database.initialize()
-                    
-                    # 3. 创建调度器
-                    scheduler = Scheduler(self.brain.data_manager)
-                    
-                    # 4. 创建检测区
-                    detector = DataDetector(scheduler)
-                    
-                    # 5. 创建修复区实例
-                    binance_repair = BinanceRepairArea(scheduler)
-                    okx_repair = OkxMissingRepair(scheduler)
-                    
-                    # 6. 建立连接
-                    data_receiver.subscribe(detector.handle_store_snapshot)
-                    data_receiver.subscribe(binance_repair.handle_store_snapshot)
-                    data_receiver.subscribe(okx_repair.handle_store_snapshot)
-                    
-                    # 7. 调度器连接下游模块
-                    scheduler.set_database(database)
-                    scheduler.set_repair_binance(binance_repair)
-                    scheduler.set_repair_okx(okx_repair)
-                    
-                    # 8. 保存到brain实例
-                    self.brain.data_receiver = data_receiver
-                    self.brain.data_detector = detector
-                    self.brain.data_scheduler = scheduler
-                    self.brain.data_database = database
-                    self.brain.binance_repair = binance_repair
-                    self.brain.okx_repair = okx_repair
-                    
-                    logger.info("✅ 成品数据完成模块启动成功")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 成品数据完成模块启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 成品数据完成模块启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_okx_contract(self):
-        """运行OKX合约系统 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    from public_http_fetcher.okx_contract_info.fetcher import OKXContractFetcher
-                    from public_http_fetcher.okx_contract_info.cleaner import OKXContractCleaner
-                    
-                    okx_fetcher = OKXContractFetcher()
-                    raw_data = await okx_fetcher.startup_fetch()
-                    
-                    if raw_data:
-                        okx_cleaner = OKXContractCleaner()
-                        await okx_cleaner.clean_and_push(raw_data)
-                        self.brain.okx_cleaner = okx_cleaner
-                    
-                    self.brain.okx_fetcher = okx_fetcher
-                    logger.info("✅ OKX合约面值系统启动完成")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ OKX合约系统启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ OKX合约系统启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def _run_account_fetcher(self):
-        """运行资产获取器 - 带重试版"""
-        async def _run():
-            retry_count = 0
-            max_retries = 3
-            
-            while retry_count < max_retries:
-                try:
-                    from private_http_fetcher.binance_account.fetcher import PrivateHTTPFetcher
-                    account_fetcher = PrivateHTTPFetcher()
-                    await account_fetcher.start(self.brain.data_manager)
-                    self.brain.private_fetcher = account_fetcher
-                    logger.info("✅ 币安资产获取任务已启动")
-                    
-                    while True:
-                        await asyncio.sleep(60)
-                        
-                except Exception as e:
-                    retry_count += 1
-                    logger.error(f"❌ 币安资产获取启动失败 (尝试 {retry_count}/{max_retries}): {e}")
-                    if retry_count < max_retries:
-                        wait_time = retry_count * 5
-                        logger.info(f"⏳ {wait_time}秒后重试...")
-                        await asyncio.sleep(wait_time)
-                    else:
-                        logger.error("❌ 币安资产获取启动失败，放弃重试")
-                        break
-        
-        self._run_in_thread(_run)
-    
-    def start_all(self):
-        """启动所有线程"""
-        logger.info("=" * 60)
-        logger.info("🚀 启动3个优化线程...")
-        logger.info("=" * 60)
-        
-        for config in self.thread_configs:
-            thread = threading.Thread(
-                target=self._run_thread_modules,
-                args=(config['name'], config['modules']),
-                name=config['name'],
-                daemon=True
-            )
-            thread.start()
-            self.threads.append(thread)
-            logger.info(f"✅【{config['name']}】线程启动，包含 {len(config['modules'])} 个模块")
-    
-    def _run_thread_modules(self, thread_name, modules):
-        """在线程中运行多个模块"""
-        logger.info(f"🧵【{thread_name}】开始运行")
-        
-        for module_name, module_func in modules:
-            try:
-                logger.info(f"  └─ 启动模块: {module_name}")
-                module_func()
-            except Exception as e:
-                logger.error(f"  └─ ❌ 模块 {module_name} 失败: {e}")
-    
-    def restart_thread(self, thread_name):
-        """重启指定线程"""
-        logger.warning(f"🔄 正在重启线程: {thread_name}")
-        
-        for config in self.thread_configs:
-            if config['name'] == thread_name:
-                new_thread = threading.Thread(
-                    target=self._run_thread_modules,
-                    args=(config['name'], config['modules']),
-                    name=config['name'],
-                    daemon=True
-                )
-                new_thread.start()
-                
-                for i, t in enumerate(self.threads):
-                    if t.name == thread_name:
-                        self.threads[i] = new_thread
-                        break
-                
-                logger.info(f"✅ 线程 {thread_name} 已重启")
-                return True
-        
-        logger.error(f"❌ 找不到线程配置: {thread_name}")
-        return False
-    
-    def check_all(self):
-        """检查所有线程状态，自动重启死亡的线程"""
-        all_alive = True
-        for thread in self.threads:
-            if not thread.is_alive():
-                logger.error(f"⚠️ 线程 {thread.name} 已死亡，尝试重启...")
-                if self.restart_thread(thread.name):
-                    logger.info(f"✅ 线程 {thread.name} 重启成功")
-                else:
-                    logger.error(f"❌ 线程 {thread.name} 重启失败")
-                    all_alive = False
-        return all_alive
+    thread = threading.Thread(target=target, name=name, daemon=daemon)
+    thread.start()
+    return thread
 
+# ==================== 【新增】各模块的运行函数 ====================
+async def run_public_websocket(brain):
+    """运行公共WebSocket模块"""
+    logger.info("🌐【公共WebSocket线程】已启动")
+    try:
+        # 如果已有ws_admin，让它运行
+        if brain.ws_admin:
+            # ws_admin 已经在运行，只需要保持
+            while brain.running:
+                await asyncio.sleep(1)
+        else:
+            # 如果没有，就等着
+            await asyncio.Future()
+    except Exception as e:
+        logger.error(f"❌ 公共WebSocket线程异常: {e}")
+
+async def run_private_websocket(brain):
+    """运行私人WebSocket模块"""
+    logger.info("🔒【私人WebSocket线程】已启动")
+    try:
+        # 私人连接池已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 私人WebSocket线程异常: {e}")
+
+async def run_public_pipeline(brain):
+    """运行公开数据处理流水线"""
+    logger.info("📊【公开数据处理线程】已启动")
+    try:
+        # pipeline_manager 已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 公开数据处理线程异常: {e}")
+
+async def run_private_pipeline(brain):
+    """运行私人数据处理流水线"""
+    logger.info("📝【私人数据处理线程】已启动")
+    try:
+        # 私人数据处理模块已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 私人数据处理线程异常: {e}")
+
+async def run_completion_module(brain):
+    """运行数据完成部门模块"""
+    logger.info("✅【数据完成部门线程】已启动")
+    try:
+        # 数据完成部门已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 数据完成部门线程异常: {e}")
+
+# ==================== 主启动函数 ====================
 async def main():
     """主启动函数"""
     logging.basicConfig(
@@ -548,12 +196,7 @@ async def main():
     
     logger.info("🚨🚨🚨 MAIN 函数开始执行")
     
-    # 保存主事件循环
-    main_loop = asyncio.get_running_loop()
-    LoopManager.set_main_loop(main_loop)
-    logger.info("✅ 主事件循环已保存")
-    
-    # 启动保活服务
+    # 启动保活服务（已经在独立线程中）
     start_keep_alive_background()
     
     logger.info("=" * 60)
@@ -561,6 +204,7 @@ async def main():
     logger.info("=" * 60)
     
     brain = None
+    module_threads = []  # 保存所有模块线程
     
     try:
         # ==================== 验证环境变量 ====================
@@ -637,44 +281,197 @@ async def main():
         logger.info("【8️⃣】设置数据处理回调...")
         pipeline_manager.set_brain_callback(brain.data_manager.receive_market_data)
         
-        # ==================== 9. 启动3个优化线程 ====================
-        thread_manager = ModuleThreadManager(brain)
-        thread_manager.start_all()
+        # ==================== 9. 启动数据处理管道 ====================
+        logger.info("【9️⃣】启动数据处理管道...")
+        await pipeline_manager.start()
+        
+        # ==================== 10. 延迟启动WebSocket ====================
+        logger.info("【🔟】准备延迟启动WebSocket...")
+        ws_admin = WebSocketAdmin()
+        asyncio.create_task(delayed_ws_init(ws_admin))
+        brain.ws_admin = ws_admin
+        
+        # ==================== 11. 启动私人WebSocket连接池 ====================
+        logger.info("【🅱️】启动私人WebSocket连接池...")
+        try:
+            from private_ws_pool import PrivateWebSocketPool
+            private_pool = PrivateWebSocketPool()
+            await private_pool.start(brain.data_manager)
+            brain.private_pool = private_pool
+            logger.info("✅ 私人WebSocket连接池启动成功")
+        except ImportError as e:
+            logger.error(f"❌ 无法导入私人连接池模块: {e}")
+        except Exception as e:
+            logger.error(f"❌ 启动私人连接池失败: {e}")
+        
+        # ==================== 12. 启动币安令牌任务 ====================
+        logger.info("【🪙】启动币安令牌任务...")
+        try:
+            from private_http_fetcher.binance_token.listen_key_manager import ListenKeyManager
+            token_manager = ListenKeyManager(brain.data_manager)
+            await token_manager.start()
+            brain.token_manager = token_manager
+            logger.info("✅ 币安令牌任务已启动")
+        except Exception as e:
+            logger.error(f"❌ 启动币安令牌任务失败: {e}")
+        
+        # ==================== 13. 启动OKX合约面值系统 ====================
+        logger.info("【📄】启动OKX合约面值系统...")
+        try:
+            from public_http_fetcher.okx_contract_info.fetcher import OKXContractFetcher
+            from public_http_fetcher.okx_contract_info.cleaner import OKXContractCleaner
+            
+            okx_fetcher = OKXContractFetcher()
+            raw_data = await okx_fetcher.startup_fetch()
+            
+            if raw_data:
+                okx_cleaner = OKXContractCleaner()
+                await okx_cleaner.clean_and_push(raw_data)
+                brain.okx_cleaner = okx_cleaner
+            
+            brain.okx_fetcher = okx_fetcher
+            logger.info("✅ OKX合约面值系统启动完成")
+        except Exception as e:
+            logger.error(f"❌ 启动OKX合约面值系统失败: {e}")
+        
+        # ==================== 14. 启动币安资产获取任务 ====================
+        logger.info("【💰】启动币安资产获取任务...")
+        try:
+            from private_http_fetcher.binance_account.fetcher import PrivateHTTPFetcher
+            account_fetcher = PrivateHTTPFetcher()
+            await account_fetcher.start(brain.data_manager)
+            brain.private_fetcher = account_fetcher
+            logger.info("✅ 币安资产获取任务已启动")
+        except Exception as e:
+            logger.error(f"❌ 启动币安资产获取任务失败: {e}")
+        
+        # ==================== 15. 启动数据完成部门模块 ====================
+        logger.info("【启动文件】========== 开始启动【数据完成部门】模块 ==========")
+        try:
+            from data_completion_department import (
+                get_receiver,
+                DataDetector,
+                Scheduler,
+                Database,
+                BinanceRepairArea,
+                OkxMissingRepair,
+            )
+            logger.info("✅ 成功导入数据完成部门模块")
+            
+            data_receiver = get_receiver()
+            logger.info("✅ 【启动文件】【数据完成部门】接收存储区已初始化")
+            
+            database = Database()
+            await database.initialize()
+            logger.info("✅ 【启动文件】【数据完成部门】数据库区已初始化")
+            
+            scheduler = Scheduler(brain.data_manager)
+            logger.info("✅ 【启动文件】【数据完成部门】调度区已初始化")
+            
+            detector = DataDetector(scheduler)
+            logger.info("✅ 【启动文件】【数据完成部门】检测区已初始化")
+            
+            binance_repair = BinanceRepairArea(scheduler)
+            logger.info("✅【启动文件】【数据完成部门】 币安修复区已初始化")
+            
+            okx_repair = OkxMissingRepair(scheduler)
+            logger.info("✅【启动文件】【数据完成部门】 欧易修复区已初始化")
+            
+            data_receiver.subscribe(detector.handle_store_snapshot)
+            data_receiver.subscribe(binance_repair.handle_store_snapshot)
+            data_receiver.subscribe(okx_repair.handle_store_snapshot)
+            logger.info("✅【启动文件】【数据完成部门】 接收存储区已连接检测区和修复区")
+            
+            scheduler.set_database(database)
+            scheduler.set_repair_binance(binance_repair)
+            scheduler.set_repair_okx(okx_repair)
+            logger.info("✅【启动文件】【数据完成部门】 调度区已连接数据库和修复区")
+            
+            brain.data_receiver = data_receiver
+            brain.data_detector = detector
+            brain.data_scheduler = scheduler
+            brain.data_database = database
+            brain.binance_repair = binance_repair
+            brain.okx_repair = okx_repair
+            
+            logger.info("✅【启动文件】 数据完成部门模块全部启动完成")
+            
+        except Exception as e:
+            logger.error(f"❌ 启动数据完成模块失败: {e}")
+            logger.error(traceback.format_exc())
         
         # ==================== 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
-        logger.info("🎉 所有模块启动完成！")
+        logger.info("🎉 所有模块初始化完成！")
         logger.info("=" * 60)
         
-        # 🔥 修复：安全输出连接池状态（使用 getattr 避免属性错误）
-        private_pool = getattr(brain, 'private_pool', None)
-        if private_pool:
-            pool_status = await safe_get_pool_status(private_pool)
-            connections = pool_status.get('connections', {})
-            
-            logger.info(f"🔗 私人连接池状态: 运行中")
-            if connections:
-                for exchange, status in connections.items():
-                    if status.get('connected', False):
-                        logger.info(f"  • {exchange}: ✅ 已连接")
-                    else:
-                        logger.info(f"  • {exchange}: ⏳ 连接中...")
-            else:
-                logger.info(f"  • 连接池正在初始化中，稍后查看状态")
-        else:
-            logger.info(f"🔗 私人连接池: ⏳ 正在初始化...")
+        # ==================== 16. 多模块并行运行 ====================
+        logger.info("🚀 进入多模块并行运行模式...")
         
-        # ==================== 主监控循环 ====================
-        logger.info("🚀 主监控循环运行中...")
+        # 启动各个模块的独立线程
+        module_threads = []
+        
+        # 1. 公共WebSocket线程
+        if brain.ws_admin:
+            module_threads.append(run_async_in_thread(
+                lambda: run_public_websocket(brain),
+                "PublicWS"
+            ))
+            logger.info("  ├─ 公共WebSocket线程已启动")
+        
+        # 2. 私人WebSocket线程
+        if brain.private_pool:
+            module_threads.append(run_async_in_thread(
+                lambda: run_private_websocket(brain),
+                "PrivateWS"
+            ))
+            logger.info("  ├─ 私人WebSocket线程已启动")
+        
+        # 3. 公开数据处理线程
+        if brain.pipeline_manager:
+            module_threads.append(run_async_in_thread(
+                lambda: run_public_pipeline(brain),
+                "Pipeline"
+            ))
+            logger.info("  ├─ 公开数据处理线程已启动")
+        
+        # 4. 私人数据处理线程（如果有）
+        module_threads.append(run_async_in_thread(
+            lambda: run_private_pipeline(brain),
+            "PrivatePipeline"
+        ))
+        logger.info("  ├─ 私人数据处理线程已启动")
+        
+        # 5. 数据完成部门线程
+        if brain.data_scheduler:
+            module_threads.append(run_async_in_thread(
+                lambda: run_completion_module(brain),
+                "Completion"
+            ))
+            logger.info("  └─ 数据完成部门线程已启动")
+        
+        logger.info(f"✅ 共启动 {len(module_threads)} 个模块线程")
+        logger.info("=" * 60)
         logger.info("🛑 按 Ctrl+C 停止")
         logger.info("=" * 60)
         
+        # 主线程只做监控
         while brain.running:
             await asyncio.sleep(5)
-            # 检查线程健康，自动重启死亡的线程
-            if not thread_manager.check_all():
-                logger.warning("⚠️ 有线程重启失败，但系统继续运行")
+            
+            # 检查所有线程是否健康
+            for i, thread in enumerate(module_threads):
+                if not thread.is_alive():
+                    logger.error(f"⚠️ 模块线程 {thread.name} 已停止，尝试重启...")
+                    # 重启线程
+                    new_thread = run_async_in_thread(
+                        [run_public_websocket, run_private_websocket, 
+                         run_public_pipeline, run_private_pipeline, 
+                         run_completion_module][i](brain),
+                        thread.name
+                    )
+                    module_threads[i] = new_thread
         
     except KeyboardInterrupt:
         logger.info("收到键盘中断")
@@ -683,9 +480,9 @@ async def main():
         logger.error(traceback.format_exc())
     finally:
         if brain:
+            brain.running = False
             await brain.shutdown()
-            # 关闭线程池
-            LoopManager._executor.shutdown(wait=False)
+            logger.info("✅ 所有模块已停止")
 
 if __name__ == "__main__":
     print("🚨🚨🚨 进入 __main__", file=sys.stderr)
