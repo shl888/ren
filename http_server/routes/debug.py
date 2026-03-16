@@ -4,6 +4,7 @@
 from aiohttp import web
 import datetime
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 
 from shared_data.data_store import data_store
 
@@ -17,11 +18,12 @@ async def get_websocket_status(request: web.Request) -> web.Response:
     地址：GET /api/debug/websocket_status
     """
     try:
-        # 获取连接状态
+        # 获取连接状态（异步方法，可以直接await）
         connection_status = await data_store.get_connection_status()
         
-        # 获取数据存储统计
-        data_stats = data_store.get_market_data_stats()
+        # ✅ [蚂蚁基因修复] 在线程池中执行同步方法
+        loop = asyncio.get_event_loop()
+        data_stats = await loop.run_in_executor(None, data_store.get_market_data_stats)
         
         # 统计信息
         stats = {
