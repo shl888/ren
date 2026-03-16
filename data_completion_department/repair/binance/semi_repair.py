@@ -47,7 +47,6 @@
 import os
 import logging
 import asyncio
-import requests
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
@@ -245,6 +244,7 @@ class BinanceSemiRepair:
         logger.debug("🔄【币安修复区】【半成品修复】 修复循环开始")
 
         while self.is_running:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_BINANCE_SEMI:
                     logger.info("【币安修复区】【半成品修复】门外标签已不是币安半成品，停止修复循环")
@@ -636,6 +636,7 @@ class BinanceSemiRepair:
         # 【重要】只填充有值的字段，空值不覆盖
         fill_count = 0
         for field in fields_to_fill:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if field in self.cache and self.cache[field] is not None:
                 merged_data[field] = self.cache[field]
                 fill_count += 1
