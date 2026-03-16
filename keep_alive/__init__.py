@@ -40,7 +40,7 @@ def start_with_http_check():
             
             # HTTP就绪，启动保活
             keeper = KeepAlive()
-            keeper.run()
+            await keeper.run()
             return
             
         except Exception as e:
