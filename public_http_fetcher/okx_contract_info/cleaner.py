@@ -60,6 +60,7 @@ class OKXContractCleaner:
         # 清洗每个合约
         cleaned_contracts = []
         for raw_contract in raw_contracts:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             cleaned = self._clean_single_contract(raw_contract)
             if cleaned:
                 cleaned_contracts.append(cleaned)
@@ -120,6 +121,7 @@ class OKXContractCleaner:
         cleaned = {}
         
         for field in self.CORE_FIELDS:
+            # 这个小循环只有8个字段，影响极小，保持同步即可
             if field in raw_contract:
                 value = raw_contract[field]
                 
