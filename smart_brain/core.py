@@ -125,6 +125,7 @@ class SmartBrain:
             
             # 主循环
             while self.running:
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
                 await asyncio.sleep(1)
         
         except KeyboardInterrupt:
@@ -173,4 +174,3 @@ class SmartBrain:
             logger.info("✅ 【智能大脑】大脑核心已关闭")
         except Exception as e:
             logger.error(f"❌【智能大脑】关闭出错: {e}")
-            
