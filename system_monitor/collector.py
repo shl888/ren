@@ -5,20 +5,39 @@
 import os
 import sys
 import time
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
 import psutil
 import platform
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 class SystemMonitor:
-    """系统监控器 - 按需采集"""
+    """系统监控器 - 按需采集（异步友好版）"""
     
     def __init__(self):
         self.start_time = time.time()
         self.pid = os.getpid()
         
+    # ✅ [蚂蚁基因修复] 添加异步版本的方法，供外部调用
+    async def collect_all_async(self) -> Dict[str, Any]:
+        """异步采集所有系统数据（在线程池中执行）"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.collect_all)
+    
+    async def collect_light_async(self) -> Dict[str, Any]:
+        """异步采集轻量数据（在线程池中执行）"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.collect_light)
+    
+    async def check_health_async(self) -> Dict[str, Any]:
+        """异步健康检查（在线程池中执行）"""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.check_health)
+    
+    # ==================== 同步方法（内部使用，会在线程池中执行）====================
+    
     def collect_all(self) -> Dict[str, Any]:
-        """采集所有系统数据"""
+        """采集所有系统数据（同步版，供内部线程池调用）"""
         return {
             "timestamp": datetime.now().isoformat(),
             "system": self._get_system_info(),
@@ -32,17 +51,33 @@ class SystemMonitor:
         }
     
     def collect_light(self) -> Dict[str, Any]:
-        """采集轻量数据（核心指标）"""
+        """采集轻量数据（同步版，供内部线程池调用）"""
         return {
             "timestamp": datetime.now().isoformat(),
-            "cpu_percent": psutil.cpu_percent(interval=0.1),
+            "cpu_percent": self._get_cpu_percent_safe(0.1),
             "memory_used_mb": self._get_memory_used_mb(),
             "memory_percent": psutil.virtual_memory().percent,
             "disk_percent": psutil.disk_usage('/').percent,
             "uptime_seconds": time.time() - self.start_time,
             "process_memory_mb": self._get_process_memory_mb(),
-            "process_cpu_percent": psutil.Process(self.pid).cpu_percent(interval=0.1)
+            "process_cpu_percent": self._get_process_cpu_percent_safe(0.1)
         }
+    
+    # ✅ [蚂蚁基因修复] 安全获取CPU百分比（带interval）
+    def _get_cpu_percent_safe(self, interval: float = 0.1) -> float:
+        """安全获取CPU百分比（会阻塞，所以在线程池中执行）"""
+        try:
+            return psutil.cpu_percent(interval=interval)
+        except:
+            return 0.0
+    
+    def _get_process_cpu_percent_safe(self, interval: float = 0.1) -> float:
+        """安全获取进程CPU百分比"""
+        try:
+            process = psutil.Process(self.pid)
+            return process.cpu_percent(interval=interval)
+        except:
+            return 0.0
     
     def _get_system_info(self) -> Dict[str, Any]:
         """获取系统信息"""
@@ -63,7 +98,11 @@ class SystemMonitor:
     def _get_cpu_info(self) -> Dict[str, Any]:
         """获取CPU信息"""
         try:
-            cpu_percent = psutil.cpu_percent(interval=0.5, percpu=True)
+            # ✅ [蚂蚁基因修复] 使用安全的带interval的调用
+            cpu_percent = []
+            for _ in range(psutil.cpu_count(logical=True) or 1):
+                cpu_percent.append(self._get_cpu_percent_safe(0.1))
+            
             cpu_freq = psutil.cpu_freq()
             cpu_count = {
                 "physical": psutil.cpu_count(logical=False),
@@ -143,7 +182,12 @@ class SystemMonitor:
         """获取网络信息"""
         try:
             net_io = psutil.net_io_counters()
-            net_connections = len(psutil.net_connections())
+            
+            # ✅ [蚂蚁基因修复] 将可能慢的net_connections调用放在try中，出错时返回0
+            try:
+                net_connections = len(psutil.net_connections())
+            except:
+                net_connections = 0
             
             return {
                 "bytes_sent": net_io.bytes_sent,
@@ -166,7 +210,7 @@ class SystemMonitor:
                     "name": process.name(),
                     "status": process.status(),
                     "create_time": datetime.fromtimestamp(process.create_time()).isoformat(),
-                    "cpu_percent": process.cpu_percent(interval=0.1),
+                    "cpu_percent": self._get_process_cpu_percent_safe(0.1),
                     "memory_percent": process.memory_percent(),
                     "num_threads": process.num_threads(),
                     "open_files": len(process.open_files()),
@@ -211,7 +255,7 @@ class SystemMonitor:
         """健康检查（快速版）"""
         try:
             # 快速检查核心指标
-            cpu_ok = psutil.cpu_percent(interval=0.1) < 90
+            cpu_ok = self._get_cpu_percent_safe(0.1) < 90
             mem_ok = psutil.virtual_memory().percent < 90
             disk_ok = psutil.disk_usage('/').percent < 90
             
