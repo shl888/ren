@@ -58,6 +58,7 @@ class FundingSettlementManager:
         }
         
         for attempt in range(max_retries):
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
             logger.info("-" * 50)
             logger.info(f"📡【历史费率】第 {attempt + 1}/{max_retries} 次尝试")
             logger.info("-" * 50)
@@ -142,7 +143,12 @@ class FundingSettlementManager:
                         logger.info("🔂【历史费率】Step 6: 过滤USDT永续合约")
                         logger.info(f"   📝【历史费率】原始合约数: {len(data)}")
                         
-                        filtered_data = self._filter_usdt_perpetual(data)
+                        # ✅ [蚂蚁基因修复] 将同步的过滤函数放到线程池执行
+                        loop = asyncio.get_event_loop()
+                        filtered_data = await loop.run_in_executor(
+                            None, self._filter_usdt_perpetual, data
+                        )
+                        
                         logger.info(f"✅【历史费率】 过滤完成，USDT合约数: {len(filtered_data)}")
                         
                         if len(filtered_data) == 0:
@@ -213,7 +219,7 @@ class FundingSettlementManager:
     
     def _filter_usdt_perpetual(self, api_response: List[Dict]) -> Dict[str, Dict]:
         """
-        过滤USDT永续合约
+        过滤USDT永续合约（同步函数，会在线程池中执行）
         """
         filtered = {}
         
@@ -259,6 +265,7 @@ class FundingSettlementManager:
             current_timestamp = datetime.now().isoformat()
             
             for symbol, data in filtered_data.items():
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
                 # ✅ 清洗 funding_time（毫秒部分归零）
                 funding_time = data.get('funding_time')
                 if funding_time:
