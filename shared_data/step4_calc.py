@@ -6,9 +6,10 @@
 """
 
 import logging
+import asyncio  # ✅ [蚂蚁基因修复] 导入asyncio
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +56,10 @@ class Step4Calc:
         # 保护统计集合（日志周期内累计，自动去重）
         self._protected_symbols = set()
         
-    def process(self, aligned_results: List) -> List[PlatformData]:
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def process(self, aligned_results: List) -> List[PlatformData]:
         """
-        统一处理流程：1.智能更新缓存 2.从缓存计算
+        异步统一处理流程：1.智能更新缓存 2.从缓存计算
         """
         current_time = time.time()
         should_log = (current_time - self.last_log_time) >= self.log_interval or self.process_count == 0
@@ -91,6 +93,7 @@ class Step4Calc:
         all_results = []
         
         for item in aligned_results:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
                 symbol = item.symbol
                 
@@ -98,14 +101,14 @@ class Step4Calc:
                 self._update_cache_smart(item, batch_stats)
                 
                 # 🔢 第二步：从缓存统一计算
-                # OKX计算
-                okx_data = self._calc_from_cache(symbol, "okx", batch_stats)
+                # OKX计算 - 改为异步调用
+                okx_data = await self._calc_from_cache(symbol, "okx", batch_stats)  # ✅ 改为异步调用
                 if okx_data:
                     all_results.append(okx_data)
                     batch_stats["okx_calculated"] += 1
                 
-                # 币安计算
-                binance_data = self._calc_from_cache(symbol, "binance", batch_stats)
+                # 币安计算 - 改为异步调用
+                binance_data = await self._calc_from_cache(symbol, "binance", batch_stats)  # ✅ 改为异步调用
                 if binance_data:
                     all_results.append(binance_data)
                     batch_stats["binance_calculated"] += 1
@@ -265,7 +268,8 @@ class Step4Calc:
         if has_effective_update:
             batch_stats["binance_updated"] += 1
     
-    def _calc_from_cache(self, symbol: str, exchange: str, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
+    # ✅ [蚂蚁基因修复] 改为异步方法
+    async def _calc_from_cache(self, symbol: str, exchange: str, batch_stats: Dict[str, int]) -> Optional[PlatformData]:
         """从缓存计算数据（唯一数据源）"""
         if symbol not in self.platform_cache:
             return None
@@ -497,4 +501,3 @@ class Step4Calc:
         self.platform_cache.clear()
         self._protected_symbols.clear()  # 同时清空保护统计
         logger.info("🗑️【流水线步骤4】缓存已清空")
-        
