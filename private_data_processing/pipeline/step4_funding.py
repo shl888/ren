@@ -282,7 +282,7 @@ class Step4Funding:
                         
                         # 判断是否不同（有新结算）
                         if abs(new_total_float - old_total_float) >= 0.000001:
-                            logger.info(f"💰【私人step4】【{exchange}】检测到资金费结算: {old_total_float} -> {new_total_float}")
+                            logger.debug(f"💰【私人step4】【{exchange}】检测到资金费结算: {old_total_float} -> {new_total_float}")
                             
                             # 2.1 本次资金费 = 新累计 - 旧累计
                             this_fee = new_total_float - old_total_float
@@ -360,7 +360,7 @@ class Step4Funding:
         cache_entry["资金费结算次数"] = 0
         cache_entry["平均资金费率"] = None
         cache_entry["本次资金费结算时间"] = None
-        logger.info(f"💰 资金费数据已重置")
+        logger.debug(f"💰 资金费数据已重置")
     
     def _update_other_fields(self, cached: Dict, new_data: Dict):
         """更新非资金费字段 - 直接覆盖，空值也覆盖"""
