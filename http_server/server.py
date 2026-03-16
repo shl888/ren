@@ -37,6 +37,7 @@ class HTTPServer:
         self.app = web.Application()
         self.runner = None
         self.site = None
+        self._start_task = None  # ✅ [蚂蚁基因修复] 保存启动任务
         
         # WebSocket连接池（隐藏在HTTP服务内部）
         self.ws_pool_manager = None
@@ -146,8 +147,9 @@ class HTTPServer:
             return await self.ws_pool_manager.get_all_status()
         return {"error": "WebSocket连接池未初始化"}
     
-    def run(self):
-        """运行HTTP服务器 - 快速启动版本"""
+    # ✅ [蚂蚁基因修复] 将同步阻塞的run方法改为异步启动
+    async def start(self):
+        """异步启动HTTP服务器"""
         # 配置日志
         logging.basicConfig(
             level=logging.INFO,
@@ -155,22 +157,46 @@ class HTTPServer:
         )
         
         logger.info("=" * 60)
-        logger.info("🚀 启动HTTP服务器（快速启动模式）")
+        logger.info("🚀 启动HTTP服务器（异步模式）")
         logger.info(f"端口: {self.port}")
         logger.info("=" * 60)
         
         try:
-            # 快速启动，不等待其他组件
-            web.run_app(
-                self.app,
-                host=self.host,
-                port=self.port,
-                access_log=logger,
-                shutdown_timeout=60,
-                print=None  # 禁用默认的启动信息
-            )
-        except KeyboardInterrupt:
-            logger.info("收到键盘中断")
+            # 异步启动服务器
+            self.runner = web.AppRunner(self.app)
+            await self.runner.setup()
+            self.site = web.TCPSite(self.runner, self.host, self.port)
+            await self.site.start()
+            
+            logger.info(f"✅ HTTP服务器已启动在 {self.host}:{self.port}")
+            
+            # 保持运行但不阻塞 - 创建一个长时间运行的任务
+            self._start_task = asyncio.current_task()
+            
+            # 等待直到被取消
+            try:
+                while True:
+                    await asyncio.sleep(3600)  # 每小时唤醒一次
+            except asyncio.CancelledError:
+                logger.info("HTTP服务器启动任务被取消")
+                await self.shutdown()
+                
         except Exception as e:
-            logger.error(f"服务器运行错误: {e}")
-            sys.exit(1)
+            logger.error(f"❌ HTTP服务器启动失败: {e}")
+            raise
+    
+    # ✅ [蚂蚁基因修复] 保留兼容方法，但标记为弃用
+    def run(self):
+        """【已弃用】请使用 start() 异步方法"""
+        logger.warning("⚠️ run() 方法已弃用，请使用 start() 异步方法")
+        
+        # 创建新的事件循环并运行
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self.start())
+            loop.run_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            loop.close()
