@@ -39,7 +39,8 @@ Turso API 要求所有值都必须是字符串类型
 """
 
 import os
-import requests
+import aiohttp  # ✅ [蚂蚁基因修复] 改用异步HTTP库
+import asyncio
 import logging
 import json
 import time
@@ -78,12 +79,8 @@ class Database:
         logger.info("✅ 【数据库】数据库配置加载成功")
         logger.debug(f"🔗 【数据库】连接URL: {self.url}")
         
-        # ----- 第3步：测试数据库连接 -----
-        if not self.test_connection():
-            raise ConnectionError("❌ 【数据库】无法连接到数据库，请检查网络和令牌")
-        
-        # ----- 第4步：初始化数据库表 -----
-        self._init_database()
+        # ✅ [蚂蚁基因修复] 创建共享的aiohttp会话
+        self._session = None
         
         # ----- 第5步：初始化日志记录集合 -----
         self._logged_active_ids = set()
@@ -93,6 +90,29 @@ class Database:
         self._last_log_time = 0
         self._log_interval = 60
         logger.info(f"✅ 【数据库】日志时间控制初始化完成，间隔{self._log_interval}秒")
+    
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """✅ [蚂蚁基因修复] 懒加载获取aiohttp会话"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    async def initialize(self):
+        """✅ [蚂蚁基因修复] 异步初始化数据库连接和表"""
+        # ----- 第3步：测试数据库连接 -----
+        if not await self.test_connection():
+            raise ConnectionError("❌ 【数据库】无法连接到数据库，请检查网络和令牌")
+        
+        # ----- 第4步：初始化数据库表 -----
+        await self._init_database()
+        
+        logger.info("✅ 【数据库】异步初始化完成")
+    
+    async def close(self):
+        """✅ [蚂蚁基因修复] 关闭aiohttp会话"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            logger.debug("🔌 【数据库】HTTP会话已关闭")
     
     # ==================== 对外唯一入口 ====================
     
@@ -172,7 +192,7 @@ class Database:
         logger.debug(f"📝 【数据库】持仓表 SQL: {sql}")
         logger.debug(f"📝 【数据库】持仓表 值: {values}")
         
-        self._run_sql(sql, values)
+        await self._run_sql(sql, values)
         
         if should_log_info:
             logger.info(f"✅ 【数据库】成功写入持仓区{exchange}数据 - {contract}（首次）")
@@ -189,7 +209,7 @@ class Database:
         
         record_id = data['id']
         
-        if self._check_closed_exists(record_id):
+        if await self._check_closed_exists(record_id):
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
@@ -202,14 +222,14 @@ class Database:
         logger.debug(f"📝 【数据库】历史表 SQL: {sql}")
         logger.debug(f"📝 【数据库】历史表 值: {values}")
         
-        self._run_sql(sql, values)
+        await self._run_sql(sql, values)
         
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         close_time = data.get('平仓时间', 'unknown')
         logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
-    def _check_closed_exists(self, record_id: str) -> bool:
+    async def _check_closed_exists(self, record_id: str) -> bool:
         """
         检查历史表中是否已存在该记录
         
@@ -230,7 +250,7 @@ class Database:
         sql = "SELECT 1 FROM closed_positions WHERE id = ? LIMIT 1"
         
         try:
-            result = self._run_sql(sql, [record_id])
+            result = await self._run_sql(sql, [record_id])
             
             if result and 'results' in result:
                 results_list = result.get('results', [])
@@ -246,7 +266,7 @@ class Database:
             logger.error(f"❌ 【数据库】检查历史表记录失败: {e}")
             return False  # 出错时假设不存在，让写入流程继续
     
-    def _check_active_exists(self, record_id: str) -> bool:
+    async def _check_active_exists(self, record_id: str) -> bool:
         """
         检查持仓表中是否已存在该记录
         
@@ -267,7 +287,7 @@ class Database:
         sql = "SELECT 1 FROM active_positions WHERE id = ? LIMIT 1"
         
         try:
-            result = self._run_sql(sql, [record_id])
+            result = await self._run_sql(sql, [record_id])
             
             if result and 'results' in result:
                 results_list = result.get('results', [])
@@ -290,19 +310,20 @@ class Database:
             return
         
         sql = "DELETE FROM active_positions WHERE 交易所 = ?"
-        self._run_sql(sql, [exchange])
+        await self._run_sql(sql, [exchange])
         
         logger.info(f"✅ 【数据库】成功清除持仓区{exchange}数据")
     
     # ==================== SQL执行基础方法 ====================
     
-    def _run_sql(self, sql: str, params: List = None) -> Dict:
-        """执行SQL语句"""
+    async def _run_sql(self, sql: str, params: List = None) -> Dict:
+        """✅ [蚂蚁基因修复] 异步执行SQL语句"""
         if params is None:
             params = []
         
         args = []
         for p in params:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             if p is None:
                 args.append({"type": "null", "value": None})
             else:
@@ -320,8 +341,10 @@ class Database:
             ]
         }
         
+        session = await self._get_session()
+        
         try:
-            response = requests.post(
+            async with session.post(
                 f"{self.url}/v2/pipeline",
                 headers={
                     "Authorization": f"Bearer {self.token}",
@@ -329,25 +352,28 @@ class Database:
                 },
                 json=payload,
                 timeout=10
-            )
+            ) as response:
+                
+                if response.status != 200:
+                    try:
+                        error_detail = await response.json()
+                        logger.error(f"❌ 【数据库】Turso返回错误: {error_detail}")
+                    except:
+                        logger.error(f"❌ 【数据库】Turso返回错误状态码: {response.status}")
+                
+                response.raise_for_status()
+                return await response.json()
             
-            if response.status_code != 200:
-                try:
-                    error_detail = response.json()
-                    logger.error(f"❌ 【数据库】Turso返回错误: {error_detail}")
-                except:
-                    logger.error(f"❌ 【数据库】Turso返回错误状态码: {response.status_code}")
-            
-            response.raise_for_status()
-            return response.json()
-            
+        except asyncio.TimeoutError:
+            logger.error(f"❌ 【数据库】请求超时")
+            raise
         except Exception as e:
             logger.error(f"❌ 【数据库】请求失败: {e}")
             raise
     
     # ==================== 表名查询 ====================
     
-    def _get_tables(self) -> List[str]:
+    async def _get_tables(self) -> List[str]:
         """
         获取当前数据库中的所有表名
         
@@ -380,7 +406,7 @@ class Database:
         sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
         
         try:
-            result = self._run_sql(sql)
+            result = await self._run_sql(sql)
             
             tables = []
             if result and 'results' in result:
@@ -414,10 +440,10 @@ class Database:
     
     # ==================== 连接测试 ====================
     
-    def test_connection(self) -> bool:
-        """测试数据库连接是否正常"""
+    async def test_connection(self) -> bool:
+        """✅ [蚂蚁基因修复] 异步测试数据库连接是否正常"""
         try:
-            result = self._run_sql("SELECT 1")
+            result = await self._run_sql("SELECT 1")
             
             if result and 'results' in result:
                 logger.info("✅ 【数据库】连接测试成功")
@@ -432,35 +458,35 @@ class Database:
     
     # ==================== 初始化/建表 ====================
     
-    def _init_database(self):
-        """初始化数据库"""
+    async def _init_database(self):
+        """✅ [蚂蚁基因修复] 异步初始化数据库"""
         try:
             # 先查表，记录建表前的状态
-            tables_before = self._get_tables()
+            tables_before = await self._get_tables()
             logger.debug(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
             
             # 建表（IF NOT EXISTS 保证安全）
-            self._create_active_positions_table()
-            self._create_closed_positions_table()
-            self._create_indexes()
+            await self._create_active_positions_table()
+            await self._create_closed_positions_table()
+            await self._create_indexes()
             
             # 验证表是否创建成功
             try:
-                self._run_sql("SELECT COUNT(*) FROM active_positions LIMIT 1")
+                await self._run_sql("SELECT COUNT(*) FROM active_positions LIMIT 1")
                 logger.info("✅ 【数据库】持仓区表验证成功")
             except Exception as e:
                 logger.error(f"❌ 【数据库】持仓区表验证失败: {e}")
                 raise
             
             try:
-                self._run_sql("SELECT COUNT(*) FROM closed_positions LIMIT 1")
+                await self._run_sql("SELECT COUNT(*) FROM closed_positions LIMIT 1")
                 logger.info("✅ 【数据库】历史区表验证成功")
             except Exception as e:
                 logger.error(f"❌ 【数据库】历史区表验证失败: {e}")
                 raise
             
             # 再查表，看建表后的状态
-            tables_after = self._get_tables()
+            tables_after = await self._get_tables()
             logger.debug(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
             
             logger.info("✅ 【数据库】初始化完成")
@@ -469,8 +495,8 @@ class Database:
             logger.error(f"❌ 【数据库】初始化失败: {e}")
             raise
     
-    def _create_active_positions_table(self):
-        """创建持仓区表"""
+    async def _create_active_positions_table(self):
+        """✅ [蚂蚁基因修复] 异步创建持仓区表"""
         sql = """
         CREATE TABLE IF NOT EXISTS active_positions (
             id TEXT PRIMARY KEY,
@@ -527,11 +553,11 @@ class Database:
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         """
-        self._run_sql(sql)
+        await self._run_sql(sql)
         logger.debug("📝 【数据库】执行创建持仓表SQL")
     
-    def _create_closed_positions_table(self):
-        """创建历史区表"""
+    async def _create_closed_positions_table(self):
+        """✅ [蚂蚁基因修复] 异步创建历史区表"""
         sql = """
         CREATE TABLE IF NOT EXISTS closed_positions (
             id TEXT PRIMARY KEY,
@@ -588,11 +614,11 @@ class Database:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
         """
-        self._run_sql(sql)
+        await self._run_sql(sql)
         logger.debug("📝 【数据库】执行创建历史表SQL")
     
-    def _create_indexes(self):
-        """创建索引"""
+    async def _create_indexes(self):
+        """✅ [蚂蚁基因修复] 异步创建索引"""
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
             "CREATE INDEX IF NOT EXISTS idx_active_contract ON active_positions(开仓合约名);",
@@ -602,8 +628,9 @@ class Database:
         ]
         
         for sql in indexes:
+            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
             try:
-                self._run_sql(sql)
+                await self._run_sql(sql)
                 logger.debug(f"📝 【数据库】索引创建/已存在: {sql[:40]}...")
             except Exception as e:
                 logger.warning(f"⚠️ 【数据库】索引创建失败: {e}")
