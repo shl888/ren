@@ -49,16 +49,16 @@ from typing import Dict, Any, Optional, List
 import logging
 import asyncio
 
-# 导入常量（避免手写字符串）
+# 导入常量（使用正确的常量名）
 from .constants import (
-    TAG_CLOSED,
+    TAG_CLOSED_COMPLETE,  # 原 TAG_CLOSED 改为平仓完整
     TAG_EMPTY,
     TAG_COMPLETE,
     INFO_BINANCE_SEMI,
     INFO_BINANCE_MISSING,
-    INFO_BINANCE_CLOSED,
+    INFO_BINANCE_EMPTY,   # 原 INFO_BINANCE_CLOSED 改为币安空仓
     INFO_OKX_MISSING,
-    INFO_OKX_CLOSED,
+    INFO_OKX_EMPTY,        # 原 INFO_OKX_CLOSED 改为欧易空仓
     FIELD_CLOSE_TIME,
     FIELD_OPEN_CONTRACT,
     FIELD_MARK_MARGIN,
@@ -166,7 +166,7 @@ class DataDetector:
                     'data': data.copy()
                 }),
                 self.scheduler.handle({  # 信息标签
-                    'info': '欧易空仓'  # 注意：这个常量需要在constants.py中定义
+                    'info': INFO_OKX_EMPTY  # 使用常量
                 })
             )
             return
@@ -195,7 +195,7 @@ class DataDetector:
             logger.info(f"🔍【检测区】 欧意检测到平仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
-                'tag': '平仓完整',  # 注意：这个常量需要在constants.py中定义
+                'tag': TAG_CLOSED_COMPLETE,  # 使用正确的常量
                 'data': data.copy()
             })
             return
@@ -229,7 +229,7 @@ class DataDetector:
                     'data': data.copy()
                 }),
                 self.scheduler.handle({  # 信息标签
-                    'info': '币安空仓'  # 注意：这个常量需要在constants.py中定义
+                    'info': INFO_BINANCE_EMPTY  # 使用常量
                 })
             )
             return
