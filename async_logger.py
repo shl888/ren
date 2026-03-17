@@ -212,7 +212,7 @@ _async_logger = AsyncLogger()
 
 
 class AsyncLogHandler(_logging.Handler):
-    """将标准 logging 消息路由到 AsyncLogger"""
+    """将标准 logging 日志消息路由到 AsyncLogger"""
     def __init__(self, level=_logging.NOTSET):
         super().__init__(level)
         self.async_logger = _async_logger
@@ -227,26 +227,83 @@ class AsyncLogHandler(_logging.Handler):
             pass
 
 
-def patch_logging():
+# ========== 极简补丁函数 ==========
+
+def patch_logging(show_debug=False):
     """
-    将 AsyncLogger 作为 handler 添加到 root logger。
-    不替换 logging.getLogger，保持标准 API 兼容性。
-    在所有文件开头调用一次即可。
+    🎯 极简日志补丁 - 只控制是否显示DEBUG
+    
+    Args:
+        show_debug: True=显示所有日志（包括DEBUG）
+                   False=屏蔽DEBUG，显示INFO及以上（默认）
     """
-    # 创建 handler
+    import sys
+    
+    # 获取root logger
+    root = _logging.getLogger()
+    
+    # 记录原有handler数量
+    original_count = len(root.handlers)
+    
+    # 移除已有的AsyncLogHandler（避免重复）
+    removed = 0
+    for handler in root.handlers[:]:
+        if isinstance(handler, AsyncLogHandler):
+            root.removeHandler(handler)
+            removed += 1
+    
+    # 创建并添加新的AsyncLogHandler
     handler = AsyncLogHandler()
-    
-    # ===== 关键修复：设置 handler 级别为 NOTSET，让它继承 root 的级别 =====
-    handler.setLevel(_logging.NOTSET)  # 继承上级级别
-    
-    # 设置格式
     formatter = _logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
-    
-    # 添加到 root logger
-    root = _logging.getLogger()
+    handler.setLevel(_logging.NOTSET)  # handler接收所有日志
     root.addHandler(handler)
     
-    # 测试
-    _logging.info("✅ 异步日志 handler 已添加（将显示 INFO 级别）")
-    _logging.warning("这条是 WARNING 测试")
+    # 设置日志级别
+    if show_debug:
+        root.setLevel(_logging.DEBUG)
+        level_name = "DEBUG"
+    else:
+        root.setLevel(_logging.INFO)
+        level_name = "INFO (DEBUG已屏蔽)"
+    
+    # 添加控制台handler（确保能看见）
+    console = _logging.StreamHandler(sys.stdout)
+    console.setFormatter(formatter)
+    console.setLevel(root.level)
+    root.addHandler(console)
+    
+    # 输出简洁提示
+    print(f"\n📢 日志级别: {level_name} | 移除旧handler: {removed}个 | 当前handler: {len(root.handlers)}个\n")
+    
+    # 测试日志
+    test_logger = _logging.getLogger("patch_test")
+    test_logger.debug("🐛 DEBUG - 这条只有show_debug=True时才显示")
+    test_logger.info("ℹ️ INFO - 这条总会显示")
+    test_logger.warning("⚠️ WARNING - 这条总会显示")
+    
+    return {
+        "level": level_name,
+        "show_debug": show_debug,
+        "handlers_removed": removed
+    }
+
+
+# ========== 快捷开关 ==========
+
+def enable_debug():
+    """开启DEBUG模式（显示所有日志）"""
+    return patch_logging(show_debug=True)
+
+
+def enable_normal():
+    """正常模式（屏蔽DEBUG，显示INFO及以上）"""
+    return patch_logging(show_debug=False)
+
+
+# ===== 自动执行（如果直接运行此文件）=====
+if __name__ == "__main__":
+    print("🧪 测试异步日志专员...")
+    patch_logging(show_debug=True)
+    time.sleep(2)
+    _async_logger.shutdown()

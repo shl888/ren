@@ -12,9 +12,16 @@ import signal
 from datetime import datetime
 import threading
 
-# 添加写日志专员
+# 添加写日志专员 全局替换，所有文件自动变异步
+# 改成这样就行（默认屏蔽DEBUG）：
 from async_logger import patch_logging
-patch_logging()  # ✅ 全局替换，所有文件自动变异步
+patch_logging()  # 默认屏蔽DEBUG，显示INFO及以上
+
+# 如果你想看DEBUG日志（调试时）：
+# from async_logger import enable_debug
+# enable_debug()  # 显示所有日志（包括DEBUG）
+
+
 # 测试日志
 test_logger = logging.getLogger("test")
 test_logger.info("如果看到这行日志，说明日志成功异步！")
