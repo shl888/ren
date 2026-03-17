@@ -112,7 +112,7 @@ class PrivateDataScheduler:
             }
         ==================================================
         """
-        logger.info(f"🎯【私人调度器】feed_step1被调用！存储区包含数据项: {len(stored_item.get('full_storage', {}))}")
+        logger.debug(f"🎯【私人调度器】feed_step1被调用！存储区包含数据项: {len(stored_item.get('full_storage', {}))}")
         
         if not self.running:
             logger.error("❌【私人调度器】未启动，无法处理数据")
@@ -180,7 +180,7 @@ class PrivateDataScheduler:
                 logger.warning(f"⚠️【私人调度器】Step2返回空，跳过本条结果")
                 return
                 
-            logger.info(f"✅【私人调度器】Step2完成: {exchange}")
+            logger.debug(f"✅【私人调度器】Step2完成: {exchange}")
             
             # ===== 步骤3：计算衍生字段 =====
             await loop.run_in_executor(
@@ -192,7 +192,7 @@ class PrivateDataScheduler:
             final_container = await loop.run_in_executor(
                 None, self.step4.process, container
             )
-            logger.info(f"✅【私人调度器】Step4完成: {exchange}")
+            logger.debug(f"✅【私人调度器】Step4完成: {exchange}")
             
             # ===== 推送数据到完成部门 =====
             await self._push_to_data_completion(final_container, event_type)
@@ -249,7 +249,7 @@ class PrivateDataScheduler:
             from data_completion_department import receive_private_data
             await receive_private_data(completion_data)
             
-            logger.info(f"✅【私人调度器】已推送 {exchange} 数据到数据完成部门")
+            logger.debug(f"✅【私人调度器】已推送 {exchange} 数据到数据完成部门")
             
         except Exception as e:
             logger.error(f"❌【私人调度器】推送数据到数据完成部门失败: {e}")
