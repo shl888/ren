@@ -162,7 +162,7 @@ class DataCompletionReceiver:
             exchange = private_data.get('exchange', 'unknown')
             data_type = private_data.get('data_type', 'unknown')
             
-            logger.info(f"📨【接收存储区】 收到私人数据: {exchange}.{data_type}")
+            logger.debug(f"📨【接收存储区】 收到私人数据: {exchange}.{data_type}")
             
             now = datetime.now()
             
