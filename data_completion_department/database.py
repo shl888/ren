@@ -126,8 +126,8 @@ class Database:
                 logger.error("❌ 【数据库】数据中没有'交易所'字段，无法处理")
                 return
             
-            if tag == '已平仓':
-                logger.info(f"📦 【数据库】收到已平仓数据: {exchange}")
+            if tag == '平仓完整':
+                logger.info(f"📦 【数据库】收到平仓完整数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
@@ -153,10 +153,10 @@ class Database:
     # ==================== 内部处理方法 ====================
     
     async def _handle_closed(self, data: Dict[str, Any], exchange: str):
-        """处理已平仓数据"""
+        """处理平仓完整数据"""
         await self._insert_closed_position(data)
         await self._delete_active_position(exchange)
-        logger.info(f"✅ 【数据库】已平仓处理完成: {exchange}")
+        logger.info(f"✅ 【数据库】平仓完整处理完成: {exchange}")
     
     async def _handle_active(self, data: Dict[str, Any]):
         """处理持仓完整数据"""

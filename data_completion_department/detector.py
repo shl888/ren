@@ -14,36 +14,33 @@
 【检测规则 - 完全按照你的设计文档】
 
 欧意数据检测：
-    a. 平仓时间有值 → 推送两条：
-        - 数据标签：{'tag': '已平仓', 'data': {...}}
-        - 信息标签：{'info': '欧意已平仓'}
-    
-    b. 开仓合约名空 AND 标记价保证金空 → 推送一条：
+    a. 标记价保证金为空 → 推送两条：
         - 数据标签：{'tag': '空仓', 'data': {...}}
+        - 信息标签：{'info': '欧易空仓'}
+    
+    b. 标记价保证金有值 AND 开仓合约名空 → 推送一条：
+        - 信息标签：{'info': '欧意持仓缺失'}
     
     c. 开仓合约名有值 AND 平仓时间空 → 推送一条：
         - 数据标签：{'tag': '持仓完整', 'data': {...}}
     
-    d. 开仓合约名空 AND 标记价保证金有值 AND 平仓时间空 → 推送一条：
-        - 信息标签：{'info': '欧意持仓缺失'}
+    d. 开仓合约名有值 AND 平仓时间有值 → 推送一条：
+        - 数据标签：{'tag': '平仓完整', 'data': {...}}
 
 币安数据检测：
-    1. 平仓时间有值 → 推送两条：
-        - 数据标签：{'tag': '已平仓', 'data': {...}}
-        - 信息标签：{'info': '币安已平仓'}
-    
-    b. 开仓合约名空 AND 标记价保证金空 → 推送一条：
+    a. 标记价保证金为空 → 推送两条：
         - 数据标签：{'tag': '空仓', 'data': {...}}
+        - 信息标签：{'info': '币安空仓'}
     
-    c. 开仓合约名有值 AND 平仓时间空 → 推送一条：
+    b. 标记价保证金有值 AND 开仓合约名有值 → 推送一条：
         - 信息标签：{'info': '币安半成品'}
     
-    d. 开仓合约名空 AND 标记价保证金有值 AND 平仓时间空 → 推送一条：
+    c. 标记价保证金有值 AND 开仓合约名空 → 推送一条：
         - 信息标签：{'info': '币安持仓缺失'}
 
 【重要规则】
 - 数据标签必须带数据，信息标签绝对不能带数据
-- 平仓时同时推送数据标签和信息标签（两条独立消息）
+- 空仓时同时推送数据标签和信息标签（两条独立消息）
 ==================================================
 """
 
@@ -147,10 +144,10 @@ class DataDetector:
         检测欧意数据
         ==================================================
         完全按照你的设计文档的4种情况：
-            a. 平仓时间有值
-            b. 空仓
-            c. 持仓完整
-            d. 持仓缺失
+            a. 空仓（标记价保证金为空）
+            b. 持仓缺失（标记价保证金有值 AND 开仓合约名空）
+            c. 持仓完整（开仓合约名有值 AND 平仓时间空）
+            d. 平仓完整（开仓合约名有值 AND 平仓时间有值）
         
         每种情况推送对应的标签（可能1条或2条）
         
@@ -158,29 +155,28 @@ class DataDetector:
         ==================================================
         """
         
-        # ----- 情况a：平仓时间有值 -----
-        if data.get(FIELD_CLOSE_TIME):
-            logger.info(f"🔍 【检测区】欧意检测到已平仓: {data.get('交易所')}")
+        # ----- 情况a：空仓（标记价保证金为空）-----
+        if data.get(FIELD_MARK_MARGIN) is None:
+            logger.info(f"🔍 【检测区】欧意检测到空仓: {data.get('交易所')}")
             
             # 同时推送两条独立消息
             await asyncio.gather(
                 self.scheduler.handle({  # 数据标签
-                    'tag': TAG_CLOSED,
+                    'tag': TAG_EMPTY,
                     'data': data.copy()
                 }),
                 self.scheduler.handle({  # 信息标签
-                    'info': INFO_OKX_CLOSED
+                    'info': '欧易空仓'  # 注意：这个常量需要在constants.py中定义
                 })
             )
             return
         
-        # ----- 情况b：空仓（开仓合约名空 AND 标记价保证金空）-----
-        if data.get(FIELD_OPEN_CONTRACT) is None and data.get(FIELD_MARK_MARGIN) is None:
-            logger.info(f"🔍 【检测区】欧意检测到空仓: {data.get('交易所')}")
+        # ----- 情况b：持仓缺失（标记价保证金有值 AND 开仓合约名空）-----
+        if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT) is None:
+            logger.info(f"🔍 【检测区】欧意检测到持仓缺失: {data.get('交易所')}")
             
             await self.scheduler.handle({
-                'tag': TAG_EMPTY,
-                'data': data.copy()
+                'info': INFO_OKX_MISSING
             })
             return
         
@@ -194,15 +190,13 @@ class DataDetector:
             })
             return
         
-        # ----- 情况d：持仓缺失（开仓合约名空 AND 标记价保证金有值 AND 平仓时间空）-----
-        if (data.get(FIELD_OPEN_CONTRACT) is None and 
-            data.get(FIELD_MARK_MARGIN) is not None and 
-            data.get(FIELD_CLOSE_TIME) is None):
-            
-            logger.info(f"🔍【检测区】 欧意检测到持仓缺失: {data.get('交易所')}")
+        # ----- 情况d：平仓完整（开仓合约名有值 AND 平仓时间有值）-----
+        if data.get(FIELD_OPEN_CONTRACT) and data.get(FIELD_CLOSE_TIME):
+            logger.info(f"🔍【检测区】 欧意检测到平仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
-                'info': INFO_OKX_MISSING
+                'tag': '平仓完整',  # 注意：这个常量需要在constants.py中定义
+                'data': data.copy()
             })
             return
         
@@ -213,11 +207,10 @@ class DataDetector:
         """
         检测币安数据
         ==================================================
-        完全按照你的设计文档的4种情况：
-            1. 平仓时间有值
-            b. 空仓
-            c. 币安半成品
-            d. 持仓缺失
+        完全按照你的设计文档的3种情况：
+            a. 空仓（标记价保证金为空）
+            b. 半成品（标记价保证金有值 AND 开仓合约名有值）
+            c. 持仓缺失（标记价保证金有值 AND 开仓合约名空）
         
         每种情况推送对应的标签（可能1条或2条）
         
@@ -225,34 +218,24 @@ class DataDetector:
         ==================================================
         """
         
-        # ----- 情况1：平仓时间有值 -----
-        if data.get(FIELD_CLOSE_TIME):
-            logger.info(f"🔍 【检测区】币安检测到已平仓: {data.get('交易所')}")
+        # ----- 情况a：空仓（标记价保证金为空）-----
+        if data.get(FIELD_MARK_MARGIN) is None:
+            logger.info(f"🔍 【检测区】币安检测到空仓: {data.get('交易所')}")
             
             # 同时推送两条独立消息
             await asyncio.gather(
                 self.scheduler.handle({  # 数据标签
-                    'tag': TAG_CLOSED,
+                    'tag': TAG_EMPTY,
                     'data': data.copy()
                 }),
                 self.scheduler.handle({  # 信息标签
-                    'info': INFO_BINANCE_CLOSED
+                    'info': '币安空仓'  # 注意：这个常量需要在constants.py中定义
                 })
             )
             return
         
-        # ----- 情况b：空仓（开仓合约名空 AND 标记价保证金空）-----
-        if data.get(FIELD_OPEN_CONTRACT) is None and data.get(FIELD_MARK_MARGIN) is None:
-            logger.info(f"🔍 【检测区】币安检测到空仓: {data.get('交易所')}")
-            
-            await self.scheduler.handle({
-                'tag': TAG_EMPTY,
-                'data': data.copy()
-            })
-            return
-        
-        # ----- 情况c：币安半成品（开仓合约名有值 AND 平仓时间空）-----
-        if data.get(FIELD_OPEN_CONTRACT) and data.get(FIELD_CLOSE_TIME) is None:
+        # ----- 情况b：半成品（标记价保证金有值 AND 开仓合约名有值）-----
+        if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT):
             logger.info(f"🔍 【检测区】币安检测到半成品: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
@@ -260,11 +243,8 @@ class DataDetector:
             })
             return
         
-        # ----- 情况d：持仓缺失（开仓合约名空 AND 标记价保证金有值 AND 平仓时间空）-----
-        if (data.get(FIELD_OPEN_CONTRACT) is None and 
-            data.get(FIELD_MARK_MARGIN) is not None and 
-            data.get(FIELD_CLOSE_TIME) is None):
-            
+        # ----- 情况c：持仓缺失（标记价保证金有值 AND 开仓合约名空）-----
+        if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT) is None:
             logger.info(f"🔍【检测区】 币安检测到持仓缺失: {data.get('交易所')}")
             
             await self.scheduler.handle({
@@ -274,4 +254,3 @@ class DataDetector:
         
         # 其他情况（理论上不会发生）
         logger.debug(f"【检测区】币安数据无匹配标签: {data.get('交易所')}")
-        

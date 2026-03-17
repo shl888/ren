@@ -11,11 +11,11 @@
 数据标签（带数据）：
     - 空仓 → 只推大脑（去除标签）
     - 持仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
-    - 已平仓 → 推大脑（去除标签） + 推数据库（保留标签）
+    - 平仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
 
 信息标签（纯标签）：
-    - 币安半成品、币安持仓缺失、币安已平仓 → 推币安修复区入口
-    - 欧意持仓缺失、欧意已平仓 → 推欧易修复文件
+    - 币安半成品、币安持仓缺失、币安空仓 → 推币安修复区入口
+    - 欧意持仓缺失、欧意空仓 → 推欧易修复文件
 
 【重要规则】
 - 推大脑的数据必须去除标签，只保留原始数据
@@ -34,14 +34,14 @@ from datetime import datetime
 
 # 导入常量
 from .constants import (
-    TAG_CLOSED,
     TAG_EMPTY,
     TAG_COMPLETE,
+    TAG_CLOSED_COMPLETE,
     INFO_BINANCE_SEMI,
     INFO_BINANCE_MISSING,
-    INFO_BINANCE_CLOSED,
+    INFO_BINANCE_EMPTY,
     INFO_OKX_MISSING,
-    INFO_OKX_CLOSED,
+    INFO_OKX_EMPTY,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ class Scheduler:
         这是调度器的唯一入口，检测区调用此方法推送结果。
 
         消息格式有两种：
-            1. 数据标签：{'tag': '已平仓', 'data': {...}}
+            1. 数据标签：{'tag': '平仓完整', 'data': {...}}
             2. 信息标签：{'info': '币安半成品'}
 
         处理流程：
@@ -139,12 +139,12 @@ class Scheduler:
         """
         处理数据标签
         ==================================================
-        数据标签格式：{'tag': '已平仓', 'data': {...}}
+        数据标签格式：{'tag': '平仓完整', 'data': {...}}
 
         转发规则：
             - 空仓 → 只推大脑（去除标签）
             - 持仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
-            - 已平仓 → 推大脑（去除标签） + 推数据库（保留标签）
+            - 平仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
 
         :param message: 包含tag和data的消息
         ==================================================
@@ -158,8 +158,8 @@ class Scheduler:
         logger.debug(f"📨【调度区】 收到数据标签: {tag} - {exchange}")
 
         # ===== 根据标签处理 =====
-        if tag in [TAG_CLOSED, TAG_COMPLETE]:
-            # 已平仓 或 持仓完整：推大脑 + 推数据库
+        if tag in [TAG_COMPLETE, TAG_CLOSED_COMPLETE]:
+            # 持仓完整 或 平仓完整：推大脑 + 推数据库
 
             # 1. 推大脑（不带标签）
             await self._push_to_brain(exchange, data)
@@ -198,7 +198,7 @@ class Scheduler:
         logger.debug(f"📨 【调度区】收到信息标签: {info}")
 
         # ===== 币安相关信息标签 =====
-        if info in [INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED]:
+        if info in [INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_EMPTY]:
             if self.repair_binance:
                 try:
                     # 币安修复区入口的 handle_info 方法
@@ -209,7 +209,7 @@ class Scheduler:
                 logger.warning(f"⚠️【调度区】 币安修复区未就绪，无法处理: {info}")
 
         # ===== 欧意相关信息标签 =====
-        elif info in [INFO_OKX_MISSING, INFO_OKX_CLOSED]:
+        elif info in [INFO_OKX_MISSING, INFO_OKX_EMPTY]:
             if self.repair_okx:
                 try:
                     # 欧易修复文件的 handle_info 方法

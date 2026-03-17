@@ -55,10 +55,16 @@ from .repair import (
 )
 
 from .constants import (
-    TAG_CLOSED, TAG_EMPTY, TAG_COMPLETE,
-    INFO_BINANCE_SEMI, INFO_BINANCE_MISSING, INFO_BINANCE_CLOSED,
-    INFO_OKX_MISSING, INFO_OKX_CLOSED,
-    EXCHANGE_BINANCE, EXCHANGE_OKX
+    TAG_EMPTY,
+    TAG_COMPLETE,
+    TAG_CLOSED_COMPLETE,
+    INFO_BINANCE_SEMI,
+    INFO_BINANCE_MISSING,
+    INFO_BINANCE_EMPTY,
+    INFO_OKX_MISSING,
+    INFO_OKX_EMPTY,
+    EXCHANGE_BINANCE,
+    EXCHANGE_OKX
 )
 
 # ===== 版本信息 =====
@@ -82,15 +88,19 @@ __all__ = [
     'BinanceMissingRepair',   # 币安持仓缺失修复
     'OkxMissingRepair',       # 欧意持仓缺失修复
     
-    # 标签常量
-    'TAG_CLOSED',
-    'TAG_EMPTY',
-    'TAG_COMPLETE',
-    'INFO_BINANCE_SEMI',
-    'INFO_BINANCE_MISSING',
-    'INFO_BINANCE_CLOSED',
-    'INFO_OKX_MISSING',
-    'INFO_OKX_CLOSED',
+    # 数据标签常量
+    'TAG_EMPTY',              # 空仓
+    'TAG_COMPLETE',           # 持仓完整
+    'TAG_CLOSED_COMPLETE',    # 平仓完整
+    
+    # 信息标签常量 - 币安
+    'INFO_BINANCE_SEMI',       # 币安半成品
+    'INFO_BINANCE_MISSING',    # 币安持仓缺失
+    'INFO_BINANCE_EMPTY',      # 币安空仓
+    
+    # 信息标签常量 - 欧意
+    'INFO_OKX_MISSING',        # 欧意持仓缺失
+    'INFO_OKX_EMPTY',          # 欧意空仓
     
     # 交易所常量
     'EXCHANGE_BINANCE',
