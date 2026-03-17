@@ -4,7 +4,7 @@
 【文件职责】
 这个文件是币安持仓缺失修复的核心，负责处理两种信息标签：
 1. "币安持仓缺失" - 启动修复流程（循环运行）
-2. "币安已平仓"   - 停止修复流程
+2. "币安空仓"     - 停止修复流程
 
 【重要提醒】
 这个文件会被币安修复区入口调用：
@@ -27,8 +27,8 @@
 第2步：检测资金费状态（4种情况）
 第3步：资金费融合（只有情况D需要）
 第4步：提取最新价和标记价（从行情数据）
-第5步：计算8个固定字段（根据多空方向，严格按照原始公式，独立计算）
-第6步：提取3个特定字段并推送
+第5步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
+第6步：提取3个特定字段并检测平仓价打对应标签推送
 ==================================================
 """
 
@@ -42,8 +42,9 @@ from datetime import datetime
 # 导入常量 - 使用修正后的常量名
 from ...constants import (
     TAG_COMPLETE,
+    TAG_CLOSED_COMPLETE,
     INFO_BINANCE_MISSING,
-    INFO_BINANCE_CLOSED,
+    INFO_BINANCE_EMPTY,
     EXCHANGE_BINANCE,
     FIELD_EXCHANGE,
     FIELD_OPEN_CONTRACT,
@@ -67,6 +68,12 @@ from ...constants import (
     FIELD_LATEST_MARGIN,
     FIELD_LATEST_POSITION_VALUE,
     FIELD_LATEST_PNL,
+    FIELD_CLOSE_TIME,
+    FIELD_CLOSE_PRICE,                    # 平仓价
+    FIELD_CLOSE_POSITION_VALUE,           # 平仓价仓位价值
+    FIELD_CLOSE_PNL_PERCENT,               # 平仓价涨跌盈亏幅
+    FIELD_CLOSE_PNL,                       # 平仓收益
+    FIELD_CLOSE_PNL_PERCENT_OF_MARGIN,     # 平仓收益率
     FIELD_AVG_FUNDING_RATE,
     FIELD_FUNDING_THIS,
     FIELD_FUNDING_TOTAL,
@@ -82,7 +89,7 @@ class BinanceMissingRepair:
     币安持仓缺失修复类
     ==================================================
     这个类负责：
-        1. 接收门外标签（持仓缺失/已平仓）- 通过 handle_info()
+        1. 接收门外标签（持仓缺失/空仓）- 通过 handle_info()
         2. 接收门外存储区快照（最新数据）- 通过 update_snapshot()
         3. 根据标签启动/停止修复循环
         4. 执行6步修复流程
@@ -90,7 +97,7 @@ class BinanceMissingRepair:
     门外标签规则：
         - 永远只有1个标签（覆盖更新）
         - 持仓缺失 = 开（启动循环）
-        - 已平仓   = 关（停止循环）
+        - 空仓     = 关（停止循环）
 
     门外数据规则：
         - 永远只有1份存储区快照（覆盖更新）
@@ -193,7 +200,7 @@ class BinanceMissingRepair:
         ==================================================
         可能收到两种标签：
             - "币安持仓缺失" - 启动修复循环
-            - "币安已平仓" - 停止修复循环
+            - "币安空仓"     - 停止修复循环
 
         门外标签规则：
             - 永远只有1个标签（覆盖更新）
@@ -213,7 +220,7 @@ class BinanceMissingRepair:
 
         if info == INFO_BINANCE_MISSING:
             await self._start_repair()
-        elif info == INFO_BINANCE_CLOSED:
+        elif info == INFO_BINANCE_EMPTY:
             await self._stop_repair()
         else:
             logger.warning(f"⚠️ 【币安修复区】【持仓缺失修复】收到未知标签: {info}")
@@ -289,8 +296,8 @@ class BinanceMissingRepair:
             第2步：检测资金费状态（4种情况）
             第3步：资金费融合（只有情况D需要）
             第4步：提取最新价和标记价（从行情数据）
-            第5步：计算8个固定字段（根据多空方向，严格按照原始公式，独立计算）
-            第6步：提取3个特定字段并推送
+            第5步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
+            第6步：提取3个特定字段并检测平仓价打对应标签推送
         ==================================================
         """
         logger.debug("【币安修复区】【持仓缺失修复】执行一次修复流程")
@@ -669,19 +676,26 @@ class BinanceMissingRepair:
 
     async def _step5_calc_fields(self):
         """
-        第5步：计算8个固定字段
+        第5步：计算固定字段
         ==================================================
         【严格按照原始方案，独立计算，不复用任何中间结果】
 
-        需要计算的字段：
-            1. 标记价涨跌盈亏幅
-            2. 最新价涨跌盈亏幅
-            3. 最新价保证金
-            4. 最新价仓位价值
-            5. 最新价浮盈
-            6. 最新价浮盈百分比
-            7. 标记价浮盈百分比（用缓存中的标记价重新计算，不从存储区取）
-            8. 平均资金费率
+        需要计算的字段（共12个）：
+            原有8个字段：
+                1. 标记价涨跌盈亏幅
+                2. 最新价涨跌盈亏幅
+                3. 最新价保证金
+                4. 最新价仓位价值
+                5. 最新价浮盈
+                6. 最新价浮盈百分比
+                7. 标记价浮盈百分比（用缓存中的标记价重新计算，不从存储区取）
+                8. 平均资金费率
+            
+            新增4个平仓相关字段（仅在平仓价不为空时计算）：
+                9. 平仓价仓位价值
+                10. 平仓价涨跌盈亏幅
+                11. 平仓收益
+                12. 平仓收益率
 
         计算公式（严格按照你的文档，每个字段独立计算）：
 
@@ -695,6 +709,11 @@ class BinanceMissingRepair:
             标记价浮盈百分比 = (标记价 * 持仓币数 - 开仓价仓位价值) * 100 / 开仓保证金
             平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
 
+            平仓价仓位价值 = 平仓价 * 持仓币数
+            平仓价涨跌盈亏幅 = (平仓价 - 开仓价) * 100 / 开仓价
+            平仓收益 = (平仓价 - 开仓价) * 持仓币数
+            平仓收益率 = (平仓价 - 开仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
+
         当开仓方向为 "SHORT" 时：
             标记价涨跌盈亏幅 = (开仓价 - 标记价) * 100 / 开仓价
             最新价涨跌盈亏幅 = (开仓价 - 最新价) * 100 / 开仓价
@@ -704,15 +723,21 @@ class BinanceMissingRepair:
             最新价浮盈百分比 = [开仓价仓位价值 - (最新价 * 持仓币数)] * 100 / 开仓保证金
             标记价浮盈百分比 = [开仓价仓位价值 - (标记价 * 持仓币数)] * 100 / 开仓保证金
             平均资金费率 = 累计资金费 * 100 / 开仓价仓位价值
+
+            平仓价仓位价值 = 平仓价 * 持仓币数
+            平仓价涨跌盈亏幅 = (开仓价 - 平仓价) * 100 / 开仓价
+            平仓收益 = (开仓价 - 平仓价) * 持仓币数
+            平仓收益率 = (开仓价 - 平仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
         ==================================================
         """
-        logger.debug("【币安修复区】【持仓缺失修复】第5步：计算8个固定字段（严格按照原始方案，独立计算）")
+        logger.debug("【币安修复区】【持仓缺失修复】第5步：计算固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
         # 获取原始字段值（直接从缓存读取，不复用任何计算结果）
         latest_price = cache.get(FIELD_LATEST_PRICE, 0)
         mark_price = cache.get(FIELD_MARK_PRICE, 0)
+        close_price = cache.get(FIELD_CLOSE_PRICE, None)  # 平仓价可能为None
         position_size = cache.get(FIELD_POSITION_SIZE, 0) or 0
         leverage = cache.get(FIELD_LEVERAGE, 1) or 1
         open_price = cache.get(FIELD_OPEN_PRICE, 0) or 0
@@ -720,6 +745,8 @@ class BinanceMissingRepair:
         open_margin = cache.get(FIELD_OPEN_MARGIN, 1) or 1
         total_funding = cache.get(FIELD_FUNDING_TOTAL, 0) or 0
         direction = cache.get(FIELD_OPEN_DIRECTION)
+        mark_position_value = cache.get(FIELD_MARK_POSITION_VALUE, 0) or 0  # 标记价仓位价值
+        mark_margin = cache.get(FIELD_MARK_MARGIN, 0) or 0  # 标记价保证金
 
         # 根据方向计算 - 每个字段严格按照原始公式独立计算
         if direction == "LONG":
@@ -757,6 +784,37 @@ class BinanceMissingRepair:
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
             avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
+            # ===== 新增：平仓相关字段（仅在平仓价不为空时计算）=====
+            if close_price is not None:
+                # 9. 平仓价仓位价值 = 平仓价 * 持仓币数
+                close_position_value = close_price * position_size
+                close_position_value = round(close_position_value, 4)
+                cache[FIELD_CLOSE_POSITION_VALUE] = close_position_value
+
+                # 10. 平仓价涨跌盈亏幅 = (平仓价 - 开仓价) * 100 / 开仓价
+                close_pnl_percent = (close_price - open_price) * 100 / open_price if open_price else 0
+                close_pnl_percent = round(close_pnl_percent, 4)
+                cache[FIELD_CLOSE_PNL_PERCENT] = close_pnl_percent
+
+                # 11. 平仓收益 = (平仓价 - 开仓价) * 持仓币数
+                close_pnl = (close_price - open_price) * position_size
+                close_pnl = round(close_pnl, 4)
+                cache[FIELD_CLOSE_PNL] = close_pnl
+
+                # 12. 平仓收益率 = (平仓价 - 开仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
+                mark_position_value_abs = abs(mark_position_value)
+                close_pnl_percent_of_margin = (close_price - open_price) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
+                close_pnl_percent_of_margin = round(close_pnl_percent_of_margin, 4)
+                cache[FIELD_CLOSE_PNL_PERCENT_OF_MARGIN] = close_pnl_percent_of_margin
+
+                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price}, "
+                           f"平仓价仓位价值: {close_position_value:.2f}, "
+                           f"平仓价涨跌盈亏幅: {close_pnl_percent:.2f}%, "
+                           f"平仓收益: {close_pnl:.2f}, "
+                           f"平仓收益率: {close_pnl_percent_of_margin:.2f}%")
+            else:
+                logger.debug("  【币安修复区】【持仓缺失修复】 平仓价为空，跳过平仓相关字段计算")
+
         else:  # direction == "SHORT"
             # 空头 - 严格按照原始公式，独立计算每个字段
 
@@ -792,7 +850,38 @@ class BinanceMissingRepair:
             avg_funding_rate = (total_funding * 100 / open_position_value) if open_position_value else 0
             avg_funding_rate = round(avg_funding_rate, 4)  # 四舍五入保留4位小数
 
-        # 保存计算结果到缓存 - 每个字段只赋值一次，使用正确的常量名
+            # ===== 新增：平仓相关字段（仅在平仓价不为空时计算）=====
+            if close_price is not None:
+                # 9. 平仓价仓位价值 = 平仓价 * 持仓币数
+                close_position_value = close_price * position_size
+                close_position_value = round(close_position_value, 4)
+                cache[FIELD_CLOSE_POSITION_VALUE] = close_position_value
+
+                # 10. 平仓价涨跌盈亏幅 = (开仓价 - 平仓价) * 100 / 开仓价
+                close_pnl_percent = (open_price - close_price) * 100 / open_price if open_price else 0
+                close_pnl_percent = round(close_pnl_percent, 4)
+                cache[FIELD_CLOSE_PNL_PERCENT] = close_pnl_percent
+
+                # 11. 平仓收益 = (开仓价 - 平仓价) * 持仓币数
+                close_pnl = (open_price - close_price) * position_size
+                close_pnl = round(close_pnl, 4)
+                cache[FIELD_CLOSE_PNL] = close_pnl
+
+                # 12. 平仓收益率 = (开仓价 - 平仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
+                mark_position_value_abs = abs(mark_position_value)
+                close_pnl_percent_of_margin = (open_price - close_price) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
+                close_pnl_percent_of_margin = round(close_pnl_percent_of_margin, 4)
+                cache[FIELD_CLOSE_PNL_PERCENT_OF_MARGIN] = close_pnl_percent_of_margin
+
+                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price}, "
+                           f"平仓价仓位价值: {close_position_value:.2f}, "
+                           f"平仓价涨跌盈亏幅: {close_pnl_percent:.2f}%, "
+                           f"平仓收益: {close_pnl:.2f}, "
+                           f"平仓收益率: {close_pnl_percent_of_margin:.2f}%")
+            else:
+                logger.debug("  【币安修复区】【持仓缺失修复】 平仓价为空，跳过平仓相关字段计算")
+
+        # 保存原有8个字段的计算结果到缓存 - 每个字段只赋值一次，使用正确的常量名
         cache[FIELD_MARK_PNL_PERCENT] = mark_pnl_percent                    # 1. 标记价涨跌盈亏幅
         cache[FIELD_LATEST_PNL_PERCENT] = latest_pnl_percent              # 2. 最新价涨跌盈亏幅
         cache[FIELD_LATEST_MARGIN] = latest_margin                         # 3. 最新价保证金
@@ -814,13 +903,16 @@ class BinanceMissingRepair:
 
     async def _step6_extract_and_push(self):
         """
-        第6步：提取3个特定字段并推送
+        第6步：提取3个特定字段并检测平仓价打对应标签推送
         ==================================================
-        做了四件事：
+        做了五件事：
             1. 从门外存储区读取最新的币安数据
             2. 提取3个字段：标记价保证金、标记价仓位价值、标记价浮盈
             3. 如果提取不到或为空值，保留原缓存值（不报错）
-            4. 创建缓存副本，打上"持仓完整"标签，推送给调度器
+            4. 检测平仓价字段：
+               - 若平仓价为空，打标签"持仓完整"
+               - 若平仓价不为空，打标签"平仓完整"
+            5. 创建缓存副本，打上对应标签，推送给调度器
 
         需要提取的3个字段：
             - 标记价保证金
@@ -828,7 +920,7 @@ class BinanceMissingRepair:
             - 标记价浮盈
         ==================================================
         """
-        logger.debug("【币安修复区】【持仓缺失修复】第6步：提取3个特定字段并推送")
+        logger.debug("【币安修复区】【持仓缺失修复】第6步：提取3个特定字段并检测平仓价打对应标签推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
@@ -856,15 +948,29 @@ class BinanceMissingRepair:
 
         # 创建缓存副本
         data_copy = self.cache.copy()
+        
+        # 检测平仓价字段
+        close_price = data_copy.get(FIELD_CLOSE_PRICE)
+        close_time = data_copy.get(FIELD_CLOSE_TIME)
+        
+        # 确定要打的标签
+        if close_price is not None and close_price != '' and close_time is not None and close_time != '':
+            # 平仓价和平仓时间都有值，说明已平仓
+            tag = TAG_CLOSED_COMPLETE
+            logger.debug(f"  【币安修复区】【持仓缺失修复】 检测到平仓价有值，打标签: {tag}")
+        else:
+            # 平仓价或平仓时间为空，说明还在持仓中
+            tag = TAG_COMPLETE
+            logger.debug(f"  【币安修复区】【持仓缺失修复】 检测到平仓价为空，打标签: {tag}")
 
         # 打标签推送
         await self.scheduler.handle({
-            'tag': TAG_COMPLETE,
+            'tag': tag,
             'data': data_copy
         })
 
         contract = data_copy.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 【币安修复区】【持仓缺失修复】已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.info(f"✅ 【币安修复区】【持仓缺失修复】已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 

@@ -4,7 +4,7 @@
 【文件职责】
 这个文件是币安半成品修复的核心，负责处理两种信息标签：
 1. "币安半成品" - 启动修复流程（循环运行）
-2. "币安已平仓" - 停止修复流程
+2. "币安空仓"   - 停止修复流程
 
 【重要提醒】
 这个文件会被币安修复区入口调用：
@@ -53,8 +53,9 @@ from datetime import datetime
 # 导入常量
 from ...constants import (
     TAG_COMPLETE,
+    TAG_CLOSED_COMPLETE,
     INFO_BINANCE_SEMI,
-    INFO_BINANCE_CLOSED,
+    INFO_BINANCE_EMPTY,
     EXCHANGE_BINANCE,
     FIELD_EXCHANGE,
     FIELD_OPEN_CONTRACT,
@@ -74,6 +75,8 @@ from ...constants import (
     FIELD_LATEST_POSITION_VALUE,
     FIELD_LATEST_PNL,
     FIELD_LATEST_PNL_PERCENT_OF_MARGIN,
+    FIELD_CLOSE_PRICE,
+    FIELD_CLOSE_TIME,
     # 资金费字段（虽然半成品修复不用，但保持导入完整）
     FIELD_FUNDING_THIS,
     FIELD_FUNDING_TOTAL,
@@ -89,7 +92,7 @@ class BinanceSemiRepair:
     币安半成品修复类
     ==================================================
     这个类负责：
-        1. 接收门外标签（半成品/已平仓）- 通过 handle_info()
+        1. 接收门外标签（半成品/空仓）- 通过 handle_info()
         2. 接收门外存储区快照（最新数据）- 通过 update_snapshot()
         3. 根据标签启动/停止修复循环
         4. 执行4步修复流程
@@ -97,7 +100,7 @@ class BinanceSemiRepair:
     门外标签规则：
         - 永远只有1个标签（覆盖更新）
         - 半成品 = 开（启动循环）
-        - 已平仓 = 关（停止循环）
+        - 空仓   = 关（停止循环）
 
     门外数据规则：
         - 永远只有1份存储区快照（覆盖更新）
@@ -176,7 +179,7 @@ class BinanceSemiRepair:
         ==================================================
         可能收到两种标签：
             - "币安半成品" - 启动修复循环
-            - "币安已平仓" - 停止修复循环
+            - "币安空仓"   - 停止修复循环
 
         门外标签规则：
             - 永远只有1个标签（覆盖更新）
@@ -196,7 +199,7 @@ class BinanceSemiRepair:
 
         if info == INFO_BINANCE_SEMI:
             await self._start_repair()
-        elif info == INFO_BINANCE_CLOSED:
+        elif info == INFO_BINANCE_EMPTY:
             await self._stop_repair()
         else:
             logger.warning(f"⚠️ 【币安修复区】【半成品修复】收到未知标签: {info}")
@@ -271,7 +274,7 @@ class BinanceSemiRepair:
             第1步：获取缓存数据（从门外存储区或直接用缓存）
             第2步：从行情数据提取最新价和标记价
             第3步：计算6个字段（根据多空方向）- 每条计算独立，缺字段就跳过该条
-            第4步：融合修复并推送
+            第4步：融合修复并推送（根据平仓价决定打什么标签）
         ==================================================
         """
         logger.debug("【币安修复区】【半成品修复】执行一次修复")
@@ -297,7 +300,7 @@ class BinanceSemiRepair:
         # 第3步：计算字段 - 每条计算独立，缺字段就跳过该条
         await self._step3_calc_fields()  # 永远不返回False，因为它是独立计算的
 
-        # 第4步：融合推送
+        # 第4步：融合推送（根据平仓价决定打什么标签）
         await self._step4_merge_and_push()
 
         logger.debug("✅【币安修复区】【半成品修复】一次修复执行完成")
@@ -591,12 +594,15 @@ class BinanceSemiRepair:
 
     async def _step4_merge_and_push(self):
         """
-        第4步：融合修复并推送
+        第4步：融合修复并推送（根据平仓价决定打什么标签）
         ==================================================
-        做了三件事：
+        做了四件事：
             1. 从门外存储区读取最新的币安数据
             2. 把缓存中的8个字段值填充进去（有值的才填充，空值不覆盖）
-            3. 打上"持仓完整"标签推送给调度器
+            3. 检测平仓价字段：
+               - 若平仓价为空，打标签"持仓完整"
+               - 若平仓价不为空，打标签"平仓完整"
+            4. 打上对应标签推送给调度器
 
         需要填充的8个字段：
             - 最新价
@@ -642,15 +648,29 @@ class BinanceSemiRepair:
                 fill_count += 1
 
         logger.debug(f"📦【币安修复区】【半成品修复】 已填充 {fill_count} 个字段")
+        
+        # 检测平仓价字段
+        close_price = merged_data.get(FIELD_CLOSE_PRICE)
+        close_time = merged_data.get(FIELD_CLOSE_TIME)
+        
+        # 确定要打的标签
+        if close_price is not None and close_price != '' and close_time is not None and close_time != '':
+            # 平仓价和平仓时间都有值，说明已平仓
+            tag = TAG_CLOSED_COMPLETE
+            logger.debug(f"  【币安修复区】【半成品修复】 检测到平仓价有值，打标签: {tag}")
+        else:
+            # 平仓价或平仓时间为空，说明还在持仓中
+            tag = TAG_COMPLETE
+            logger.debug(f"  【币安修复区】【半成品修复】 检测到平仓价为空，打标签: {tag}")
 
         # 打标签推送
         await self.scheduler.handle({
-            'tag': TAG_COMPLETE,
+            'tag': tag,
             'data': merged_data
         })
 
         contract = merged_data.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅【币安修复区】【半成品修复】 已推送持仓完整数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.info(f"✅【币安修复区】【半成品修复】 已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 
