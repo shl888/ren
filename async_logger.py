@@ -149,11 +149,16 @@ class AsyncLogger:
     
     def _write_batch(self, logs):
         """
-        批量写日志（在线程中执行，已经是在后台线程了）
+        批量写日志 - 同时写入文件和打印到控制台
         """
         if not logs:
             return
-            
+        
+        # ===== 1. 打印到控制台（Railway能看到）=====
+        for log in logs:
+            print(log)  # 这行让日志出现在Railway控制台
+        
+        # ===== 2. 同时写入文件（永久保存）=====
         try:
             # 确保日志目录存在
             log_dir = "logs"
@@ -168,8 +173,8 @@ class AsyncLogger:
                 f.write("\n".join(logs) + "\n")
                 
         except Exception as e:
-            # 写日志失败也不能崩溃
-            print(f"⚠️ 写日志失败: {e}")
+            # 写文件失败时，至少控制台能看到
+            print(f"⚠️ 写日志文件失败: {e}")
     
     # ========== 管理接口 ==========
     
