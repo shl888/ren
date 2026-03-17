@@ -1,6 +1,7 @@
 """
 异步日志专员 - 即插即用，防蚂蚁隐患版
 干活的只管丢纸条，专员负责写
+修正：保持标准 logging API 兼容性
 """
 
 import asyncio
@@ -10,6 +11,7 @@ from datetime import datetime
 from typing import Optional
 from collections import deque
 import os
+import logging as _logging  # 别名避免冲突
 
 class AsyncLogger:
     """
@@ -39,7 +41,7 @@ class AsyncLogger:
             
         # ========== 核心组件 ==========
         # 使用 deque 替代 Queue，更轻量，可设置最大长度
-        self._queue = deque(maxlen=10000)  # 最多保留10000条，防止内存爆炸
+        self._queue = deque(maxlen=1000)  # 最多保留10000条，防止内存爆炸
         self._lock = threading.Lock()  # 线程锁保护队列
         self._running = True
         self._batch_size = 20  # 每20条写一次
@@ -57,7 +59,7 @@ class AsyncLogger:
         self._initialized = True
         
         # 测试日志
-        self._async_log("INFO", "异步日志专员启动完成，最大队列10000条，批量20条")
+        self._async_log("INFO", "异步日志专员启动完成，最大队列1000条，批量20条")
     
     # ========== 对外接口（供干活的调用）==========
     
@@ -203,20 +205,43 @@ class AsyncLogger:
 # ========== 全局单例 ==========
 _async_logger = AsyncLogger()
 
-def get_logger(name=None):
-    """
-    获取日志专员实例
-    兼容 logging.getLogger 接口
-    """
-    return _async_logger
+
+class AsyncLogHandler(_logging.Handler):
+    """将标准 logging 消息路由到 AsyncLogger"""
+    def __init__(self, level=_logging.NOTSET):
+        super().__init__(level)
+        self.async_logger = _async_logger
+    
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            level = record.levelname
+            self.async_logger._async_log(level, msg)
+        except Exception:
+            # 日志异常绝对不能影响主任务
+            pass
 
 
-# ========== 兼容 logging 模块的替换函数 ==========
 def patch_logging():
     """
-    打补丁：替换 logging.getLogger
-    在所有文件开头调用一次即可
+    将 AsyncLogger 作为 handler 添加到 root logger。
+    不替换 logging.getLogger，保持标准 API 兼容性。
+    在所有文件开头调用一次即可。
     """
-    import logging
-    logging.getLogger = get_logger
-    logging.info("✅ logging 已替换为异步日志专员")
+    # 创建 handler
+    handler = AsyncLogHandler()
+    
+    # 设置格式
+    formatter = _logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    
+    # 添加到 root logger
+    root = _logging.getLogger()
+    root.addHandler(handler)
+    
+    # 设置级别（如果还没设置）
+    if root.level == _logging.NOTSET:
+        root.setLevel(_logging.INFO)
+    
+    # 测试
+    _logging.info("✅ 异步日志 handler 已添加")
