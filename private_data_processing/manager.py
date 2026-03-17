@@ -56,25 +56,53 @@ class PrivateDataProcessor:
     
     # ========== 币安清理（同步线程版）==========
     def _binance_delayed_delete_sync(self, keys: List[str], symbol: str):
-        """同步版：5秒后删除该symbol所有当前存在的key（币安使用）"""
+        """
+        同步版：5秒后删除该symbol所有当前存在的key（币安使用）
+        
+        ⚠️ 关键修复：避免在持锁时调用外部函数（如logger）
+        因为异步日志有自己的锁，持锁时调用logger可能导致死锁
+        """
         try:
             time.sleep(5)
             
-            with self._lock:  # 加锁保护共享数据
+            # ===== 第1步：快速获取锁，只记录需要删除的key列表 =====
+            # 这次持锁时间极短，只做读取操作
+            keys_to_delete = []
+            with self._lock:
                 if 'binance_order_update' not in self.memory_store['private_data']:
                     return
                     
                 classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
-                current_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                
-                for k in current_keys:
-                    time.sleep(0)  # ✅ [蚂蚁基因修复] 线程中让出CPU时间片，避免长时间占用线程资源
-                    del classified[k]
-                
-                if current_keys:
-                    logger.debug(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
-                
+                # 获取当前symbol相关的所有key
+                keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+            
+            # ===== 如果没有需要删除的，直接返回 =====
+            if not keys_to_delete:
+                return
+            
+            # ===== 第2步：再次获取锁执行删除操作 =====
+            # 这次持锁时间也极短，只做删除操作
+            deleted_count = 0
+            with self._lock:
+                # 重新获取classified，防止被其他线程修改
+                classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
+                for k in keys_to_delete:
+                    # 再次检查key是否存在（可能已被其他线程删除）
+                    if k in classified:
+                        del classified[k]
+                        deleted_count += 1
+                        # ✅ [蚂蚁基因修复] 线程中让出CPU时间片
+                        time.sleep(0)
+            
+            # ===== 第3步：锁完全释放后才写日志 =====
+            # 这是最关键的一点：绝对不要在持锁时调用logger
+            # 因为logger可能阻塞（队列满、锁竞争等）
+            if deleted_count > 0:
+                logger.debug(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {deleted_count}类")
+                logger.info(f"⏰【私人数据处理】 [币安订单] 清理线程完成: {symbol}")
+            
         except Exception as e:
+            # 异常也在锁外记录
             logger.error(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}")
     
     def _binance_delayed_delete(self, keys: List[str], symbol: str):
@@ -89,25 +117,47 @@ class PrivateDataProcessor:
         """
         同步版：5秒后清理该symbol的所有相关数据
         包括：订单数据和持仓数据
+        
+        ⚠️ 关键修复：避免在持锁时调用外部函数（如logger）
+        因为异步日志有自己的锁，持锁时调用logger可能导致死锁
         """
         try:
             time.sleep(5)
             
-            with self._lock:  # 加锁保护共享数据
-                # ===== 清理订单数据 =====
+            # ===== 记录操作结果，用于锁外写日志 =====
+            has_order_data = False
+            has_pos_data = False
+            order_deleted_count = 0
+            
+            # ===== 第1部分：清理订单数据 =====
+            # 先获取需要删除的key
+            order_keys_to_delete = []
+            with self._lock:
                 if 'okx_order_update' in self.memory_store['private_data']:
                     classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
-                    order_keys = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                    
-                    for k in order_keys:
-                        time.sleep(0)  # ✅ [蚂蚁基因修复] 线程中让出CPU时间片，避免长时间占用线程资源
-                        del classified[k]
-                    
-                    if order_keys:
-                        logger.debug(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {len(order_keys)}个订单分类")
+                    order_keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
+            
+            # 执行删除（如果有关键需要删除）
+            if order_keys_to_delete:
+                with self._lock:
+                    classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
+                    for k in order_keys_to_delete:
+                        if k in classified:
+                            del classified[k]
+                            order_deleted_count += 1
+                            # ✅ [蚂蚁基因修复] 线程中让出CPU时间片
+                            time.sleep(0)
                 
-                # ===== 清理持仓数据 =====
-                pos_key = 'okx_position_update'
+                if order_deleted_count > 0:
+                    has_order_data = True
+                    logger.debug(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {order_deleted_count}个订单分类")
+            
+            # ===== 第2部分：清理持仓数据 =====
+            pos_key = 'okx_position_update'
+            need_delete_pos = False
+            
+            # 先检查是否需要删除持仓
+            with self._lock:
                 if pos_key in self.memory_store['private_data']:
                     pos_data = self.memory_store['private_data'][pos_key]
                     data_field = pos_data.get('data', {})
@@ -117,12 +167,24 @@ class PrivateDataProcessor:
                         pos_symbol = inst_id.replace('-SWAP', '').replace('-USDT', '')
                         
                         if pos_symbol == symbol:
-                            del self.memory_store['private_data'][pos_key]
-                            logger.debug(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})")
+                            need_delete_pos = True
+            
+            # 执行删除（如果需要）
+            if need_delete_pos:
+                with self._lock:
+                    if pos_key in self.memory_store['private_data']:
+                        del self.memory_store['private_data'][pos_key]
+                        has_pos_data = True
                 
+                if has_pos_data:
+                    logger.debug(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})")
+            
+            # ===== 第3部分：锁完全释放后才写汇总日志 =====
+            if has_order_data or has_pos_data:
                 logger.info(f"✅ [【私人数据处理】OKX订单清理] {symbol} 所有相关数据清理完成")
-                
+            
         except Exception as e:
+            # 异常也在锁外记录
             logger.error(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}")
             import traceback
             logger.error(traceback.format_exc())
