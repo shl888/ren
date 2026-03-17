@@ -45,7 +45,7 @@ class DataManager:
             exchange = private_data.get('exchange', 'unknown')
             data_type = private_data.get('data_type', 'unknown')
             
-            logger.info(f"📨【智能大脑】 【接收】DataManager收到{exchange}.{data_type}数据")
+            logger.debug(f"📨【智能大脑】 【接收】DataManager收到{exchange}.{data_type}数据")
             
             now = datetime.now()
             
@@ -62,7 +62,7 @@ class DataManager:
                     'source': 'reference_task'
                 }
                 self.last_reference_time = now
-                logger.info(f"✅【智能大脑】 【保存】参考数据 {exchange}.{data_type} 已保存")
+                logger.debug(f"✅【智能大脑】 【保存】参考数据 {exchange}.{data_type} 已保存")
                 
             elif data_type == 'user_summary':
                 # 🎯 用户数据：账户、持仓、订单等
@@ -76,7 +76,7 @@ class DataManager:
                     'source': 'private_processor'
                 }
                 self.last_account_time = now
-                logger.info(f"✅【智能大脑】 【保存】用户数据 {exchange} 已保存")
+                logger.debug(f"✅【智能大脑】 【保存】用户数据 {exchange} 已保存")
                 
             elif data_type == 'listen_key':
                 # 🎯 单独处理listenKey，存到 exchange_tokens
@@ -112,15 +112,15 @@ class DataManager:
             # 记录日志
             if data_type in ['account_update', 'user_summary']:
                 self.last_account_time = now
-                logger.info(f"💰【智能大脑】 收到账户私人数据: {exchange}")
+                logger.debug(f"💰【智能大脑】 收到账户私人数据: {exchange}")
             elif data_type in ['order_update', 'trade']:
                 self.last_trade_time = now
-                logger.info(f"📝【智能大脑】 收到交易私人数据: {exchange}")
+                logger.debug(f"📝【智能大脑】 收到交易私人数据: {exchange}")
             elif data_type == 'position_update':
                 self.last_account_time = now
-                logger.info(f"📊【智能大脑】 收到持仓私人数据: {exchange}")
+                logger.debug(f"📊【智能大脑】 收到持仓私人数据: {exchange}")
             elif data_type == 'contract_info':
-                logger.info(f"📋【智能大脑】 收到参考数据: {exchange}.{data_type}")
+                logger.debug(f"📋【智能大脑】 收到参考数据: {exchange}.{data_type}")
             
             # ✅ 推送到前端
             if self.brain.frontend_relay:
@@ -198,7 +198,7 @@ class DataManager:
                 
                 current_time = time.time()
                 if current_time - self.last_batch_log_time >= self.batch_log_interval:
-                    logger.info(f"✅【智能大脑】批量存储市场数据，共{len(data)}条")
+                    logger.debug(f"✅【智能大脑】批量存储市场数据，共{len(data)}条")
                     self.last_batch_log_time = current_time
                 
                 return storage_results
