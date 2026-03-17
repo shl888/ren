@@ -19,7 +19,6 @@
 ==================================================
 """
 import logging
-import asyncio
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class Step4Funding:
-    """第四步：资金费处理 - 按业务逻辑重构版"""
+    """第四步：资金费处理 - 按业务逻辑重构版（同步版）"""
     
     def __init__(self):
         # 缓存整个container（每个交易所独立）
@@ -38,13 +37,7 @@ class Step4Funding:
             "okx": None
         }
         
-        # 最新数据存储（覆盖更新）
-        self.latest_data = {
-            "binance": None,
-            "okx": None
-        }
-        
-        # 线程锁保护缓存（仅用于缓存读写）
+        # 线程锁保护缓存
         self._lock = threading.Lock()
         
         # 清理线程（每个交易所独立）
@@ -56,73 +49,24 @@ class Step4Funding:
         # 清理倒计时秒数
         self.reset_countdown = 5
         
-        # 运行标志
-        self.running = True
-        
-        # 启动独立循环
-        asyncio.create_task(self._funding_loop("binance"))
-        asyncio.create_task(self._funding_loop("okx"))
-        
         logger.info("✅【私人step4】资金费缓存已创建: binance, okx")
-        logger.info("🔄【私人step4】独立循环已启动（按业务逻辑重构版）")
     
-    # ========== 独立循环 ==========
-    
-    async def _funding_loop(self, exchange: str):
-        """
-        交易所资金费独立循环
-        每次循环读取最新数据，完整走完资金费流程
-        """
-        logger.debug(f"🔄【私人step4】【{exchange}】资金费循环已启动")
-        
-        while self.running:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
-            
-            try:
-                # 1. 读取最新数据
-                data = self.latest_data[exchange]
-                
-                if data is None:
-                    await asyncio.sleep(0.5)
-                    continue
-                
-                # 2. 根据交易所选择处理逻辑
-                if exchange == "binance":
-                    result = self._process_binance(data)
-                else:  # okx
-                    result = self._process_okx(data)
-                
-                # 3. 将处理结果更新到latest_data
-                if result:
-                    self.latest_data[exchange] = result
-                
-                # 4. 短暂休息
-                await asyncio.sleep(0.5)
-                
-            except Exception as e:
-                logger.error(f"❌【私人step4】【{exchange}】循环异常: {e}")
-                await asyncio.sleep(1)
-    
-    # ========== 更新最新数据 ==========
-    
-    def update_data(self, exchange: str, container: Dict[str, Any]):
-        """
-        外部调用：更新最新数据（覆盖模式）
-        这是唯一被外部调用的方法！
-        """
-        self.latest_data[exchange] = container
-        return container
-    
-    # ========== process 方法 ==========
+    # ========== process 方法（同步） ==========
     
     def process(self, container: Dict[str, Any]) -> Dict[str, Any]:
         """
-        处理资金费数据
-        只做数据更新，处理由独立循环负责
+        处理资金费数据 - 同步完成所有工作
+        根据交易所选择不同的处理逻辑
         """
         exchange = container.get("交易所")
-        self.update_data(exchange, container)
-        return container  # 返回原数据，让流程继续
+        
+        if exchange == "binance":
+            return self._process_binance(container)
+        elif exchange == "okx":
+            return self._process_okx(container)
+        else:
+            logger.warning(f"⚠️【step4】未知交易所: {exchange}")
+            return container
     
     # ========== 币安资金费处理 ==========
     
