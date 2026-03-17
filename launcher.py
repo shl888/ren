@@ -12,6 +12,14 @@ import signal
 from datetime import datetime
 import threading
 
+# 添加写日志专员
+from async_logger import patch_logging
+patch_logging()  # ✅ 全局替换，所有文件自动变异步
+# 测试日志
+test_logger = logging.getLogger("test")
+test_logger.info("如果看到这行日志，说明日志成功异步！")
+
+
 # ==================== 运行模式配置 ====================
 # True  = 多线程模式（生产环境，榨干CPU）
 # False = 单线程模式（调试模式，方便定位问题）
