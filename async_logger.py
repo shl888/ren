@@ -232,6 +232,8 @@ def patch_logging():
     将 AsyncLogger 作为 handler 添加到 root logger。
     不替换 logging.getLogger，保持标准 API 兼容性。
     在所有文件开头调用一次即可。
+    
+    注意：不设置日志级别，让 launcher.py 的 basicConfig 控制
     """
     # 创建 handler
     handler = AsyncLogHandler()
@@ -244,9 +246,9 @@ def patch_logging():
     root = _logging.getLogger()
     root.addHandler(handler)
     
-    # 设置级别（如果还没设置）
-    if root.level == _logging.NOTSET:
-        root.setLevel(_logging.INFO)
+    # ===== 关键：不要设置级别！让 basicConfig 控制 =====
+    # 不调用 root.setLevel()
+    # 不调用 handler.setLevel()
     
     # 测试
-    _logging.info("✅ 异步日志 handler 已添加")
+    _logging.info("✅ 异步日志 handler 已添加（级别由 launcher.py 控制）")
