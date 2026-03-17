@@ -72,7 +72,7 @@ class PrivateDataProcessor:
                     del classified[k]
                 
                 if current_keys:
-                    logger.info(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
+                    logger.debug(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {len(current_keys)}类")
                 
         except Exception as e:
             logger.error(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}")
@@ -186,7 +186,7 @@ class PrivateDataProcessor:
                 
                 # 分类
                 category = classify_binance_order(private_data)
-                logger.info(f"🔍【私人数据处理】 [币安订单] 分类结果: {category}")
+                logger.debug(f"🔍【私人数据处理】 [币安订单] 分类结果: {category}")
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
@@ -253,7 +253,7 @@ class PrivateDataProcessor:
                                 'data': raw_data
                             })
                             # ✅ 有订单ID时用这个日志
-                            logger.info(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
+                            logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
                     else:
                         classified[classified_key].append({
                             'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
@@ -261,7 +261,7 @@ class PrivateDataProcessor:
                             'data': raw_data
                         })
                         # ✅ 没有订单ID时用这个日志
-                        logger.info(f"📦【私人数据处理】 [币安订单] {symbol} {category} 已保存")
+                        logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 已保存")
                     
                     # 平仓处理：启动独立线程清理
                     if is_binance_closing(category):
@@ -302,7 +302,7 @@ class PrivateDataProcessor:
                     logger.debug(f"✅【私人数据处理】 [OKX订单] 成功提取订单数据: {order_id}, 状态: {state}")
                     
                     category = classify_okx_order(raw_data['data'])
-                    logger.info(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
+                    logger.debug(f"🔍【私人数据处理】 [OKX订单] 分类结果: {category}")
                     
                     # 过滤不需要保存的分类
                     filtered_categories = [
@@ -363,7 +363,7 @@ class PrivateDataProcessor:
                                     'data': raw_data
                                 })
                                 # ✅ 有订单ID时用这个日志
-                                logger.info(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
+                                logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
                         else:
                             classified[classified_key].append({
                                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
@@ -371,7 +371,7 @@ class PrivateDataProcessor:
                                 'data': raw_data
                             })
                             # ✅ 没有订单ID时用这个日志
-                            logger.info(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
+                            logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         
                         # ===== 平仓全部成交：启动独立线程清理 =====
                         if is_okx_closing(category):
