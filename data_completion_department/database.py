@@ -199,34 +199,53 @@ class Database:
             self._logged_active_ids.add(record_id)
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
-        """历史区：追加写入（带幂等性保护）"""
-        if 'id' not in data or not data['id']:
-            exchange = data.get('交易所', 'unknown')
-            contract = data.get('开仓合约名', 'unknown')
-            close_time = data.get('平仓时间', '')
-            data['id'] = f"{exchange}_{contract}_{close_time}"
-            logger.debug(f"🔑 【数据库】历史表生成id: {data['id']}")
+        """
+        历史区：追加写入（带幂等性保护）
+        ==================================================
+        【重要修复】过滤掉历史表不存在的字段
+        历史表没有 updated_at 字段，需要删除
+        ==================================================
+        """
+        # 创建副本，避免修改原始数据
+        clean_data = data.copy()
         
-        record_id = data['id']
+        # ===== 删除历史表不存在的字段 =====
+        # 历史表使用 created_at，没有 updated_at
+        if 'updated_at' in clean_data:
+            logger.debug(f"🗑️ 【数据库】删除历史表不存在的字段: updated_at")
+            del clean_data['updated_at']
         
+        # id 生成
+        if 'id' not in clean_data or not clean_data['id']:
+            exchange = clean_data.get('交易所', 'unknown')
+            contract = clean_data.get('开仓合约名', 'unknown')
+            close_time = clean_data.get('平仓时间', '')
+            clean_data['id'] = f"{exchange}_{contract}_{close_time}"
+            logger.debug(f"🔑 【数据库】历史表生成id: {clean_data['id']}")
+        
+        record_id = clean_data['id']
+        
+        # 幂等性检查
         if await self._check_closed_exists(record_id):
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
-        fields = list(data.keys())
+        # 准备SQL
+        fields = list(clean_data.keys())
         placeholders = ','.join(['?' for _ in fields])
-        values = [data.get(f) for f in fields]
+        values = [clean_data.get(f) for f in fields]
         
         sql = f"INSERT OR REPLACE INTO closed_positions ({','.join(fields)}) VALUES ({placeholders})"
         
         logger.debug(f"📝 【数据库】历史表 SQL: {sql}")
         logger.debug(f"📝 【数据库】历史表 值: {values}")
         
+        # 执行写入
         await self._run_sql(sql, values)
         
-        exchange = data.get('交易所', 'unknown')
-        contract = data.get('开仓合约名', 'unknown')
-        close_time = data.get('平仓时间', 'unknown')
+        exchange = clean_data.get('交易所', 'unknown')
+        contract = clean_data.get('开仓合约名', 'unknown')
+        close_time = clean_data.get('平仓时间', 'unknown')
         logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
     
     async def _check_closed_exists(self, record_id: str) -> bool:
