@@ -4,8 +4,7 @@
 1. 预先创建空容器并缓存（binance/okx）
 2. 收到数据直接更新对应容器
 3. 返回副本给调度器
-4. 平仓时清空交易字段
-5. 收到平仓字段后开始5秒倒计时，到时重置容器
+4. 检测到平仓后开始5秒倒计时，到时完全重置容器
 """
 import time
 import logging
@@ -93,29 +92,48 @@ class Step2Fusion:
         
         logger.info("✅【私人step2】容器缓存已创建: binance, okx")
     
-    def _delayed_reset_sync(self, exchange: str):
-        """同步版：5秒后重置容器"""
+    def _delayed_reset(self, exchange: str):
+        """5秒后重置容器"""
         try:
-            time.sleep(5)
+            # 分段睡眠，期间可以检查是否需要取消
+            for i in range(5):
+                time.sleep(1)
+                # 检查这个重置线程是否还是当前有效的
+                with self._lock:
+                    if self.reset_threads[exchange] != threading.current_thread():
+                        logger.debug(f"⏰【私人step2】【{exchange}】重置线程已被取代，放弃执行")
+                        return
             
             with self._lock:
-                container = self.containers[exchange]
-                self._reset_container(container)
+                # 再次确认还是当前线程
+                if self.reset_threads[exchange] != threading.current_thread():
+                    return
+                
+                # 完全重置容器
+                self._reset_container(self.containers[exchange])
                 logger.info(f"🔄【私人step2】【{exchange}】5秒倒计时结束，容器已完全重置")
             
         except Exception as e:
-            logger.error(f"❌【【私人step2】{exchange}】延迟重置失败: {e}")
+            logger.error(f"❌【私人step2】【{exchange}】延迟重置失败: {e}")
         finally:
-            self.reset_threads[exchange] = None
+            with self._lock:
+                if self.reset_threads[exchange] == threading.current_thread():
+                    self.reset_threads[exchange] = None
     
-    def _start_reset_thread(self, exchange: str):
-        """启动独立线程执行重置"""
-        # 如果已有线程在运行，先取消？（这里简单处理：允许新线程覆盖旧线程）
-        thread = threading.Thread(target=self._delayed_reset_sync, args=(exchange,))
-        thread.daemon = True
-        thread.start()
-        self.reset_threads[exchange] = thread
-        logger.info(f"⏰【私人step2】【{exchange}】重置线程已启动，将在5秒后清理")
+    def _start_reset_timer(self, exchange: str):
+        """启动重置定时器（确保只有一个生效）"""
+        with self._lock:
+            # 取消旧的线程（通过标记方式，新线程启动后旧线程会自动放弃）
+            old_thread = self.reset_threads[exchange]
+            if old_thread and old_thread.is_alive():
+                logger.debug(f"⏰【私人step2】【{exchange}】取消旧的重置线程")
+            
+            # 创建并启动新线程
+            thread = threading.Thread(target=self._delayed_reset, args=(exchange,))
+            thread.daemon = True
+            thread.start()
+            self.reset_threads[exchange] = thread
+            logger.info(f"⏰【私人step2】【{exchange}】重置定时器已启动，将在5秒后清理")
     
     def process(self, extracted_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -136,32 +154,24 @@ class Step2Fusion:
             logger.warning(f"⚠️【私人step2】未知交易所: {exchange}")
             return None
         
-        # 获取对应交易所的容器
-        with self._lock:
-            container = self.containers[exchange].copy()  # 操作副本
-        
-        # 检查是否有平仓相关字段
+        # ===== 检测是否需要启动重置定时器 =====
+        # 检查平仓字段
         close_fields = ["平仓执行方式", "平仓价", "平仓收益", "平仓时间"]
         has_close_field = any(
             extracted_data.get(field) is not None 
             for field in close_fields
         )
         
-        # 如果有平仓字段，启动独立线程重置
-        if has_close_field:
-            self._start_reset_thread(exchange)
-            logger.info(f"⏰【私人step2】【{exchange}】检测到平仓字段，启动重置线程")
-        
-        # 检查平仓事件（币安专用）
+        # 检查平仓事件
         event_type = extracted_data.get('event_type', '')
-        if event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]:
-            with self._lock:
-                self._clear_trade_data(self.containers[exchange])
-            # 平仓事件也会启动重置线程
-            self._start_reset_thread(exchange)
-            logger.info(f"⏰【私人step2】【{exchange}】检测到平仓事件，启动重置线程")
+        is_close_event = event_type in ["_06_触发止损", "_08_触发止盈", "_10_主动平仓"]
         
-        # ===== 覆盖式更新原始容器 =====
+        # 只要检测到平仓，就启动重置定时器（但不会立即清理）
+        if has_close_field or is_close_event:
+            self._start_reset_timer(exchange)
+            logger.info(f"⏰【私人step2】【{exchange}】检测到平仓，启动5秒重置定时器")
+        
+        # ===== 更新容器（始终更新，包括平仓数据包） =====
         with self._lock:
             update_count = 0
             for key, value in extracted_data.items():
@@ -169,39 +179,13 @@ class Step2Fusion:
                     old_value = self.containers[exchange].get(key)
                     self.containers[exchange][key] = value
                     update_count += 1
-                    if exchange == 'okx':
+                    if exchange == 'okx':  # 保留okx的详细日志
                         logger.debug(f"📝【step2-okx】字段 {key}: {old_value} -> {value}")
             
             logger.debug(f"📊【私人step2-{exchange}】更新了 {update_count} 个字段")
             
-            # 返回副本
+            # 返回副本给调度器（包含最新的平仓数据）
             return self.containers[exchange].copy()
-    
-    def _clear_trade_data(self, container: Dict):
-        """清空交易相关字段"""
-        trade_fields = [
-            "开仓合约名", "开仓方向", "开仓执行方式", "开仓价", "持仓币数",
-            "持仓张数", "合约面值", "开仓价仓位价值", "杠杆", "开仓保证金",
-            "开仓手续费", "开仓手续费币种", "开仓时间",
-            "标记价", "标记价涨跌盈亏幅", "标记价保证金", "标记价仓位价值",
-            "标记价浮盈", "标记价浮盈百分比",
-            "最新价", "最新价涨跌盈亏幅", "最新价保证金", "最新价仓位价值",
-            "最新价浮盈", "最新价浮盈百分比",
-            "止损触发方式", "止损触发价", "止损幅度",
-            "止盈触发方式", "止盈触发价", "止盈幅度",
-            "本次资金费", "累计资金费", "资金费结算次数", "平均资金费率", "本次资金费结算时间",
-            "平仓执行方式", "平仓价", "平仓价涨跌盈亏幅", "平仓价仓位价值",
-            "平仓手续费", "平仓手续费币种", "平仓收益", "平仓收益率", "平仓时间"
-        ]
-        
-        for field in trade_fields:
-            if field in container:
-                if field in ["本次资金费", "累计资金费", "资金费结算次数"]:
-                    container[field] = 0
-                else:
-                    container[field] = None
-        
-        logger.debug(f"🧹【私人step2】【{container['交易所']}】平仓清空交易数据")
     
     def _reset_container(self, container: Dict):
         """
@@ -218,7 +202,7 @@ class Step2Fusion:
         container.clear()
         container.update(new_container)
         
-        logger.debug(f"✨【私人step2】【{exchange}】容器已完全重置为初始状态")
+        logger.info(f"✨【私人step2】【{exchange}】容器已完全重置为初始状态")
     
     def get_container(self, exchange: str) -> Optional[Dict]:
         """获取指定交易所的容器副本（调试用）"""
