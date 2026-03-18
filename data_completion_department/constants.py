@@ -157,13 +157,18 @@ FIELD_FUNDING_COUNT = "资金费结算次数"    # 资金费结算次数
 FIELD_FUNDING_TIME = "本次资金费结算时间" # 最近一次结算时间
 FIELD_AVG_FUNDING_RATE = "平均资金费率"  # 平均资金费率
 
-# ----- 平仓信息 -----
+# ----- 平仓信息（通用）-----
 FIELD_CLOSE_TIME = "平仓时间"           # 平仓时间，有值表示已平仓
 FIELD_CLOSE_PRICE = "平仓价"            # 平仓价格
 FIELD_CLOSE_POSITION_VALUE = "平仓价仓位价值"  # 平仓价 * 持仓币数
 FIELD_CLOSE_PNL_PERCENT = "平仓价涨跌盈亏幅"   # (平仓价-开仓价)/开仓价*100 或 (开仓价-平仓价)/开仓价*100
 FIELD_CLOSE_PNL = "平仓收益"            # 平仓盈亏金额
 FIELD_CLOSE_PNL_PERCENT_OF_MARGIN = "平仓收益率"  # 平仓收益相对于保证金的百分比
+
+# ----- 币安平仓特有字段（新增）-----
+FIELD_CLOSE_EXEC_TYPE = "平仓执行方式"   # 平仓执行方式：MARKET/LIMIT等
+FIELD_CLOSE_FEE = "平仓手续费"           # 平仓手续费
+FIELD_CLOSE_FEE_CURRENCY = "平仓手续费币种"  # 平仓手续费币种
 
 # ========== 扩展字段（可根据需要添加）==========
 """
