@@ -22,13 +22,14 @@
    - market_data：获取币安最新价和标记价
 3. 本文件缓存：保存修复过程中的中间数据
 
-【修复流程 - 共6步】（完全按照你的设计文档）
+【修复流程 - 共7步】（完全按照你的设计文档）
 第1步：获取缓存数据（从数据库或直接用缓存）
 第2步：检测资金费状态（4种情况）
 第3步：资金费融合（只有情况D需要）
-第4步：提取最新价和标记价（从行情数据）
-第5步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
-第6步：提取3个特定字段并检测平仓价打对应标签推送
+第4步：提取存储区平仓字段（新增）
+第5步：提取最新价和标记价（从行情数据）
+第6步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
+第7步：提取3个特定字段并检测平仓价打对应标签推送
 ==================================================
 """
 
@@ -74,6 +75,9 @@ from ...constants import (
     FIELD_CLOSE_PNL_PERCENT,               # 平仓价涨跌盈亏幅
     FIELD_CLOSE_PNL,                       # 平仓收益
     FIELD_CLOSE_PNL_PERCENT_OF_MARGIN,     # 平仓收益率
+    FIELD_CLOSE_EXEC_TYPE,                 # 平仓执行方式
+    FIELD_CLOSE_FEE,                        # 平仓手续费
+    FIELD_CLOSE_FEE_CURRENCY,               # 平仓手续费币种
     FIELD_AVG_FUNDING_RATE,
     FIELD_FUNDING_THIS,
     FIELD_FUNDING_TOTAL,
@@ -92,7 +96,7 @@ class BinanceMissingRepair:
         1. 接收门外标签（持仓缺失/空仓）- 通过 handle_info()
         2. 接收门外存储区快照（最新数据）- 通过 update_snapshot()
         3. 根据标签启动/停止修复循环
-        4. 执行6步修复流程
+        4. 执行7步修复流程
 
     门外标签规则：
         - 永远只有1个标签（覆盖更新）
@@ -106,7 +110,7 @@ class BinanceMissingRepair:
     修复循环规则：
         - 每秒执行一次
         - 每次执行前检查门外标签
-        - 如果标签变了，自己停止
+        - 如果门外标签变了，自己停止
         - 如果修复过程出错，等待5秒后重试
     ==================================================
     """
@@ -291,13 +295,14 @@ class BinanceMissingRepair:
         """
         执行一次修复流程
         ==================================================
-        完全按照你的6步设计文档：
+        完全按照你的7步设计文档：
             第1步：获取缓存数据（从数据库或直接用缓存）
             第2步：检测资金费状态（4种情况）
             第3步：资金费融合（只有情况D需要）
-            第4步：提取最新价和标记价（从行情数据）
-            第5步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
-            第6步：提取3个特定字段并检测平仓价打对应标签推送
+            第4步：提取存储区平仓字段（新增）
+            第5步：提取最新价和标记价（从行情数据）
+            第6步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
+            第7步：提取3个特定字段并检测平仓价打对应标签推送
         ==================================================
         """
         logger.debug("【币安修复区】【持仓缺失修复】执行一次修复流程")
@@ -319,16 +324,23 @@ class BinanceMissingRepair:
         if funding_action == 'do_fusion':
             await self._step3_funding_fusion()
 
-        if not await self._step4_get_prices():
-            logger.error("❌【币安修复区】【持仓缺失修复】 第4步失败：无法获取行情数据，本次修复终止")
+        # 第4步：提取存储区平仓字段（新增）
+        await self._step4_extract_close_fields()
+
+        # 第5步：提取最新价和标记价（原有的第4步）
+        if not await self._step5_get_prices():
+            logger.error("❌【币安修复区】【持仓缺失修复】 第5步失败：无法获取行情数据，本次修复终止")
             return
 
-        await self._step5_calc_fields()
-        await self._step6_extract_and_push()
+        # 第6步：计算固定字段（原有的第5步）
+        await self._step6_calc_fields()
+
+        # 第7步：提取3个特定字段并检测平仓价打对应标签推送（原有的第6步）
+        await self._step7_extract_and_push()
 
         logger.debug("【币安修复区】【持仓缺失修复】一次修复流程执行完成")
 
-    # ==================== 6步修复流程 ====================
+    # ==================== 7步修复流程 ====================
 
     async def _step1_get_cache(self) -> bool:
         """
@@ -586,18 +598,6 @@ class BinanceMissingRepair:
             logger.info("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
-    # ==================== 辅助函数：安全转换 ====================
-    
-    def _safe_float(self, value, default=0.0):
-        """安全转换为float，如果是字符串则转换，如果是None则返回默认值"""
-        if value is None:
-            return default
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            logger.debug(f"【币安修复区】【持仓缺失修复】 类型转换失败: {value}, 使用默认值 {default}")
-            return default
-
     async def _step3_funding_fusion(self):
         """
         第3步：资金费融合流程
@@ -605,7 +605,7 @@ class BinanceMissingRepair:
         只有情况D（有历史+有新结算）才会执行这一步。
 
         融合规则：
-            1. 本次资金费和本次结算时间 → 直接从存储区覆盖（允许部分更新）
+            1. 本次资金费和本次结算时间 → 直接从存储区覆盖
             2. 累计资金费 = 存储区累计资金费 + 缓存累计资金费
             3. 资金费结算次数 = 缓存次数 + 1
 
@@ -650,9 +650,71 @@ class BinanceMissingRepair:
                    f"累计资金费: {cache.get(FIELD_FUNDING_TOTAL)}, "
                    f"结算次数: {cache.get(FIELD_FUNDING_COUNT)}")
 
-    async def _step4_get_prices(self) -> bool:
+    # ==================== 新增第4步：提取存储区平仓字段 ====================
+
+    async def _step4_extract_close_fields(self):
         """
-        第4步：提取最新价和标记价
+        第4步：提取存储区中的平仓字段
+        ==================================================
+        从门外存储区快照获取币安用户数据，提取5个平仓相关字段：
+            - 平仓执行方式 (FIELD_CLOSE_EXEC_TYPE)
+            - 平仓价 (FIELD_CLOSE_PRICE)
+            - 平仓手续费 (FIELD_CLOSE_FEE)
+            - 平仓手续费币种 (FIELD_CLOSE_FEE_CURRENCY)
+            - 平仓时间 (FIELD_CLOSE_TIME)
+        
+        如果平仓执行方式为空，说明没有平仓，跳过提取。
+        如果有值，则覆盖到缓存中。
+        ==================================================
+        """
+        logger.debug("【币安修复区】【持仓缺失修复】第4步：提取存储区平仓字段")
+
+        snapshot_data = self._get_binance_from_snapshot()
+        if not snapshot_data:
+            logger.debug("⚠️ 门外存储区中没有币安数据，跳过平仓字段提取")
+            return
+
+        # 检查是否有平仓执行方式
+        close_exec_type = snapshot_data.get(FIELD_CLOSE_EXEC_TYPE)
+        if close_exec_type is None or close_exec_type == '':
+            logger.debug("⏩ 平仓执行方式为空，没有平仓事件，跳过提取")
+            return
+
+        # 要提取的5个字段
+        fields_to_extract = [
+            FIELD_CLOSE_EXEC_TYPE,      # 平仓执行方式
+            FIELD_CLOSE_PRICE,          # 平仓价
+            FIELD_CLOSE_FEE,            # 平仓手续费
+            FIELD_CLOSE_FEE_CURRENCY,   # 平仓手续费币种
+            FIELD_CLOSE_TIME,           # 平仓时间
+        ]
+
+        update_count = 0
+        for field in fields_to_extract:
+            if field in snapshot_data and snapshot_data[field] is not None and snapshot_data[field] != '':
+                self.cache[field] = snapshot_data[field]
+                logger.debug(f"✅ 更新平仓字段 {field}: {snapshot_data[field]}")
+                update_count += 1
+
+        logger.info(f"📊 平仓字段提取完成，更新 {update_count} 个字段")
+
+    # ==================== 辅助函数：安全转换 ====================
+    
+    def _safe_float(self, value, default=0.0):
+        """安全转换为float，如果是字符串则转换，如果是None则返回默认值"""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logger.debug(f"【币安修复区】【持仓缺失修复】 类型转换失败: {value}, 使用默认值 {default}")
+            return default
+
+    # ==================== 原第4步改为第5步：提取行情数据 ====================
+
+    async def _step5_get_prices(self) -> bool:
+        """
+        第5步：提取最新价和标记价
         ==================================================
         根据缓存数据中的开仓合约名，去门外存储区的行情数据中：
             - binance_trade_price → 对应币安数据的最新价
@@ -661,7 +723,7 @@ class BinanceMissingRepair:
         把这两个值覆盖到缓存中
         ==================================================
         """
-        logger.debug("第4步：【币安修复区】【持仓缺失修复】从行情数据提取最新价和标记价")
+        logger.debug("【币安修复区】【持仓缺失修复】第5步：从行情数据提取最新价和标记价")
 
         contract = self.cache.get(FIELD_OPEN_CONTRACT)
         if not contract:
@@ -694,12 +756,14 @@ class BinanceMissingRepair:
         self.cache[FIELD_LATEST_PRICE] = latest_price
         self.cache[FIELD_MARK_PRICE] = mark_price
 
-        logger.debug(f"✅ 【币安修复区】【持仓缺失修复】第4步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
+        logger.debug(f"✅ 【币安修复区】【持仓缺失修复】第5步：获取到行情数据 - 最新价: {latest_price}, 标记价: {mark_price}")
         return True
 
-    async def _step5_calc_fields(self):
+    # ==================== 原第5步改为第6步：计算字段 ====================
+
+    async def _step6_calc_fields(self):
         """
-        第5步：计算固定字段
+        第6步：计算固定字段
         ==================================================
         【严格按照原始方案，独立计算，不复用任何中间结果】
 
@@ -755,7 +819,7 @@ class BinanceMissingRepair:
         【重要】所有计算前都使用安全转换
         ==================================================
         """
-        logger.debug("【币安修复区】【持仓缺失修复】第5步：计算固定字段（严格按照原始方案，独立计算）")
+        logger.debug("【币安修复区】【持仓缺失修复】第6步：计算固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
@@ -928,9 +992,11 @@ class BinanceMissingRepair:
                    f"平均资金费率: {avg_funding_rate:.4f}%, "
                    f"开仓方向: {direction}")
 
-    async def _step6_extract_and_push(self):
+    # ==================== 原第6步改为第7步：提取并推送 ====================
+
+    async def _step7_extract_and_push(self):
         """
-        第6步：提取3个特定字段并检测平仓价打对应标签推送
+        第7步：提取3个特定字段并检测平仓价打对应标签推送
         ==================================================
         做了五件事：
             1. 从门外存储区读取最新的币安数据
@@ -947,7 +1013,7 @@ class BinanceMissingRepair:
             - 标记价浮盈
         ==================================================
         """
-        logger.debug("【币安修复区】【持仓缺失修复】第6步：提取3个特定字段并检测平仓价打对应标签推送")
+        logger.debug("【币安修复区】【持仓缺失修复】第7步：提取3个特定字段并检测平仓价打对应标签推送")
 
         # 从门外存储区获取最新的币安数据
         latest_binance = self._get_binance_from_snapshot()
