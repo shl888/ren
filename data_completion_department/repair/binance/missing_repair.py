@@ -592,6 +592,9 @@ class BinanceMissingRepair:
         ==================================================
         只有情况D（有历史+有新结算）才会执行这一步。
 
+        【重要修复】添加类型转换，确保所有数值都是float类型
+        避免出现 int + str 的类型错误
+
         融合规则：
             1. 本次资金费和本次结算时间 → 直接从存储区覆盖
             2. 累计资金费 = 存储区累计资金费 + 缓存累计资金费
@@ -603,29 +606,47 @@ class BinanceMissingRepair:
         snapshot = self._snapshot_data
         cache = self.cache
 
-        # 获取数值，处理None
-        snapshot_funding_this = snapshot.get(FIELD_FUNDING_THIS, 0) or 0
-        snapshot_funding_total = snapshot.get(FIELD_FUNDING_TOTAL, 0) or 0
-        snapshot_funding_count = snapshot.get(FIELD_FUNDING_COUNT, 0) or 0
-        snapshot_funding_time = snapshot.get(FIELD_FUNDING_TIME)
+        # ===== 类型转换：确保所有数值都是float =====
+        # 获取存储区数值，处理None并转换为float
+        try:
+            # 存储区数值
+            snapshot_funding_this = snapshot.get(FIELD_FUNDING_THIS)
+            snapshot_funding_this = 0.0 if snapshot_funding_this is None else float(snapshot_funding_this)
+            
+            snapshot_funding_total = snapshot.get(FIELD_FUNDING_TOTAL)
+            snapshot_funding_total = 0.0 if snapshot_funding_total is None else float(snapshot_funding_total)
+            
+            snapshot_funding_count = snapshot.get(FIELD_FUNDING_COUNT)
+            snapshot_funding_count = 0.0 if snapshot_funding_count is None else float(snapshot_funding_count)
+            
+            snapshot_funding_time = snapshot.get(FIELD_FUNDING_TIME)
 
-        cache_funding_total = cache.get(FIELD_FUNDING_TOTAL, 0) or 0
-        cache_funding_count = cache.get(FIELD_FUNDING_COUNT, 0) or 0
+            # 缓存数值
+            cache_funding_total = cache.get(FIELD_FUNDING_TOTAL)
+            cache_funding_total = 0.0 if cache_funding_total is None else float(cache_funding_total)
+            
+            cache_funding_count = cache.get(FIELD_FUNDING_COUNT)
+            cache_funding_count = 0.0 if cache_funding_count is None else float(cache_funding_count)
 
-        # 1. 本次资金费和本次结算时间直接覆盖
-        cache[FIELD_FUNDING_THIS] = snapshot_funding_this
-        if snapshot_funding_time is not None:
-            cache[FIELD_FUNDING_TIME] = snapshot_funding_time
+            # 1. 本次资金费和本次结算时间直接覆盖
+            cache[FIELD_FUNDING_THIS] = snapshot_funding_this
+            if snapshot_funding_time is not None:
+                cache[FIELD_FUNDING_TIME] = snapshot_funding_time
 
-        # 2. 累计资金费相加
-        cache[FIELD_FUNDING_TOTAL] = snapshot_funding_total + cache_funding_total
+            # 2. 累计资金费相加
+            cache[FIELD_FUNDING_TOTAL] = snapshot_funding_total + cache_funding_total
 
-        # 3. 资金费结算次数相加
-        cache[FIELD_FUNDING_COUNT] = snapshot_funding_count + cache_funding_count
+            # 3. 资金费结算次数相加
+            cache[FIELD_FUNDING_COUNT] = snapshot_funding_count + cache_funding_count
 
-        logger.debug(f" 【币安修复区】【持仓缺失修复】  融合后 - 本次资金费: {cache[FIELD_FUNDING_THIS]}, "
-                   f"累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
-                   f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
+            logger.debug(f" 【币安修复区】【持仓缺失修复】  融合后 - 本次资金费: {cache[FIELD_FUNDING_THIS]}, "
+                       f"累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
+                       f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
+                       
+        except (TypeError, ValueError) as e:
+            logger.error(f"❌ 【币安修复区】【持仓缺失修复】 资金费融合类型转换失败: {e}")
+            # 如果转换失败，至少保留原有缓存值
+            logger.warning("⚠️ 【币安修复区】【持仓缺失修复】 资金费融合失败，保留原有缓存值")
 
     async def _step4_get_prices(self) -> bool:
         """
@@ -664,7 +685,7 @@ class BinanceMissingRepair:
             latest_price = float(latest_price)
             mark_price = float(mark_price)
         except (TypeError, ValueError):
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
+            logger.error(f"❌ 【币安修复区】【持仓缺失修复】行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
         # 覆盖到缓存
