@@ -634,9 +634,6 @@ class Step1Extract:
             if u_time is not None and u_time != '':
                 result["平仓时间"] = self._convert_timestamp(u_time)
             
-            # 从instId提取合约名（用于关联）
-            if order_data.get('instId'):
-                result["开仓合约名"] = self._normalize_okx_symbol(order_data['instId'])
             
             logger.debug(f"📤【私人step1-欧易平仓】提取结果: {result}")
             return result if len(result) > 2 else None
