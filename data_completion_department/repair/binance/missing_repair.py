@@ -106,7 +106,7 @@ class BinanceMissingRepair:
     修复循环规则：
         - 每秒执行一次
         - 每次执行前检查门外标签
-        - 如果门外标签变了，自己停止
+        - 如果标签变了，自己停止
         - 如果修复过程出错，等待5秒后重试
     ==================================================
     """
@@ -586,19 +586,30 @@ class BinanceMissingRepair:
             logger.info("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
+    # ==================== 辅助函数：安全转换 ====================
+    
+    def _safe_float(self, value, default=0.0):
+        """安全转换为float，如果是字符串则转换，如果是None则返回默认值"""
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logger.debug(f"【币安修复区】【持仓缺失修复】 类型转换失败: {value}, 使用默认值 {default}")
+            return default
+
     async def _step3_funding_fusion(self):
         """
         第3步：资金费融合流程
         ==================================================
         只有情况D（有历史+有新结算）才会执行这一步。
 
-        【重要修复】添加类型转换，确保所有数值都是float类型
-        避免出现 int + str 的类型错误
-
         融合规则：
-            1. 本次资金费和本次结算时间 → 直接从存储区覆盖
+            1. 本次资金费和本次结算时间 → 直接从存储区覆盖（允许部分更新）
             2. 累计资金费 = 存储区累计资金费 + 缓存累计资金费
-            3. 资金费结算次数 = 存储区次数 + 缓存次数
+            3. 资金费结算次数 = 缓存次数 + 1
+
+        【重要】允许部分更新：即使累计资金费计算失败，本次资金费和结算时间也会更新
         ==================================================
         """
         logger.debug("【币安修复区】【持仓缺失修复】第3步：执行资金费融合")
@@ -606,47 +617,38 @@ class BinanceMissingRepair:
         snapshot = self._snapshot_data
         cache = self.cache
 
-        # ===== 类型转换：确保所有数值都是float =====
-        # 获取存储区数值，处理None并转换为float
+        # ===== 第1部分：直接覆盖的字段（即使后续失败也要更新）=====
+        # 本次资金费直接覆盖
+        if FIELD_FUNDING_THIS in snapshot:
+            cache[FIELD_FUNDING_THIS] = snapshot[FIELD_FUNDING_THIS]
+            logger.debug(f" ✅ 本次资金费已覆盖: {cache[FIELD_FUNDING_THIS]}")
+        
+        # 本次结算时间直接覆盖
+        if FIELD_FUNDING_TIME in snapshot and snapshot[FIELD_FUNDING_TIME] is not None:
+            cache[FIELD_FUNDING_TIME] = snapshot[FIELD_FUNDING_TIME]
+            logger.debug(f" ✅ 本次结算时间已覆盖: {cache[FIELD_FUNDING_TIME]}")
+
+        # ===== 第2部分：需要计算的字段（用安全转换保护）=====
         try:
-            # 存储区数值
-            snapshot_funding_this = snapshot.get(FIELD_FUNDING_THIS)
-            snapshot_funding_this = 0.0 if snapshot_funding_this is None else float(snapshot_funding_this)
-            
-            snapshot_funding_total = snapshot.get(FIELD_FUNDING_TOTAL)
-            snapshot_funding_total = 0.0 if snapshot_funding_total is None else float(snapshot_funding_total)
-            
-            snapshot_funding_count = snapshot.get(FIELD_FUNDING_COUNT)
-            snapshot_funding_count = 0.0 if snapshot_funding_count is None else float(snapshot_funding_count)
-            
-            snapshot_funding_time = snapshot.get(FIELD_FUNDING_TIME)
+            # 累计资金费相加
+            snapshot_total = self._safe_float(snapshot.get(FIELD_FUNDING_TOTAL))
+            cache_total = self._safe_float(cache.get(FIELD_FUNDING_TOTAL))
+            cache[FIELD_FUNDING_TOTAL] = snapshot_total + cache_total
+            logger.debug(f" ✅ 累计资金费计算: {snapshot_total} + {cache_total} = {cache[FIELD_FUNDING_TOTAL]}")
+        except Exception as e:
+            logger.error(f" ❌ 累计资金费计算失败: {e}，保持原值 {cache.get(FIELD_FUNDING_TOTAL)}")
 
-            # 缓存数值
-            cache_funding_total = cache.get(FIELD_FUNDING_TOTAL)
-            cache_funding_total = 0.0 if cache_funding_total is None else float(cache_funding_total)
-            
-            cache_funding_count = cache.get(FIELD_FUNDING_COUNT)
-            cache_funding_count = 0.0 if cache_funding_count is None else float(cache_funding_count)
+        try:
+            # 资金费结算次数加1
+            cache_count = self._safe_float(cache.get(FIELD_FUNDING_COUNT))
+            cache[FIELD_FUNDING_COUNT] = cache_count + 1
+            logger.debug(f" ✅ 结算次数计算: {cache_count} + 1 = {cache[FIELD_FUNDING_COUNT]}")
+        except Exception as e:
+            logger.error(f" ❌ 结算次数计算失败: {e}，保持原值 {cache.get(FIELD_FUNDING_COUNT)}")
 
-            # 1. 本次资金费和本次结算时间直接覆盖
-            cache[FIELD_FUNDING_THIS] = snapshot_funding_this
-            if snapshot_funding_time is not None:
-                cache[FIELD_FUNDING_TIME] = snapshot_funding_time
-
-            # 2. 累计资金费相加
-            cache[FIELD_FUNDING_TOTAL] = snapshot_funding_total + cache_funding_total
-
-            # 3. 资金费结算次数相加
-            cache[FIELD_FUNDING_COUNT] = snapshot_funding_count + cache_funding_count
-
-            logger.debug(f" 【币安修复区】【持仓缺失修复】  融合后 - 本次资金费: {cache[FIELD_FUNDING_THIS]}, "
-                       f"累计资金费: {cache[FIELD_FUNDING_TOTAL]}, "
-                       f"结算次数: {cache[FIELD_FUNDING_COUNT]}")
-                       
-        except (TypeError, ValueError) as e:
-            logger.error(f"❌ 【币安修复区】【持仓缺失修复】 资金费融合类型转换失败: {e}")
-            # 如果转换失败，至少保留原有缓存值
-            logger.warning("⚠️ 【币安修复区】【持仓缺失修复】 资金费融合失败，保留原有缓存值")
+        logger.debug(f" 【币安修复区】【持仓缺失修复】  融合后 - 本次资金费: {cache.get(FIELD_FUNDING_THIS)}, "
+                   f"累计资金费: {cache.get(FIELD_FUNDING_TOTAL)}, "
+                   f"结算次数: {cache.get(FIELD_FUNDING_COUNT)}")
 
     async def _step4_get_prices(self) -> bool:
         """
@@ -680,12 +682,12 @@ class BinanceMissingRepair:
             logger.error(f"❌【币安修复区】【持仓缺失修复】 行情数据中缺少必要字段: latest_price={latest_price}, mark_price={mark_price}")
             return False
 
-        # 转换为float（如果是字符串）
+        # 使用安全转换
         try:
-            latest_price = float(latest_price)
-            mark_price = float(mark_price)
-        except (TypeError, ValueError):
-            logger.error(f"❌ 【币安修复区】【持仓缺失修复】行情数据格式错误: latest_price={latest_price}, mark_price={mark_price}")
+            latest_price = self._safe_float(latest_price)
+            mark_price = self._safe_float(mark_price)
+        except Exception as e:
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 行情数据格式错误: {e}")
             return False
 
         # 覆盖到缓存
@@ -749,25 +751,27 @@ class BinanceMissingRepair:
             平仓价涨跌盈亏幅 = (开仓价 - 平仓价) * 100 / 开仓价
             平仓收益 = (开仓价 - 平仓价) * 持仓币数
             平仓收益率 = (开仓价 - 平仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
+
+        【重要】所有计算前都使用安全转换
         ==================================================
         """
         logger.debug("【币安修复区】【持仓缺失修复】第5步：计算固定字段（严格按照原始方案，独立计算）")
 
         cache = self.cache
 
-        # 获取原始字段值（直接从缓存读取，不复用任何计算结果）
-        latest_price = cache.get(FIELD_LATEST_PRICE, 0)
-        mark_price = cache.get(FIELD_MARK_PRICE, 0)
-        close_price = cache.get(FIELD_CLOSE_PRICE, None)  # 平仓价可能为None
-        position_size = cache.get(FIELD_POSITION_SIZE, 0) or 0
-        leverage = cache.get(FIELD_LEVERAGE, 1) or 1
-        open_price = cache.get(FIELD_OPEN_PRICE, 0) or 0
-        open_position_value = cache.get(FIELD_OPEN_POSITION_VALUE, 0) or 0
-        open_margin = cache.get(FIELD_OPEN_MARGIN, 1) or 1
-        total_funding = cache.get(FIELD_FUNDING_TOTAL, 0) or 0
+        # ===== 使用安全转换获取所有原始字段值 =====
+        latest_price = self._safe_float(cache.get(FIELD_LATEST_PRICE))
+        mark_price = self._safe_float(cache.get(FIELD_MARK_PRICE))
+        close_price = cache.get(FIELD_CLOSE_PRICE)  # 平仓价可能为None，保持原样
+        position_size = self._safe_float(cache.get(FIELD_POSITION_SIZE))
+        leverage = self._safe_float(cache.get(FIELD_LEVERAGE), 1.0)
+        open_price = self._safe_float(cache.get(FIELD_OPEN_PRICE))
+        open_position_value = self._safe_float(cache.get(FIELD_OPEN_POSITION_VALUE))
+        open_margin = self._safe_float(cache.get(FIELD_OPEN_MARGIN), 1.0)
+        total_funding = self._safe_float(cache.get(FIELD_FUNDING_TOTAL))
         direction = cache.get(FIELD_OPEN_DIRECTION)
-        mark_position_value = cache.get(FIELD_MARK_POSITION_VALUE, 0) or 0  # 标记价仓位价值
-        mark_margin = cache.get(FIELD_MARK_MARGIN, 0) or 0  # 标记价保证金
+        mark_position_value = self._safe_float(cache.get(FIELD_MARK_POSITION_VALUE))
+        mark_margin = self._safe_float(cache.get(FIELD_MARK_MARGIN))
 
         # 根据方向计算 - 每个字段严格按照原始公式独立计算
         if direction == "LONG":
@@ -807,28 +811,29 @@ class BinanceMissingRepair:
 
             # ===== 新增：平仓相关字段（仅在平仓价不为空时计算）=====
             if close_price is not None:
+                close_price_float = self._safe_float(close_price)
                 # 9. 平仓价仓位价值 = 平仓价 * 持仓币数
-                close_position_value = close_price * position_size
+                close_position_value = close_price_float * position_size
                 close_position_value = round(close_position_value, 4)
                 cache[FIELD_CLOSE_POSITION_VALUE] = close_position_value
 
                 # 10. 平仓价涨跌盈亏幅 = (平仓价 - 开仓价) * 100 / 开仓价
-                close_pnl_percent = (close_price - open_price) * 100 / open_price if open_price else 0
+                close_pnl_percent = (close_price_float - open_price) * 100 / open_price if open_price else 0
                 close_pnl_percent = round(close_pnl_percent, 4)
                 cache[FIELD_CLOSE_PNL_PERCENT] = close_pnl_percent
 
                 # 11. 平仓收益 = (平仓价 - 开仓价) * 持仓币数
-                close_pnl = (close_price - open_price) * position_size
+                close_pnl = (close_price_float - open_price) * position_size
                 close_pnl = round(close_pnl, 4)
                 cache[FIELD_CLOSE_PNL] = close_pnl
 
                 # 12. 平仓收益率 = (平仓价 - 开仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
                 mark_position_value_abs = abs(mark_position_value)
-                close_pnl_percent_of_margin = (close_price - open_price) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
+                close_pnl_percent_of_margin = (close_price_float - open_price) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
                 close_pnl_percent_of_margin = round(close_pnl_percent_of_margin, 4)
                 cache[FIELD_CLOSE_PNL_PERCENT_OF_MARGIN] = close_pnl_percent_of_margin
 
-                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price}, "
+                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price_float}, "
                            f"平仓价仓位价值: {close_position_value:.2f}, "
                            f"平仓价涨跌盈亏幅: {close_pnl_percent:.2f}%, "
                            f"平仓收益: {close_pnl:.2f}, "
@@ -873,28 +878,29 @@ class BinanceMissingRepair:
 
             # ===== 新增：平仓相关字段（仅在平仓价不为空时计算）=====
             if close_price is not None:
+                close_price_float = self._safe_float(close_price)
                 # 9. 平仓价仓位价值 = 平仓价 * 持仓币数
-                close_position_value = close_price * position_size
+                close_position_value = close_price_float * position_size
                 close_position_value = round(close_position_value, 4)
                 cache[FIELD_CLOSE_POSITION_VALUE] = close_position_value
 
                 # 10. 平仓价涨跌盈亏幅 = (开仓价 - 平仓价) * 100 / 开仓价
-                close_pnl_percent = (open_price - close_price) * 100 / open_price if open_price else 0
+                close_pnl_percent = (open_price - close_price_float) * 100 / open_price if open_price else 0
                 close_pnl_percent = round(close_pnl_percent, 4)
                 cache[FIELD_CLOSE_PNL_PERCENT] = close_pnl_percent
 
                 # 11. 平仓收益 = (开仓价 - 平仓价) * 持仓币数
-                close_pnl = (open_price - close_price) * position_size
+                close_pnl = (open_price - close_price_float) * position_size
                 close_pnl = round(close_pnl, 4)
                 cache[FIELD_CLOSE_PNL] = close_pnl
 
                 # 12. 平仓收益率 = (开仓价 - 平仓价) * |标记价仓位价值| * 100 / (开仓价 * 标记价保证金)
                 mark_position_value_abs = abs(mark_position_value)
-                close_pnl_percent_of_margin = (open_price - close_price) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
+                close_pnl_percent_of_margin = (open_price - close_price_float) * mark_position_value_abs * 100 / (open_price * mark_margin) if (open_price and mark_margin) else 0
                 close_pnl_percent_of_margin = round(close_pnl_percent_of_margin, 4)
                 cache[FIELD_CLOSE_PNL_PERCENT_OF_MARGIN] = close_pnl_percent_of_margin
 
-                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price}, "
+                logger.debug(f"  【币安修复区】【持仓缺失修复】 平仓计算完成 - 平仓价: {close_price_float}, "
                            f"平仓价仓位价值: {close_position_value:.2f}, "
                            f"平仓价涨跌盈亏幅: {close_pnl_percent:.2f}%, "
                            f"平仓收益: {close_pnl:.2f}, "
