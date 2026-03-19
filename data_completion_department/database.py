@@ -1,50 +1,54 @@
 """
-数据库存储区 - Turso数据库
+数据库存储区 - MongoDB数据库
 ==================================================
 【文件职责】
-这个文件只做一件事：接收调度器推送的数据，然后写入Turso数据库。
+这个文件只做一件事：接收调度器推送的数据，然后写入MongoDB数据库。
 
 【重要提醒】
 1. 这个文件不提供任何读取接口（修复区如果需要读数据库，应该直接连接数据库）
 2. 这个文件只与调度器对话，不与任何其他文件对话
-3. 所有表字段都是中文，SQL语句必须用中文字段名
+3. 所有表字段都是中文，MongoDB直接存储字典，完全保留中文字段名
 4. 数据库会完整保存所有字段，空值就是 null，不需要过滤
 
 【表结构】
-数据库里有两张表，都在同一个Turso数据库里：
+数据库里有两个集合（Collections），都在同一个MongoDB数据库里：
 
-1. active_positions（持仓表）
+1. active_positions（持仓集合）
    - 作用：存储当前正在持仓的数据
    - 特点：覆盖更新，每个交易所只能有一条数据
-   - id生成：交易所_合约名_开仓时间
+   - id生成：交易所_合约名_开仓时间（作为普通字段存储）
    - 幂等性：根据id判断首次写入还是静默更新
+   - MongoDB会自动生成 _id 字段，与业务id共存
 
-2. closed_positions（历史表）
+2. closed_positions（历史集合）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
-   - id生成：交易所_合约名_平仓时间
+   - id生成：交易所_合约名_平仓时间（作为普通字段存储）
    - 幂等性：根据id去重，避免重复写入
+   - MongoDB会自动生成 _id 字段，与业务id共存
 
 【调用关系】
 调度器 (scheduler.py) 
     ↓ 推送 {tag, data}
 数据库 (database.py) 
     ↓ 根据tag执行不同逻辑
-Turso数据库
+MongoDB Atlas数据库
 
-【重要原则】
-Turso API 要求所有值都必须是字符串类型
-所以不管来的是什么类型的数据，都统一转成字符串
+【重要变化 - 从Turso迁移到MongoDB】
+1. 环境变量从 TURSO_DATABASE_URL/TOKEN 改为 MONGODB_URI
+2. 连接方式从 aiohttp + SQL 改为 pymongo + run_in_executor
+3. 不再需要SQL语句，直接操作Python字典
+4. 数据格式完全不变，字段名、字段值原样存储
 ==================================================
 """
 
 import os
-import aiohttp  # ✅ [蚂蚁基因修复] 改用异步HTTP库
 import asyncio
 import logging
-import json
 import time
 from typing import Dict, Any, List, Optional
+from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError, ConnectionFailure
 
 # 配置日志 - 统一前缀
 logger = logging.getLogger(__name__)
@@ -56,31 +60,41 @@ class Database:
     ==================================================
     这个类负责所有数据库写入操作，不提供任何读取接口。
     所有方法都是私有的（_开头），对外只暴露 handle_data 一个入口。
+    
+    【MongoDB迁移说明】
+    - 使用 run_in_executor 将同步的pymongo操作包装成异步
+    - 所有数据格式与原Turso版本完全一致
+    - 中文字段名完美支持
     ==================================================
     """
     
     def __init__(self):
         """
         初始化数据库连接
+        【MongoDB】从环境变量读取连接字符串
         """
         # ----- 第1步：从环境变量读取配置 -----
-        self.url = os.getenv('TURSO_DATABASE_URL')
-        self.token = os.getenv('TURSO_DATABASE_TOKEN')
+        # 原来: TURSO_DATABASE_URL 和 TURSO_DATABASE_TOKEN
+        # 现在: MONGODB_URI = mongodb+srv://用户名:密码@集群地址/数据库名
+        self.mongo_uri = os.getenv('MONGODB_URI')
         
         # ----- 第2步：验证配置是否存在 -----
-        if not self.url or not self.token:
+        if not self.mongo_uri:
             raise ValueError(
-                "❌ 【数据库】环境变量 TURSO_DATABASE_URL 和 TURSO_DATABASE_TOKEN 必须设置\n"
+                "❌ 【数据库】环境变量 MONGODB_URI 必须设置\n"
                 "请设置:\n"
-                "  export TURSO_DATABASE_URL=https://你的数据库.turso.io\n"
-                "  export TURSO_DATABASE_TOKEN=你的令牌"
+                "  export MONGODB_URI=mongodb+srv://用户名:密码@集群地址.mongodb.net/\n"
+                "注意：密码中的特殊字符需要URL编码，@ 换成 %40，: 换成 %3A"
             )
         
-        logger.info("✅ 【数据库】数据库配置加载成功")
-        logger.debug(f"🔗 【数据库】连接URL: {self.url}")
+        logger.info("✅ 【数据库】MongoDB配置加载成功")
+        logger.debug(f"🔗 【数据库】连接URI已加载")
         
-        # ✅ [蚂蚁基因修复] 创建共享的aiohttp会话
-        self._session = None
+        # ----- MongoDB客户端对象（懒加载）-----
+        self._client = None
+        self._db = None
+        self._active = None  # active_positions 集合
+        self._closed = None  # closed_positions 集合
         
         # ----- 第5步：初始化日志记录集合 -----
         self._logged_active_ids = set()
@@ -91,28 +105,82 @@ class Database:
         self._log_interval = 60
         logger.info(f"✅ 【数据库】日志时间控制初始化完成，间隔{self._log_interval}秒")
     
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """✅ [蚂蚁基因修复] 懒加载获取aiohttp会话"""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
+    async def _get_db(self):
+        """
+        获取MongoDB数据库连接（懒加载）
+        ==================================================
+        【MongoDB迁移核心】
+        使用 run_in_executor 将同步的MongoDB操作包装成异步
+        确保与原代码的异步风格兼容
+        
+        首次调用时建立连接，后续直接返回已存在的连接
+        ==================================================
+        """
+        if self._client is None:
+            loop = asyncio.get_event_loop()
+            try:
+                # 在线程池中执行同步的MongoDB连接
+                self._client = await loop.run_in_executor(
+                    None,
+                    lambda: MongoClient(
+                        self.mongo_uri,
+                        serverSelectionTimeoutMS=5000,  # 5秒连接超时
+                        connectTimeoutMS=5000,
+                        socketTimeoutMS=10000
+                    )
+                )
+                # 测试连接
+                await loop.run_in_executor(
+                    None,
+                    lambda: self._client.admin.command('ping')
+                )
+                
+                # 获取数据库和集合
+                self._db = self._client["trading_db"]
+                self._active = self._db["active_positions"]
+                self._closed = self._db["closed_positions"]
+                
+                logger.info("✅ 【数据库】MongoDB连接成功")
+                
+            except Exception as e:
+                logger.error(f"❌ 【数据库】MongoDB连接失败: {e}")
+                raise ConnectionError(f"无法连接到MongoDB: {e}")
+        
+        return self._db
     
     async def initialize(self):
-        """✅ [蚂蚁基因修复] 异步初始化数据库连接和表"""
+        """
+        异步初始化数据库连接和集合
+        ==================================================
+        【MongoDB迁移】
+        - 建立连接
+        - 创建索引（集合会自动创建，只需要建索引）
+        - 验证连接是否成功
+        ==================================================
+        """
         # ----- 第3步：测试数据库连接 -----
-        if not await self.test_connection():
-            raise ConnectionError("❌ 【数据库】无法连接到数据库，请检查网络和令牌")
+        try:
+            db = await self._get_db()
+            logger.info("✅ 【数据库】连接测试成功")
+        except Exception as e:
+            raise ConnectionError(f"❌ 【数据库】无法连接到MongoDB: {e}")
         
-        # ----- 第4步：初始化数据库表 -----
-        await self._init_database()
+        # ----- 第4步：初始化索引 -----
+        await self._init_indexes()
         
         logger.info("✅ 【数据库】异步初始化完成")
     
     async def close(self):
-        """✅ [蚂蚁基因修复] 关闭aiohttp会话"""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.debug("🔌 【数据库】HTTP会话已关闭")
+        """
+        关闭MongoDB连接
+        """
+        if self._client:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._client.close()
+            )
+            logger.debug("🔌 【数据库】MongoDB连接已关闭")
     
     # ==================== 对外唯一入口 ====================
     
@@ -162,10 +230,19 @@ class Database:
         """处理持仓完整数据"""
         await self._save_active_position(data)
     
-    # ==================== 实际数据库操作 ====================
+    # ==================== MongoDB数据库操作 ====================
     
     async def _save_active_position(self, data: Dict[str, Any]):
-        """持仓区：覆盖更新（日志控制版本）"""
+        """
+        持仓区：覆盖更新（日志控制版本）
+        ==================================================
+        【MongoDB迁移】
+        - 使用 update_one with upsert=True 实现覆盖更新
+        - 根据id判断是否存在，用于日志控制
+        - 数据格式与原Turso版本完全一致
+        ==================================================
+        """
+        # 生成id（与原逻辑完全一致）
         if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
@@ -177,26 +254,33 @@ class Database:
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         
-        should_log_info = record_id not in self._logged_active_ids
+        # 检查是否首次写入（用于日志控制）
+        db = await self._get_db()
+        loop = asyncio.get_event_loop()
         
-        fields = list(data.keys())
-        placeholders = ','.join(['?' for _ in fields])
-        values = [data.get(f) for f in fields]
+        # 查询记录是否存在
+        exists = await loop.run_in_executor(
+            None,
+            lambda: self._active.find_one({"id": record_id}) is not None
+        )
         
-        sql = f"""
-            INSERT OR REPLACE INTO active_positions 
-            ({','.join(fields)}) 
-            VALUES ({placeholders})
-        """
+        # 覆盖更新（upsert = True：存在就更新，不存在就插入）
+        await loop.run_in_executor(
+            None,
+            lambda: self._active.update_one(
+                {"id": record_id},  # 查询条件
+                {"$set": data},      # 更新操作（$set 保留未指定的字段）
+                upsert=True          # 不存在则插入
+            )
+        )
         
-        logger.debug(f"📝 【数据库】持仓表 SQL: {sql}")
-        logger.debug(f"📝 【数据库】持仓表 值: {values}")
-        
-        await self._run_sql(sql, values)
-        
-        if should_log_info:
+        # 日志控制
+        if not exists:
             logger.info(f"✅ 【数据库】成功写入持仓区{exchange}数据 - {contract}（首次）")
             self._logged_active_ids.add(record_id)
+        else:
+            # 抑制重复日志，只打印debug
+            logger.debug(f"📝 【数据库】更新持仓区{exchange}数据 - {contract}")
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
         """
@@ -204,6 +288,11 @@ class Database:
         ==================================================
         【重要修复】过滤掉历史表不存在的字段
         历史表没有 updated_at 字段，需要删除
+        
+        【MongoDB迁移】
+        - 先检查id是否存在，实现幂等性
+        - 不存在才插入
+        - 数据格式与原Turso版本完全一致
         ==================================================
         """
         # 创建副本，避免修改原始数据
@@ -215,7 +304,7 @@ class Database:
             logger.debug(f"🗑️ 【数据库】删除历史表不存在的字段: updated_at")
             del clean_data['updated_at']
         
-        # id 生成
+        # id生成（与原逻辑完全一致）
         if 'id' not in clean_data or not clean_data['id']:
             exchange = clean_data.get('交易所', 'unknown')
             contract = clean_data.get('开仓合约名', 'unknown')
@@ -226,22 +315,23 @@ class Database:
         record_id = clean_data['id']
         
         # 幂等性检查
-        if await self._check_closed_exists(record_id):
+        db = await self._get_db()
+        loop = asyncio.get_event_loop()
+        
+        exists = await loop.run_in_executor(
+            None,
+            lambda: self._closed.find_one({"id": record_id}) is not None
+        )
+        
+        if exists:
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
-        # 准备SQL
-        fields = list(clean_data.keys())
-        placeholders = ','.join(['?' for _ in fields])
-        values = [clean_data.get(f) for f in fields]
-        
-        sql = f"INSERT OR REPLACE INTO closed_positions ({','.join(fields)}) VALUES ({placeholders})"
-        
-        logger.debug(f"📝 【数据库】历史表 SQL: {sql}")
-        logger.debug(f"📝 【数据库】历史表 值: {values}")
-        
-        # 执行写入
-        await self._run_sql(sql, values)
+        # 插入新记录
+        await loop.run_in_executor(
+            None,
+            lambda: self._closed.insert_one(clean_data)
+        )
         
         exchange = clean_data.get('交易所', 'unknown')
         contract = clean_data.get('开仓合约名', 'unknown')
@@ -253,7 +343,7 @@ class Database:
         检查历史表中是否已存在该记录
         
         用于历史表的幂等性保护，避免重复写入。
-        查询表: closed_positions（历史表）
+        查询集合: closed_positions（历史集合）
         
         调用场景：
             _insert_closed_position() 在写入前调用，判断是否需要跳过
@@ -266,20 +356,18 @@ class Database:
         if not record_id:
             return False
         
-        sql = "SELECT 1 FROM closed_positions WHERE id = ? LIMIT 1"
-        
         try:
-            result = await self._run_sql(sql, [record_id])
+            db = await self._get_db()
+            loop = asyncio.get_event_loop()
             
-            if result and 'results' in result:
-                results_list = result.get('results', [])
-                if results_list and len(results_list) > 0:
-                    rows = results_list[0].get('rows', [])
-                    exists = len(rows) > 0
-                    if exists:
-                        logger.debug(f"🔍 【数据库】历史表已存在记录: {record_id}")
-                    return exists
-            return False
+            exists = await loop.run_in_executor(
+                None,
+                lambda: self._closed.find_one({"id": record_id}) is not None
+            )
+            
+            if exists:
+                logger.debug(f"🔍 【数据库】历史表已存在记录: {record_id}")
+            return exists
             
         except Exception as e:
             logger.error(f"❌ 【数据库】检查历史表记录失败: {e}")
@@ -290,7 +378,7 @@ class Database:
         检查持仓表中是否已存在该记录
         
         用于持仓表的日志控制，判断是首次写入还是覆盖更新。
-        查询表: active_positions（持仓表）
+        查询集合: active_positions（持仓集合）
         
         调用场景：
             _save_active_position() 在写入前调用，决定是否打印"首次写入"日志
@@ -303,353 +391,173 @@ class Database:
         if not record_id:
             return False
         
-        sql = "SELECT 1 FROM active_positions WHERE id = ? LIMIT 1"
-        
         try:
-            result = await self._run_sql(sql, [record_id])
+            db = await self._get_db()
+            loop = asyncio.get_event_loop()
             
-            if result and 'results' in result:
-                results_list = result.get('results', [])
-                if results_list and len(results_list) > 0:
-                    rows = results_list[0].get('rows', [])
-                    exists = len(rows) > 0
-                    if exists:
-                        logger.debug(f"🔍 【数据库】持仓表已存在记录: {record_id}")
-                    return exists
-            return False
+            exists = await loop.run_in_executor(
+                None,
+                lambda: self._active.find_one({"id": record_id}) is not None
+            )
+            
+            if exists:
+                logger.debug(f"🔍 【数据库】持仓表已存在记录: {record_id}")
+            return exists
             
         except Exception as e:
             logger.error(f"❌ 【数据库】检查持仓表记录失败: {e}")
             return False  # 出错时假设不存在，允许打印首次写入日志
     
     async def _delete_active_position(self, exchange: str):
-        """清理持仓区 - 只清理指定交易所"""
+        """
+        清理持仓区 - 只清理指定交易所
+        ==================================================
+        【MongoDB迁移】
+        使用 delete_many 删除所有符合条件的数据
+        ==================================================
+        """
         if not exchange:
             logger.error("❌ 【数据库】清理持仓必须传入交易所参数，本次操作已取消")
             return
         
-        sql = "DELETE FROM active_positions WHERE 交易所 = ?"
-        await self._run_sql(sql, [exchange])
+        db = await self._get_db()
+        loop = asyncio.get_event_loop()
         
-        logger.info(f"✅ 【数据库】成功清除持仓区{exchange}数据")
+        result = await loop.run_in_executor(
+            None,
+            lambda: self._active.delete_many({"交易所": exchange})
+        )
+        
+        logger.info(f"✅ 【数据库】成功清除持仓区{exchange}数据，删除了{result.deleted_count}条")
     
-    # ==================== SQL执行基础方法 ====================
+    # ==================== 集合查询方法（用于兼容原代码）====================
     
-    async def _run_sql(self, sql: str, params: List = None) -> Dict:
-        """✅ [蚂蚁基因修复] 异步执行SQL语句"""
-        if params is None:
-            params = []
-        
-        args = []
-        for p in params:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-            if p is None:
-                args.append({"type": "null", "value": None})
-            else:
-                args.append({"type": "text", "value": str(p)})
-        
-        payload = {
-            "requests": [
-                {
-                    "type": "execute",
-                    "stmt": {
-                        "sql": sql,
-                        "args": args
-                    }
-                }
-            ]
-        }
-        
-        session = await self._get_session()
-        
-        try:
-            async with session.post(
-                f"{self.url}/v2/pipeline",
-                headers={
-                    "Authorization": f"Bearer {self.token}",
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=10
-            ) as response:
-                
-                if response.status != 200:
-                    try:
-                        error_detail = await response.json()
-                        logger.error(f"❌ 【数据库】Turso返回错误: {error_detail}")
-                    except:
-                        logger.error(f"❌ 【数据库】Turso返回错误状态码: {response.status}")
-                
-                response.raise_for_status()
-                return await response.json()
-            
-        except asyncio.TimeoutError:
-            logger.error(f"❌ 【数据库】请求超时")
-            raise
-        except Exception as e:
-            logger.error(f"❌ 【数据库】请求失败: {e}")
-            raise
-    
-    # ==================== 表名查询 ====================
-    
-    async def _get_tables(self) -> List[str]:
+    async def _get_collections(self) -> List[str]:
         """
-        获取当前数据库中的所有表名
-        
-        查询 sqlite_master 系统表，返回所有用户创建的表（排除sqlite_开头的系统表）。
-        
-        Turso API返回格式示例：
-        {
-            "results": [
-                {
-                    "type": "ok",
-                    "response": {
-                        "type": "execute",
-                        "result": {
-                            "cols": [{"name": "name", "decltype": "TEXT"}],
-                            "rows": [
-                                [{"type": "text", "value": "active_positions"}],
-                                [{"type": "text", "value": "closed_positions"}]
-                            ]
-                        }
-                    }
-                }
-            ]
-        }
-        
-        解析路径：results[0].response.result.rows
-        每行数据格式：行是一个列表，第一个元素是包含value字段的字典
-        
-        :return: 表名列表，例如 ['active_positions', 'closed_positions']
+        获取当前数据库中的所有集合名称
+        ==================================================
+        【MongoDB迁移】
+        对应原来的 _get_tables() 方法
+        返回所有集合名，用于验证和调试
+        ==================================================
         """
-        sql = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+        db = await self._get_db()
+        loop = asyncio.get_event_loop()
         
-        try:
-            result = await self._run_sql(sql)
-            
-            tables = []
-            if result and 'results' in result:
-                results_list = result.get('results', [])
-                
-                if results_list and len(results_list) > 0:
-                    first_result = results_list[0]
-                    
-                    # Turso返回的数据结构：response -> result -> rows
-                    if 'response' in first_result:
-                        response = first_result['response']
-                        if 'result' in response:
-                            result_data = response['result']
-                            rows = result_data.get('rows', [])
-                            
-                            for row in rows:
-                                if row and len(row) > 0:
-                                    # 每行数据的格式： [{"type": "text", "value": "表名"}]
-                                    if isinstance(row[0], dict) and 'value' in row[0]:
-                                        table_name = row[0]['value']
-                                        # 过滤掉sqlite系统表
-                                        if table_name and not table_name.startswith('sqlite_'):
-                                            tables.append(table_name)
-            
-            logger.info(f"📋 【数据库】当前数据库中的表: {tables}")
-            return tables
-            
-        except Exception as e:
-            logger.error(f"❌ 【数据库】查询表名失败: {e}")
-            return []
+        collections = await loop.run_in_executor(
+            None,
+            lambda: db.list_collection_names()
+        )
+        
+        logger.info(f"📋 【数据库】当前数据库中的集合: {collections}")
+        return collections
     
     # ==================== 连接测试 ====================
     
     async def test_connection(self) -> bool:
-        """✅ [蚂蚁基因修复] 异步测试数据库连接是否正常"""
+        """测试数据库连接是否正常"""
         try:
-            result = await self._run_sql("SELECT 1")
+            db = await self._get_db()
+            loop = asyncio.get_event_loop()
             
-            if result and 'results' in result:
-                logger.info("✅ 【数据库】连接测试成功")
-                return True
-            else:
-                logger.error(f"❌ 【数据库】连接测试返回异常结果")
-                return False
+            # 发送ping命令测试连接
+            await loop.run_in_executor(
+                None,
+                lambda: self._client.admin.command('ping')
+            )
+            
+            logger.info("✅ 【数据库】连接测试成功")
+            return True
                 
         except Exception as e:
             logger.error(f"❌ 【数据库】连接测试失败: {e}")
             return False
     
-    # ==================== 初始化/建表 ====================
+    # ==================== 初始化/建索引 ====================
     
-    async def _init_database(self):
-        """✅ [蚂蚁基因修复] 异步初始化数据库"""
+    async def _init_indexes(self):
+        """
+        初始化数据库索引
+        ==================================================
+        【MongoDB迁移】
+        - MongoDB的集合会在第一次插入数据时自动创建
+        - 这里只创建索引，提高查询性能
+        - 索引与原Turso版本保持一致
+        ==================================================
+        """
         try:
-            # 先查表，记录建表前的状态
-            tables_before = await self._get_tables()
-            logger.debug(f"📋 【数据库】初始化前数据库中的表: {tables_before}")
+            # 先获取集合列表，用于调试
+            collections_before = await self._get_collections()
+            logger.debug(f"📋 【数据库】初始化前数据库中的集合: {collections_before}")
             
-            # 建表（IF NOT EXISTS 保证安全）
-            await self._create_active_positions_table()
-            await self._create_closed_positions_table()
-            await self._create_indexes()
+            db = await self._get_db()
+            loop = asyncio.get_event_loop()
             
-            # 验证表是否创建成功
-            try:
-                await self._run_sql("SELECT COUNT(*) FROM active_positions LIMIT 1")
-                logger.info("✅ 【数据库】持仓区表验证成功")
-            except Exception as e:
-                logger.error(f"❌ 【数据库】持仓区表验证失败: {e}")
-                raise
+            # ----- 持仓集合索引 -----
+            # 1. id唯一索引（保证业务id不重复）
+            await loop.run_in_executor(
+                None,
+                lambda: self._active.create_index("id", unique=True, background=True)
+            )
+            logger.debug("📝 【数据库】持仓集合 id 唯一索引创建完成")
             
-            try:
-                await self._run_sql("SELECT COUNT(*) FROM closed_positions LIMIT 1")
-                logger.info("✅ 【数据库】历史区表验证成功")
-            except Exception as e:
-                logger.error(f"❌ 【数据库】历史区表验证失败: {e}")
-                raise
+            # 2. 交易所索引（用于按交易所查询）
+            await loop.run_in_executor(
+                None,
+                lambda: self._active.create_index("交易所", background=True)
+            )
+            logger.debug("📝 【数据库】持仓集合 交易所 索引创建完成")
             
-            # 再查表，看建表后的状态
-            tables_after = await self._get_tables()
-            logger.debug(f"📋 【数据库】初始化后数据库中的表: {tables_after}")
+            # 3. 开仓合约名索引
+            await loop.run_in_executor(
+                None,
+                lambda: self._active.create_index("开仓合约名", background=True)
+            )
+            logger.debug("📝 【数据库】持仓集合 开仓合约名 索引创建完成")
             
-            logger.info("✅ 【数据库】初始化完成")
+            # ----- 历史集合索引 -----
+            # 1. id索引（用于幂等性检查）
+            await loop.run_in_executor(
+                None,
+                lambda: self._closed.create_index("id", unique=False, background=True)
+            )
+            logger.debug("📝 【数据库】历史集合 id 索引创建完成")
+            
+            # 2. 交易所索引
+            await loop.run_in_executor(
+                None,
+                lambda: self._closed.create_index("交易所", background=True)
+            )
+            logger.debug("📝 【数据库】历史集合 交易所 索引创建完成")
+            
+            # 3. 平仓时间索引（用于时间范围查询）
+            await loop.run_in_executor(
+                None,
+                lambda: self._closed.create_index("平仓时间", background=True)
+            )
+            logger.debug("📝 【数据库】历史集合 平仓时间 索引创建完成")
+            
+            # 验证集合是否存在
+            collections_after = await self._get_collections()
+            logger.debug(f"📋 【数据库】初始化后数据库中的集合: {collections_after}")
+            
+            logger.info("✅ 【数据库】MongoDB索引初始化完成")
             
         except Exception as e:
-            logger.error(f"❌ 【数据库】初始化失败: {e}")
+            logger.error(f"❌ 【数据库】索引初始化失败: {e}")
             raise
-    
-    async def _create_active_positions_table(self):
-        """✅ [蚂蚁基因修复] 异步创建持仓区表"""
-        sql = """
-        CREATE TABLE IF NOT EXISTS active_positions (
-            id TEXT PRIMARY KEY,
-            交易所 TEXT NOT NULL,
-            账户资产额 REAL,
-            资产币种 TEXT,
-            保证金模式 TEXT,
-            保证金币种 TEXT,
-            开仓合约名 TEXT,
-            开仓方向 TEXT,
-            开仓执行方式 TEXT,
-            开仓价 REAL,
-            持仓币数 REAL,
-            持仓张数 REAL,
-            合约面值 REAL,
-            开仓价仓位价值 REAL,
-            杠杆 REAL,
-            开仓保证金 REAL,
-            开仓手续费 REAL,
-            开仓手续费币种 TEXT,
-            开仓时间 DATETIME,
-            标记价 REAL,
-            标记价涨跌盈亏幅 REAL,
-            标记价保证金 REAL,
-            标记价仓位价值 REAL,
-            标记价浮盈 REAL,
-            标记价浮盈百分比 REAL,
-            最新价 REAL,
-            最新价涨跌盈亏幅 REAL,
-            最新价保证金 REAL,
-            最新价仓位价值 REAL,
-            最新价浮盈 REAL,
-            最新价浮盈百分比 REAL,
-            止损触发方式 TEXT,
-            止损触发价 REAL,
-            止损幅度 REAL,
-            止盈触发方式 TEXT,
-            止盈触发价 REAL,
-            止盈幅度 REAL,
-            本次资金费 REAL DEFAULT 0,
-            累计资金费 REAL DEFAULT 0,
-            资金费结算次数 INTEGER DEFAULT 0,
-            平均资金费率 REAL,
-            本次资金费结算时间 DATETIME,
-            平仓执行方式 TEXT,
-            平仓价 REAL,
-            平仓价涨跌盈亏幅 REAL,
-            平仓价仓位价值 REAL,
-            平仓手续费 REAL,
-            平仓手续费币种 TEXT,
-            平仓收益 REAL,
-            平仓收益率 REAL,
-            平仓时间 DATETIME,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        await self._run_sql(sql)
-        logger.debug("📝 【数据库】执行创建持仓表SQL")
-    
-    async def _create_closed_positions_table(self):
-        """✅ [蚂蚁基因修复] 异步创建历史区表"""
-        sql = """
-        CREATE TABLE IF NOT EXISTS closed_positions (
-            id TEXT PRIMARY KEY,
-            交易所 TEXT NOT NULL,
-            账户资产额 REAL,
-            资产币种 TEXT,
-            保证金模式 TEXT,
-            保证金币种 TEXT,
-            开仓合约名 TEXT,
-            开仓方向 TEXT,
-            开仓执行方式 TEXT,
-            开仓价 REAL,
-            持仓币数 REAL,
-            持仓张数 REAL,
-            合约面值 REAL,
-            开仓价仓位价值 REAL,
-            杠杆 REAL,
-            开仓保证金 REAL,
-            开仓手续费 REAL,
-            开仓手续费币种 TEXT,
-            开仓时间 DATETIME,
-            标记价 REAL,
-            标记价涨跌盈亏幅 REAL,
-            标记价保证金 REAL,
-            标记价仓位价值 REAL,
-            标记价浮盈 REAL,
-            标记价浮盈百分比 REAL,
-            最新价 REAL,
-            最新价涨跌盈亏幅 REAL,
-            最新价保证金 REAL,
-            最新价仓位价值 REAL,
-            最新价浮盈 REAL,
-            最新价浮盈百分比 REAL,
-            止损触发方式 TEXT,
-            止损触发价 REAL,
-            止损幅度 REAL,
-            止盈触发方式 TEXT,
-            止盈触发价 REAL,
-            止盈幅度 REAL,
-            本次资金费 REAL DEFAULT 0,
-            累计资金费 REAL DEFAULT 0,
-            资金费结算次数 INTEGER DEFAULT 0,
-            平均资金费率 REAL,
-            本次资金费结算时间 DATETIME,
-            平仓执行方式 TEXT,
-            平仓价 REAL,
-            平仓价涨跌盈亏幅 REAL,
-            平仓价仓位价值 REAL,
-            平仓手续费 REAL,
-            平仓手续费币种 TEXT,
-            平仓收益 REAL,
-            平仓收益率 REAL,
-            平仓时间 DATETIME,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-        """
-        await self._run_sql(sql)
-        logger.debug("📝 【数据库】执行创建历史表SQL")
-    
-    async def _create_indexes(self):
-        """✅ [蚂蚁基因修复] 异步创建索引"""
-        indexes = [
-            "CREATE INDEX IF NOT EXISTS idx_active_exchange ON active_positions(交易所);",
-            "CREATE INDEX IF NOT EXISTS idx_active_contract ON active_positions(开仓合约名);",
-            "CREATE INDEX IF NOT EXISTS idx_closed_exchange ON closed_positions(交易所);",
-            "CREATE INDEX IF NOT EXISTS idx_closed_time ON closed_positions(平仓时间);",
-            "CREATE INDEX IF NOT EXISTS idx_closed_id ON closed_positions(id);"
-        ]
-        
-        for sql in indexes:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-            try:
-                await self._run_sql(sql)
-                logger.debug(f"📝 【数据库】索引创建/已存在: {sql[:40]}...")
-            except Exception as e:
-                logger.warning(f"⚠️ 【数据库】索引创建失败: {e}")
+
+
+# ==================== 旧方法移除说明 ====================
+"""
+【已移除的方法 - 不再需要】
+
+以下方法在原Turso版本中存在，MongoDB版本不再需要：
+
+1. _run_sql() - MongoDB不使用SQL语句，直接操作字典
+2. _create_active_positions_table() - 集合自动创建，不需要建表语句
+3. _create_closed_positions_table() - 同上
+4. _create_indexes() - 已合并到 _init_indexes()
+
+所有数据库操作都通过 pymongo 的API直接完成，不再需要拼接SQL。
+"""

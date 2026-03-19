@@ -54,17 +54,75 @@ from .repair import (
     OkxMissingRepair
 )
 
+# 导入所有常量
 from .constants import (
+    # 数据标签
     TAG_EMPTY,
     TAG_COMPLETE,
     TAG_CLOSED_COMPLETE,
+    
+    # 信息标签
     INFO_BINANCE_SEMI,
     INFO_BINANCE_MISSING,
     INFO_BINANCE_EMPTY,
     INFO_OKX_MISSING,
     INFO_OKX_EMPTY,
+    
+    # 交易所常量
     EXCHANGE_BINANCE,
-    EXCHANGE_OKX
+    EXCHANGE_OKX,
+    
+    # ----- 基础信息 -----
+    FIELD_EXCHANGE,              # 交易所名称
+    
+    # ----- 开仓信息 -----
+    FIELD_OPEN_CONTRACT,         # 开仓合约名
+    FIELD_OPEN_PRICE,            # 开仓价格
+    FIELD_OPEN_DIRECTION,        # 开仓方向
+    FIELD_POSITION_SIZE,         # 持仓币数
+    FIELD_POSITION_CONTRACTS,    # 持仓张数
+    FIELD_CONTRACT_VALUE,        # 合约面值
+    FIELD_LEVERAGE,              # 杠杆倍数
+    FIELD_OPEN_POSITION_VALUE,   # 开仓价仓位价值
+    FIELD_OPEN_MARGIN,           # 开仓保证金
+    
+    # ----- 标记价相关 -----
+    FIELD_MARK_PRICE,            # 当前标记价格
+    FIELD_MARK_POSITION_VALUE,   # 标记价仓位价值
+    FIELD_MARK_MARGIN,           # 标记价保证金
+    FIELD_MARK_PNL,              # 标记价浮盈
+    FIELD_MARK_PNL_PERCENT_OF_MARGIN,  # 标记价浮盈百分比
+    
+    # ----- 最新价相关 -----
+    FIELD_LATEST_PRICE,          # 当前最新成交价
+    FIELD_LATEST_POSITION_VALUE, # 最新价仓位价值
+    FIELD_LATEST_MARGIN,         # 最新价保证金
+    FIELD_LATEST_PNL,            # 最新价浮盈
+    FIELD_LATEST_PNL_PERCENT_OF_MARGIN,  # 最新价浮盈百分比
+    
+    # ----- 涨跌盈亏幅（相对开仓价）-----
+    FIELD_MARK_PNL_PERCENT,      # 标记价涨跌盈亏幅
+    FIELD_LATEST_PNL_PERCENT,    # 最新价涨跌盈亏幅
+    
+    # ----- 资金费相关 -----
+    FIELD_FUNDING_THIS,          # 本次资金费
+    FIELD_FUNDING_TOTAL,         # 累计资金费
+    FIELD_FUNDING_COUNT,         # 资金费结算次数
+    FIELD_FUNDING_TIME,          # 本次资金费结算时间
+    FIELD_AVG_FUNDING_RATE,      # 平均资金费率
+    
+    # ----- 平仓信息（通用）-----
+    FIELD_CLOSE_TIME,            # 平仓时间
+    FIELD_CLOSE_PRICE,           # 平仓价
+    FIELD_CLOSE_POSITION_VALUE,  # 平仓价仓位价值
+    FIELD_CLOSE_PNL_PERCENT,     # 平仓价涨跌盈亏幅
+    FIELD_CLOSE_PNL,             # 平仓收益
+    FIELD_CLOSE_PNL_PERCENT_OF_MARGIN,  # 平仓收益率
+    
+    # ----- 币安平仓特有字段 -----
+    FIELD_CLOSE_EXEC_TYPE,       # 平仓执行方式
+    FIELD_CLOSE_FEE,             # 平仓手续费
+    FIELD_CLOSE_FEE_CURRENCY,    # 平仓手续费币种
 )
 
 # ===== 版本信息 =====
@@ -105,6 +163,58 @@ __all__ = [
     # 交易所常量
     'EXCHANGE_BINANCE',
     'EXCHANGE_OKX',
+    
+    # ----- 基础信息 -----
+    'FIELD_EXCHANGE',
+    
+    # ----- 开仓信息 -----
+    'FIELD_OPEN_CONTRACT',
+    'FIELD_OPEN_PRICE',
+    'FIELD_OPEN_DIRECTION',
+    'FIELD_POSITION_SIZE',
+    'FIELD_POSITION_CONTRACTS',
+    'FIELD_CONTRACT_VALUE',
+    'FIELD_LEVERAGE',
+    'FIELD_OPEN_POSITION_VALUE',
+    'FIELD_OPEN_MARGIN',
+    
+    # ----- 标记价相关 -----
+    'FIELD_MARK_PRICE',
+    'FIELD_MARK_POSITION_VALUE',
+    'FIELD_MARK_MARGIN',
+    'FIELD_MARK_PNL',
+    'FIELD_MARK_PNL_PERCENT_OF_MARGIN',
+    
+    # ----- 最新价相关 -----
+    'FIELD_LATEST_PRICE',
+    'FIELD_LATEST_POSITION_VALUE',
+    'FIELD_LATEST_MARGIN',
+    'FIELD_LATEST_PNL',
+    'FIELD_LATEST_PNL_PERCENT_OF_MARGIN',
+    
+    # ----- 涨跌盈亏幅 -----
+    'FIELD_MARK_PNL_PERCENT',
+    'FIELD_LATEST_PNL_PERCENT',
+    
+    # ----- 资金费相关 -----
+    'FIELD_FUNDING_THIS',
+    'FIELD_FUNDING_TOTAL',
+    'FIELD_FUNDING_COUNT',
+    'FIELD_FUNDING_TIME',
+    'FIELD_AVG_FUNDING_RATE',
+    
+    # ----- 平仓信息 -----
+    'FIELD_CLOSE_TIME',
+    'FIELD_CLOSE_PRICE',
+    'FIELD_CLOSE_POSITION_VALUE',
+    'FIELD_CLOSE_PNL_PERCENT',
+    'FIELD_CLOSE_PNL',
+    'FIELD_CLOSE_PNL_PERCENT_OF_MARGIN',
+    
+    # ----- 币安平仓特有字段 -----
+    'FIELD_CLOSE_EXEC_TYPE',
+    'FIELD_CLOSE_FEE',
+    'FIELD_CLOSE_FEE_CURRENCY',
     
     # 版本信息
     '__version__',
