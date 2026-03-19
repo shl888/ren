@@ -30,15 +30,23 @@
 第5步：提取最新价和标记价（从行情数据）
 第6步：计算固定字段（原有8个字段 + 新增4个平仓相关字段）
 第7步：提取3个特定字段并检测平仓价打对应标签推送
+
+【数据库迁移 - 从Turso到MongoDB】
+2026-03-20 修改：将数据库查询从Turso改为MongoDB
+- 环境变量从 TURSO_DATABASE_URL/TOKEN 改为 MONGODB_URI
+- 查询方式从 SQL 改为直接字典查询
+- 连接方式从 aiohttp 改为 pymongo（按需连接，用完即弃）
+- 结果处理从 _row_to_dict() 转换改为直接使用（MongoDB返回就是字典）
+- 删除了 _query_database() 和 _row_to_dict() 方法
 ==================================================
 """
 
 import os
 import logging
 import asyncio
-import aiohttp  # ✅ [蚂蚁基因修复] 改用异步HTTP库
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from pymongo import MongoClient  # ✅ 新增MongoDB驱动
 
 # 导入常量 - 使用修正后的常量名
 from ...constants import (
@@ -137,31 +145,11 @@ class BinanceMissingRepair:
         # 只存1条数据，覆盖更新
         self.cache = None              # 类型: Dict or None
 
-        # ===== 【修改】不再在初始化时读取和存储数据库连接信息 =====
-        # 数据库连接改为按需使用，只在第1步缓存为空时才读取环境变量
-        # 这样可以避免不必要的数据库连接，也符合"用完即弃"的原则
-
-        # ✅ [蚂蚁基因修复] 添加aiohttp会话管理
-        self._session = None
-
+        # ===== 【MongoDB迁移】不再保存数据库连接，改为按需连接 =====
         # 临时存储门外数据（供第3步使用）
         self._snapshot_data = None
 
         logger.info("✅【币安修复区】【持仓缺失修复】 修复区初始化完成")
-
-    # ✅ [蚂蚁基因修复] 获取或创建aiohttp会话
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """获取或创建aiohttp会话"""
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    # ✅ [蚂蚁基因修复] 关闭会话
-    async def close(self):
-        """关闭aiohttp会话"""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.debug("🔌【币安修复区】【持仓缺失修复】 HTTP会话已关闭")
 
     # ==================== 对外入口 ====================
 
@@ -272,7 +260,7 @@ class BinanceMissingRepair:
         logger.info("🔄【币安修复区】【持仓缺失修复】 修复循环开始")
 
         while self.is_running:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
+            await asyncio.sleep(0)  # ✅ 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_BINANCE_MISSING:
                     logger.info("【币安修复区】【持仓缺失修复】门外标签已不是币安持仓缺失，停止修复循环")
@@ -346,18 +334,17 @@ class BinanceMissingRepair:
         """
         第1步：获取缓存数据
         ==================================================
-        【修改说明】
+        【MongoDB迁移说明】
         按照"按需连接"原则重构：
             1. 先检查缓存是否有数据
             2. 如果有缓存，直接使用，不需要连接数据库
-            3. 如果没缓存，才去连接数据库读取
-
+            3. 如果没缓存，才去连接MongoDB读取
+        
         【5层检查】
             第1层：是否拿到环境变量
-            第2层：数据库连接是否成功
-            第3层：持仓表是否存在
-            第4层：表中有什么数据
-            第5层：是否找到币安数据并提取成功
+            第2层：MongoDB连接是否成功
+            第3层：查询币安数据
+            第4层：提取数据到缓存
         ==================================================
         """
         # ----- 第1层：检查缓存 -----
@@ -365,159 +352,68 @@ class BinanceMissingRepair:
             logger.debug("✅【币安修复区】【持仓缺失修复】 第1步：使用现有缓存")
             return True
 
-        logger.info("🔍【币安修复区】【持仓缺失修复】 第1步：缓存为空，准备从数据库读取")
+        logger.info("🔍【币安修复区】【持仓缺失修复】 第1步：缓存为空，准备从MongoDB读取")
 
-        # ----- 第2层：获取数据库连接信息（按需读取环境变量）-----
-        db_url = os.getenv('TURSO_DATABASE_URL')
-        db_token = os.getenv('TURSO_DATABASE_TOKEN')
+        # ----- 第2层：获取MongoDB连接信息（按需读取环境变量）-----
+        mongo_uri = os.getenv('MONGODB_URI')
 
-        if not db_url:
-            logger.error("❌【币安修复区】【持仓缺失修复】 环境变量 TURSO_DATABASE_URL 未设置")
-            return False
-        
-        if not db_token:
-            logger.error("❌【币安修复区】【持仓缺失修复】 环境变量 TURSO_DATABASE_TOKEN 未设置")
+        if not mongo_uri:
+            logger.error("❌【币安修复区】【持仓缺失修复】 环境变量 MONGODB_URI 未设置")
             return False
 
-        logger.info("✅【币安修复区】【持仓缺失修复】 成功读取数据库连接信息")
-        logger.debug(f"   数据库URL: {db_url}")
+        logger.info("✅【币安修复区】【持仓缺失修复】 成功读取MongoDB连接信息")
 
-        # ----- 第3层：测试数据库连接是否成功 -----
+        # ----- 第3层：连接MongoDB并查询币安数据 -----
+        loop = asyncio.get_event_loop()
+        client = None
         try:
-            test_result = await self._query_database("SELECT 1", db_url, db_token)
-            if test_result is None:
-                logger.error("❌【币安修复区】【持仓缺失修复】 数据库连接失败（网络问题或令牌错误）")
-                return False
-            logger.info("✅【币安修复区】【持仓缺失修复】 数据库连接成功")
-        except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库连接异常: {e}")
-            return False
-
-        # ----- 第4层：检查所有表 -----
-        try:
-            tables_result = await self._query_database(
-                "SELECT name FROM sqlite_master WHERE type='table'", 
-                db_url, db_token
+            # 临时连接MongoDB（用完即关）
+            client = await loop.run_in_executor(
+                None,
+                lambda: MongoClient(
+                    mongo_uri,
+                    serverSelectionTimeoutMS=5000,  # 5秒连接超时
+                    connectTimeoutMS=5000
+                )
             )
             
-            if tables_result is None:
-                logger.error("❌【币安修复区】【持仓缺失修复】 查询表失败")
-                return False
+            # 测试连接
+            await loop.run_in_executor(
+                None,
+                lambda: client.admin.command('ping')
+            )
+            logger.debug("✅【币安修复区】【持仓缺失修复】 MongoDB连接成功")
             
-            rows = tables_result.get('rows', [])
-            cols = tables_result.get('cols', [])
+            db = client["trading_db"]
+            collection = db["active_positions"]
             
-            all_tables = []
-            for row in rows:
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-                if row and len(row) > 0:
-                    if isinstance(row[0], dict):
-                        table_name = row[0].get('value')
-                    else:
-                        table_name = row[0]
-                    all_tables.append(table_name)
-            
-            logger.info(f"📋【币安修复区】【持仓缺失修复】 数据库中的所有表: {all_tables}")
-            
-            if 'active_positions' not in all_tables:
-                logger.error("❌【币安修复区】【持仓缺失修复】 数据库中没有 active_positions 表")
-                return False
-            
-            logger.info("✅【币安修复区】【持仓缺失修复】 持仓表存在")
-        except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 检查表失败: {e}")
-            return False
-
-        # ----- 第5层：查看表中所有数据 -----
-        try:
-            all_data = await self._query_database(
-                "SELECT 交易所, 开仓合约名, id FROM active_positions", 
-                db_url, db_token
+            # 查询币安数据（尝试不同写法）
+            result = await loop.run_in_executor(
+                None,
+                lambda: collection.find_one({"交易所": "binance"})
             )
             
-            if all_data and 'rows' in all_data:
-                rows = all_data.get('rows', [])
-                cols = all_data.get('cols', [])
-                
-                logger.info(f"📊【币安修复区】【持仓缺失修复】 active_positions 表共有 {len(rows)} 条数据")
-                
-                # 找出交易所字段的索引位置
-                exchange_idx = None
-                for i, col in enumerate(cols):
-                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-                    if isinstance(col, dict):
-                        col_name = col.get('name')
-                    else:
-                        col_name = col
-                    if col_name == '交易所':
-                        exchange_idx = i
-                        break
-                
-                if exchange_idx is not None:
-                    exchanges = []
-                    for row in rows:
-                        await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-                        if row and len(row) > exchange_idx:
-                            if isinstance(row[exchange_idx], dict):
-                                exchange = row[exchange_idx].get('value')
-                            else:
-                                exchange = row[exchange_idx]
-                            exchanges.append(exchange)
-                    
-                    logger.info(f"📋【币安修复区】【持仓缺失修复】 表中的交易所值: {exchanges}")
-                else:
-                    logger.warning("⚠️【币安修复区】【持仓缺失修复】 找不到'交易所'字段")
-            else:
-                logger.warning("⚠️【币安修复区】【持仓缺失修复】 active_positions 表是空的")
-        except Exception as e:
-            logger.warning(f"⚠️【币安修复区】【持仓缺失修复】 查询所有数据失败: {e}")
-            # 继续执行，不因为调试查询失败而终止
-
-        # ----- 第6层：查询币安数据（尝试不同写法）-----
-        try:
-            # 先尝试小写 binance
-            sql = "SELECT * FROM active_positions WHERE 交易所 = 'binance' LIMIT 1"
-            logger.debug(f"🔍【币安修复区】【持仓缺失修复】 执行查询: {sql}")
-            
-            result = await self._query_database(sql, db_url, db_token)
-
-            if result is None:
-                logger.error("❌【币安修复区】【持仓缺失修复】 查询币安数据失败")
-                return False
-
-            rows = result.get('rows', [])
-            cols = result.get('cols', [])
-            
-            # 如果没有找到数据，尝试其他可能的写法
-            if not rows:
-                logger.warning("⚠️【币安修复区】【持仓缺失修复】 查询成功，但没有找到交易所为 'binance' 的数据")
-                
-                # 尝试其他可能的交易所名称
+            # 如果没有找到，尝试其他可能的交易所名称
+            if not result:
+                logger.warning("⚠️【币安修复区】【持仓缺失修复】 未找到交易所为 'binance' 的数据，尝试其他写法")
                 test_exchanges = ['BINANCE', 'Binance', '币安']
-                found = False
-                
                 for test_exchange in test_exchanges:
-                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-                    logger.debug(f"🔍【币安修复区】【持仓缺失修复】 尝试查询: {test_exchange}")
-                    test_result = await self._query_database(
-                        f"SELECT * FROM active_positions WHERE 交易所 = '{test_exchange}' LIMIT 1",
-                        db_url, db_token
+                    await asyncio.sleep(0)
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: collection.find_one({"交易所": test_exchange})
                     )
-                    
-                    if test_result and test_result.get('rows'):
+                    if result:
                         logger.debug(f"✅【币安修复区】【持仓缺失修复】 找到数据！交易所字段实际为: {test_exchange}")
-                        rows = test_result.get('rows', [])
-                        cols = test_result.get('cols', [])
-                        found = True
                         break
-                
-                if not found:
-                    logger.error("❌【币安修复区】【持仓缺失修复】 尝试了所有可能的交易所名称，都没有找到数据")
-                    return False
-
-            # ----- 第7层：提取数据到缓存 -----
-            row = rows[0]
-            self.cache = self._row_to_dict(row, cols)
+            
+            if not result:
+                logger.error("❌【币安修复区】【持仓缺失修复】 尝试了所有可能的交易所名称，都没有找到数据")
+                return False
+            
+            # ----- 第4层：提取数据到缓存 -----
+            # MongoDB返回的已经是字典，直接使用，不需要转换！
+            self.cache = result
 
             logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据")
             logger.info(f"   交易所: {self.cache.get(FIELD_EXCHANGE)}")
@@ -533,8 +429,13 @@ class BinanceMissingRepair:
             return True
 
         except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 第1步：读取数据库失败: {e}", exc_info=True)
+            logger.error(f"❌【币安修复区】【持仓缺失修复】 第1步：读取MongoDB失败: {e}", exc_info=True)
             return False
+        finally:
+            # 无论成功失败，都关闭连接
+            if client:
+                await loop.run_in_executor(None, client.close)
+                logger.debug("🔌【币安修复区】【持仓缺失修复】 MongoDB连接已关闭")
 
     async def _step2_check_funding(self) -> Optional[str]:
         """
@@ -1031,7 +932,7 @@ class BinanceMissingRepair:
             # 尝试提取，如果提取不到或为空值，保留原缓存值
             extract_count = 0
             for field in fields_to_extract:
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                await asyncio.sleep(0)  # ✅ 循环内让出CPU
                 if field in latest_binance and latest_binance[field] is not None and latest_binance[field] != '':
                     self.cache[field] = latest_binance[field]
                     extract_count += 1
@@ -1128,122 +1029,6 @@ class BinanceMissingRepair:
 
         return market_data.get(contract)
 
-    async def _query_database(self, sql: str, db_url: str, db_token: str, params: List = None) -> Optional[Dict]:
-        """
-        ✅ [蚂蚁基因修复] 异步查询Turso数据库
-        ==================================================
-        【修改说明】
-        接收数据库连接信息作为参数，而不是使用实例变量。
-        这样符合"按需连接、用完即弃"的原则。
-        
-        使用异步 aiohttp 替代同步 requests
-
-        使用正确的Turso API返回格式解析：
-            {
-                "results": [
-                    {
-                        "type": "ok",
-                        "response": {
-                            "type": "execute",
-                            "result": {
-                                "cols": [...],
-                                "rows": [...]   # 数据在这里！
-                            }
-                        }
-                    }
-                ]
-            }
-
-        :param sql: SQL查询语句
-        :param db_url: 数据库URL
-        :param db_token: 数据库令牌
-        :param params: 查询参数列表
-        :return: 包含 cols 和 rows 的结果字典，失败返回None
-        ==================================================
-        """
-        if params is None:
-            params = []
-
-        # 转换参数格式
-        args = []
-        for p in params:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
-            if p is None:
-                args.append({"type": "null", "value": None})
-            else:
-                args.append({"type": "text", "value": str(p)})
-
-        # 构建请求体
-        request_item = {
-            "type": "execute",
-            "stmt": {
-                "sql": sql
-            }
-        }
-        
-        # 只有在有参数时才添加 args
-        if args:
-            request_item["stmt"]["args"] = args
-        
-        payload = {
-            "requests": [request_item]
-        }
-
-        session = await self._get_session()
-
-        try:
-            async with session.post(
-                f"{db_url}/v2/pipeline",
-                headers={
-                    "Authorization": f"Bearer {db_token}",
-                    "Content-Type": "application/json"
-                },
-                json=payload,
-                timeout=10
-            ) as response:
-                
-                response.raise_for_status()
-                result = await response.json()
-
-                # ✅ 正确的解析路径：results[0].response.result
-                if result and 'results' in result and len(result['results']) > 0:
-                    first_result = result['results'][0]
-                    if 'response' in first_result and 'result' in first_result['response']:
-                        return first_result['response']['result']  # 返回 {cols, rows}
-                
-                return None
-
-        except asyncio.TimeoutError:
-            logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库查询超时: {sql[:50]}...")
-            return None
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ 【币安修复区】【持仓缺失修复】数据库请求失败: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"❌【币安修复区】【持仓缺失修复】 数据库查询未知错误: {e}")
-            return None
-
-    def _row_to_dict(self, row: List, cols: List) -> Dict:
-        """
-        将数据库行转换为字典
-        ==================================================
-        Turso返回的数据格式：
-            cols: [{"name": "字段名"}, ...]
-            rows: [[{"value": "值"}, ...], ...]
-        ==================================================
-        """
-        result = {}
-        for i, col in enumerate(cols):
-            if i < len(row):
-                col_name = col.get('name') if isinstance(col, dict) else col
-                value_cell = row[i]
-                if isinstance(value_cell, dict):
-                    value = value_cell.get('value')
-                else:
-                    value = value_cell
-                result[col_name] = value
-        return result
-
     def _update_funding_fields(self, snapshot_data: Dict):
         """
         更新4个资金费字段（用于情况B）
@@ -1268,3 +1053,18 @@ class BinanceMissingRepair:
                 update_count += 1
 
         logger.debug(f" 【币安修复区】【持仓缺失修复】  已更新 {update_count} 个资金费字段")
+
+
+# ==================== 已移除的方法 ====================
+"""
+【已移除的方法 - 不再需要】
+
+以下方法在原Turso版本中存在，MongoDB版本不再需要：
+
+1. _query_database() - 改用MongoDB的直接查询
+2. _row_to_dict() - MongoDB返回的就是字典，不需要转换
+3. _get_session() - 不再需要aiohttp会话
+4. close() - 不再需要关闭aiohttp会话
+
+所有数据库操作都在第1步按需完成，用完即关，不保留长连接。
+"""
