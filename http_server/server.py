@@ -27,9 +27,9 @@ class HTTPServer:
     """HTTP服务器，内部包含WebSocket连接池"""
     
     def __init__(self, host='0.0.0.0', port=None, brain=None):
-        # 如果没有指定端口，使用环境变量或Render默认端口
+        # 如果没有指定端口，使用环境变量或容器内部端口
         if port is None:
-            port = int(os.getenv('PORT', 10000))  # Render默认端口
+            port = int(os.getenv('PORT', 10000))  # 容器内部端口
         
         self.host = host
         self.port = port
