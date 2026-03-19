@@ -110,7 +110,7 @@ class BinanceMissingRepair:
     修复循环规则：
         - 每秒执行一次
         - 每次执行前检查门外标签
-        - 如果门外标签变了，自己停止
+        - 如果标签变了，自己停止
         - 如果修复过程出错，等待5秒后重试
     ==================================================
     """
@@ -540,9 +540,10 @@ class BinanceMissingRepair:
         """
         第2步：检测资金费状态
         ==================================================
+        【修正】2026.03.19 - 修复判断逻辑
         检测两个维度：
             1. 有无历史：缓存本次资金费是否不等于0
-            2. 有无新结算：存储区本次资金费是否不等于0
+            2. 有无新结算：存储区本次资金费 != 0 AND 存储区本次资金费 != 缓存本次资金费
 
         4种情况：
             A. 无历史 + 无新结算 → 返回 'skip_to_step4'
@@ -565,11 +566,11 @@ class BinanceMissingRepair:
             cache_funding = 0
         has_history = (cache_funding != 0)
 
-        # 判断有无新结算（存储区本次资金费是否为0）
+        # 判断有无新结算（存储区本次资金费 != 0 AND 存储区本次资金费 != 缓存本次资金费）
         snapshot_funding = snapshot_data.get(FIELD_FUNDING_THIS, 0)
         if snapshot_funding is None:
             snapshot_funding = 0
-        has_new = (snapshot_funding != 0)
+        has_new = (snapshot_funding != 0) and (snapshot_funding != cache_funding)
 
         logger.debug(f" 【币安修复区】【持仓缺失修复】  缓存本次资金费: {cache_funding}, 存储区本次资金费: {snapshot_funding}")
         logger.debug(f"  【币安修复区】【持仓缺失修复】 有无历史: {has_history}, 有无新结算: {has_new}")
