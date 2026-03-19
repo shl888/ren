@@ -611,19 +611,8 @@ class OkxMissingRepair:
 
         snapshot = self._snapshot_data
         cache = self.cache
-
-        # ===== 第1部分：直接覆盖的字段（即使后续失败也要更新）=====
-        # 累计资金费直接覆盖
-        if FIELD_FUNDING_TOTAL in snapshot:
-            cache[FIELD_FUNDING_TOTAL] = snapshot[FIELD_FUNDING_TOTAL]
-            logger.debug(f" ✅ 累计资金费已覆盖: {cache[FIELD_FUNDING_TOTAL]}")
         
-        # 本次结算时间直接覆盖
-        if FIELD_FUNDING_TIME in snapshot and snapshot[FIELD_FUNDING_TIME] is not None:
-            cache[FIELD_FUNDING_TIME] = snapshot[FIELD_FUNDING_TIME]
-            logger.debug(f" ✅ 本次结算时间已覆盖: {cache[FIELD_FUNDING_TIME]}")
-
-        # ===== 第2部分：需要计算的字段（用安全转换保护）=====
+        # ===== 第1部分：需要计算的字段（用安全转换保护）=====
         try:
             # 本次资金费 = 存储区累计资金费 - 缓存累计资金费
             snapshot_total = self._safe_float(snapshot.get(FIELD_FUNDING_TOTAL))
@@ -641,10 +630,22 @@ class OkxMissingRepair:
         except Exception as e:
             logger.error(f" ❌ 结算次数计算失败: {e}，保持原值 {cache.get(FIELD_FUNDING_COUNT)}")
 
+
+        # ===== 第2部分：直接覆盖的字段（即使第1部分失败也要更新）=====
+        # 累计资金费直接覆盖
+        if FIELD_FUNDING_TOTAL in snapshot:
+            cache[FIELD_FUNDING_TOTAL] = snapshot[FIELD_FUNDING_TOTAL]
+            logger.debug(f" ✅ 累计资金费已覆盖: {cache[FIELD_FUNDING_TOTAL]}")
+        
+        # 本次结算时间直接覆盖
+        if FIELD_FUNDING_TIME in snapshot and snapshot[FIELD_FUNDING_TIME] is not None:
+            cache[FIELD_FUNDING_TIME] = snapshot[FIELD_FUNDING_TIME]
+            logger.debug(f" ✅ 本次结算时间已覆盖: {cache[FIELD_FUNDING_TIME]}")
+
         logger.info(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache.get(FIELD_FUNDING_TOTAL)}, "
                    f"本次资金费: {cache.get(FIELD_FUNDING_THIS)}, "
                    f"结算次数: {cache.get(FIELD_FUNDING_COUNT)}")
-
+                   
     async def _step4_update_from_snapshot(self):
         """
         第4步：从门外存储区快照覆盖更新缓存
