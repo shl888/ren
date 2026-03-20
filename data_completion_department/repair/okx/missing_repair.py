@@ -176,7 +176,7 @@ class OkxMissingRepair:
         old_info = self.current_info
         self.current_info = info  # 覆盖更新
 
-        logger.info(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
+        logger.debug(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
 
         # ===== 根据标签决定开关 =====
         if info == INFO_OKX_MISSING:
@@ -215,7 +215,7 @@ class OkxMissingRepair:
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.info("【欧易持仓缺失修复区】修复流程已在运行中")
+            logger.debug("【欧易持仓缺失修复区】修复流程已在运行中")
             return
 
         self.is_running = True
@@ -250,13 +250,13 @@ class OkxMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄【欧易持仓缺失修复区】 修复循环开始")
+        logger.debug("🔄【欧易持仓缺失修复区】 修复循环开始")
 
         while self.is_running:
             await asyncio.sleep(0)  # ✅ 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_OKX_MISSING:
-                    logger.info("【欧易持仓缺失修复区】门外标签已不是持仓缺失，停止修复循环")
+                    logger.debug("【欧易持仓缺失修复区】门外标签已不是持仓缺失，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -492,17 +492,17 @@ class OkxMissingRepair:
         self._snapshot_data = snapshot_data
 
         if not has_history and not has_new:
-            logger.info(" 【欧易持仓缺失修复区】  情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         elif not has_history and has_new:
-            logger.info(" 【欧易持仓缺失修复区】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
         elif has_history and not has_new:
-            logger.info(" 【欧易持仓缺失修复区】  情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【欧易持仓缺失修复区】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
         else:
-            logger.info(" 【欧易持仓缺失修复区】  情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.debug(" 【欧易持仓缺失修复区】  情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -519,7 +519,7 @@ class OkxMissingRepair:
         【重要】允许部分更新：即使本次资金费计算失败，累计资金费和结算时间也会更新
         ==================================================
         """
-        logger.info("【欧易持仓缺失修复区】第3步：执行资金费融合")
+        logger.debug("【欧易持仓缺失修复区】第3步：执行资金费融合")
 
         snapshot = self._snapshot_data
         cache = self.cache
@@ -554,7 +554,7 @@ class OkxMissingRepair:
             cache[FIELD_FUNDING_TIME] = snapshot[FIELD_FUNDING_TIME]
             logger.debug(f" ✅ 本次结算时间已覆盖: {cache[FIELD_FUNDING_TIME]}")
 
-        logger.info(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache.get(FIELD_FUNDING_TOTAL)}, "
+        logger.debug(f" 【欧易持仓缺失修复区】  融合后 - 累计资金费: {cache.get(FIELD_FUNDING_TOTAL)}, "
                    f"本次资金费: {cache.get(FIELD_FUNDING_THIS)}, "
                    f"结算次数: {cache.get(FIELD_FUNDING_COUNT)}")
                    
@@ -850,7 +850,7 @@ class OkxMissingRepair:
 
         exchange = data_copy.get(FIELD_EXCHANGE, 'unknown')
         contract = data_copy.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 【欧易持仓缺失修复区】已推送{tag}数据: {exchange} - {contract}")
+        logger.debug(f"✅ 【欧易持仓缺失修复区】已推送{tag}数据: {exchange} - {contract}")
 
     # ==================== 辅助方法 ====================
 
@@ -901,7 +901,7 @@ class OkxMissingRepair:
                 self.cache[field] = snapshot_data[field]
                 update_count += 1
 
-        logger.info(f" 【欧易持仓缺失修复区】  已更新 {update_count} 个资金费字段")
+        logger.debug(f" 【欧易持仓缺失修复区】  已更新 {update_count} 个资金费字段")
 
 
 # ==================== 已移除的方法 ====================
