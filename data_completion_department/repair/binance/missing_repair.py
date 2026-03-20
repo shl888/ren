@@ -38,6 +38,7 @@
 - 连接方式从 aiohttp 改为 pymongo（按需连接，用完即弃）
 - 结果处理从 _row_to_dict() 转换改为直接使用（MongoDB返回就是字典）
 - 读取逻辑优化：按开仓时间倒序取最新一条，防止残留数据干扰
+- 数据清洗：删除 _id 字段 + 按标准顺序排序
 ==================================================
 """
 
@@ -92,6 +93,9 @@ from ...constants import (
     FIELD_FUNDING_COUNT,
     FIELD_FUNDING_TIME,
 )
+
+# 导入工具函数 - 字典排序
+from ... import order_dict
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +347,10 @@ class BinanceMissingRepair:
         【读取逻辑优化】
         - 按开仓时间倒序排序，取最新一条数据
         - 防止平仓失败时残留的旧数据干扰修复流程
+        
+        【数据清洗】
+        - 删除 MongoDB 的 _id 字段（避免 JSON 序列化报错）
+        - 按标准顺序重新排列字段（让路由数据显示整齐）
         ==================================================
         """
         # ----- 第1层：检查缓存 -----
@@ -422,13 +430,14 @@ class BinanceMissingRepair:
                 logger.error("❌【币安修复区】【持仓缺失修复】 尝试了所有可能的交易所名称，都没有找到数据")
                 return False
             
-            # ----- 第4层：提取数据到缓存 -----
-            # MongoDB返回的已经是字典，直接使用，不需要转换！
-            
-            # 🔥 关键修复：删除 MongoDB 的 _id 字段，避免 JSON 序列化报错
+            # ----- 第4层：数据清洗，然后存入缓存 -----
+            # 1. 删除 MongoDB 的 _id 字段（避免 JSON 序列化报错）
             if '_id' in result:
                 del result['_id']
-
+            
+            # 2. 按标准顺序重新排列字段（让路由数据显示整齐）
+            result = order_dict(result)
+            
             self.cache = result
 
             logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据（最新开仓时间）")
