@@ -424,6 +424,11 @@ class BinanceMissingRepair:
             
             # ----- 第4层：提取数据到缓存 -----
             # MongoDB返回的已经是字典，直接使用，不需要转换！
+            
+            # 🔥 关键修复：删除 MongoDB 的 _id 字段，避免 JSON 序列化报错
+            if '_id' in result:
+                del result['_id']
+
             self.cache = result
 
             logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据（最新开仓时间）")
