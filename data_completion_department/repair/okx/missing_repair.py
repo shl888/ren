@@ -176,7 +176,7 @@ class OkxMissingRepair:
         old_info = self.current_info
         self.current_info = info  # 覆盖更新
 
-        logger.debug(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
+        logger.info(f"📨【欧易持仓缺失修复区】 门外标签更新: {old_info} → {info}")
 
         # ===== 根据标签决定开关 =====
         if info == INFO_OKX_MISSING:
@@ -215,7 +215,7 @@ class OkxMissingRepair:
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.debug("【欧易持仓缺失修复区】修复流程已在运行中")
+            logger.info("【欧易持仓缺失修复区】修复流程已在运行中")
             return
 
         self.is_running = True
@@ -250,7 +250,7 @@ class OkxMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.debug("🔄【欧易持仓缺失修复区】 修复循环开始")
+        logger.info("🔄【欧易持仓缺失修复区】 修复循环开始")
 
         while self.is_running:
             await asyncio.sleep(0)  # ✅ 循环开始让出CPU，避免长时间占用
