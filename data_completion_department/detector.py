@@ -158,7 +158,7 @@ class DataDetector:
         
         # ----- 情况a：空仓（标记价保证金为空 AND 平仓价为空）-----
         if data.get(FIELD_MARK_MARGIN) is None and data.get(FIELD_CLOSE_PRICE) is None:
-            logger.debug(f"🔍 【检测区】欧意检测到空仓: {data.get('交易所')}")
+            logger.info(f"🔍 【检测区】欧意检测到空仓: {data.get('交易所')}")
             
             # 同时推送两条独立消息
             await asyncio.gather(
@@ -174,7 +174,7 @@ class DataDetector:
         
         # ----- 情况b：持仓缺失（标记价保证金有值 AND 开仓合约名空）-----
         if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT) is None:
-            logger.debug(f"🔍 【检测区】欧意检测到持仓缺失: {data.get('交易所')}")
+            logger.info(f"🔍 【检测区】欧意检测到持仓缺失: {data.get('交易所')}")
             
             await self.scheduler.handle({
                 'info': INFO_OKX_MISSING
@@ -183,7 +183,7 @@ class DataDetector:
         
         # ----- 情况c：持仓完整（开仓合约名有值 AND 平仓时间空）-----
         if data.get(FIELD_OPEN_CONTRACT) and data.get(FIELD_CLOSE_TIME) is None:
-            logger.debug(f"🔍【检测区】 欧意检测到持仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"🔍【检测区】 欧意检测到持仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
                 'tag': TAG_COMPLETE,
@@ -193,7 +193,7 @@ class DataDetector:
         
         # ----- 情况d：平仓完整（开仓合约名有值 AND 平仓时间有值）-----
         if data.get(FIELD_OPEN_CONTRACT) and data.get(FIELD_CLOSE_TIME):
-            logger.debug(f"🔍【检测区】 欧意检测到平仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"🔍【检测区】 欧意检测到平仓完整: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
                 'tag': TAG_CLOSED_COMPLETE,  # 使用正确的常量
@@ -221,7 +221,7 @@ class DataDetector:
         
         # ----- 情况a：空仓（标记价保证金为空 AND 平仓价为空）-----
         if data.get(FIELD_MARK_MARGIN) is None and data.get(FIELD_CLOSE_PRICE) is None:
-            logger.debug(f"🔍 【检测区】币安检测到空仓: {data.get('交易所')}")
+            logger.info(f"🔍 【检测区】币安检测到空仓: {data.get('交易所')}")
             
             # 同时推送两条独立消息
             await asyncio.gather(
@@ -237,7 +237,7 @@ class DataDetector:
         
         # ----- 情况b：半成品（标记价保证金有值 AND 开仓合约名有值）-----
         if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT):
-            logger.debug(f"🔍 【检测区】币安检测到半成品: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"🔍 【检测区】币安检测到半成品: {data.get('交易所')} - {data.get(FIELD_OPEN_CONTRACT)}")
             
             await self.scheduler.handle({
                 'info': INFO_BINANCE_SEMI
@@ -246,7 +246,7 @@ class DataDetector:
         
         # ----- 情况c：持仓缺失（标记价保证金有值 AND 开仓合约名空）-----
         if data.get(FIELD_MARK_MARGIN) is not None and data.get(FIELD_OPEN_CONTRACT) is None:
-            logger.debug(f"🔍【检测区】 币安检测到持仓缺失: {data.get('交易所')}")
+            logger.info(f"🔍【检测区】 币安检测到持仓缺失: {data.get('交易所')}")
             
             await self.scheduler.handle({
                 'info': INFO_BINANCE_MISSING
