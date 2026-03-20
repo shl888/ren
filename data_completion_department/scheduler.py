@@ -22,12 +22,25 @@
 - 推数据库的数据必须保留标签，因为数据库需要根据标签决定如何存储
 - 信息标签绝对不能带数据，只推标签本身
 
+【关键设计 - 数据隔离】
+- 调度器收到的数据是一个字典对象
+- 推给大脑和推给数据库使用的是同一个数据对象的引用
+- 数据库模块会直接修改传入的数据对象（添加 id、updated_at 等字段）
+- 这会导致大脑模块收到的数据也被污染（看到不该看到的字段）
+
+【解决方案】
+- 在推送给数据库之前，创建数据的深拷贝
+- 数据库模块修改的是副本，不影响推送给大脑的原始数据
+- 确保大脑收到的数据始终保持干净（无 id、updated_at 等数据库层字段）
+
 【修正记录】
 - 2026-03-13：修正推送到大脑的数据类型为 'user_summary'（原'position'在data_manager中无对应处理）
+- 2026-03-21：修复数据污染问题，推数据库时使用深拷贝，确保大脑数据不被数据库修改影响
 ==================================================
 """
 
 import logging
+import copy
 from typing import Dict, Any
 import asyncio
 from datetime import datetime
@@ -57,6 +70,10 @@ class Scheduler:
         3. 维护数据库和修复区的引用（通过set方法注入）
 
     注意：调度器不关心数据的具体内容，只根据标签转发。
+    
+    【数据隔离保证】
+    - 推送给数据库的数据使用深拷贝，防止数据库修改污染其他模块的数据
+    - 推送给大脑的数据使用原始数据，保证数据干净（无数据库层添加的字段）
     ==================================================
     """
 
@@ -146,6 +163,15 @@ class Scheduler:
             - 持仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
             - 平仓完整 → 推大脑（去除标签） + 推数据库（保留标签）
 
+        【关键设计 - 数据隔离】
+        为了避免数据库模块修改数据时污染大脑模块收到的数据，
+        在推送给数据库时使用深拷贝创建独立副本。
+        
+        这样：
+            - 大脑模块收到的是原始数据（干净，无数据库层添加的字段）
+            - 数据库模块收到的是副本，可以随意修改（添加 id、updated_at 等）
+            - 两个模块的数据完全隔离，互不影响
+
         :param message: 包含tag和data的消息
         ==================================================
         """
@@ -161,14 +187,16 @@ class Scheduler:
         if tag in [TAG_COMPLETE, TAG_CLOSED_COMPLETE]:
             # 持仓完整 或 平仓完整：推大脑 + 推数据库
 
-            # 1. 推大脑（不带标签）
+            # 1. 推大脑（不带标签）- 使用原始数据
             await self._push_to_brain(exchange, data)
 
-            # 2. 推数据库（保留标签）
+            # 2. 推数据库（保留标签）- 使用深拷贝，避免污染大脑数据
             if self.database:
                 try:
-                    # 数据库的 handle_data 方法接收 tag 和 data
-                    await self.database.handle_data(tag, data)
+                    # 🔥 关键修复：创建深拷贝，确保数据库修改不影响大脑
+                    data_for_db = copy.deepcopy(data)
+                    await self.database.handle_data(tag, data_for_db)
+                    logger.debug(f"✅【调度区】 已推送数据库（副本）: {tag} - {exchange}")
                 except Exception as e:
                     logger.error(f"❌【调度区】 推送到数据库失败: {e}")
             else:
@@ -240,6 +268,8 @@ class Scheduler:
                 'timestamp': ...                # 时间戳
             }
 
+        注意：此方法使用原始数据（未被数据库修改的干净数据）
+
         :param exchange: 交易所名称
         :param data: 原始数据（已去除标签）
         ==================================================
@@ -256,7 +286,7 @@ class Scheduler:
             brain_message = {
                 'exchange': exchange,
                 'data_type': 'user_summary',  # 【修正】原为'position'，改为'user_summary'与data_manager匹配
-                'data': data,                   # 原始数据，不带标签
+                'data': data,                   # 原始数据，不带标签（干净，无数据库字段）
                 'timestamp': timestamp
             }
 
