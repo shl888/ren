@@ -25,10 +25,15 @@
 2. closed_positions（历史集合）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
-   - id生成：交易所_合约名_平仓时间（作为普通字段存储）
+   - id生成：交易所_合约名_平仓时间（强制使用平仓时间，确保格式统一）
    - 操作：根据id进行幂等写入（只写一次，双重保护）
    - 时间字段：created_at（首次写入时自动填充，北京时间）
    - MongoDB会自动生成 _id 字段，与业务id共存
+
+【重要设计】
+- 历史表的 id 强制使用平仓时间重新生成，不受上游数据影响
+- 即使传入的数据中带有 id，也会被删除并用平仓时间重新生成
+- 确保所有历史记录的 id 格式统一：交易所_开仓合约名_平仓时间
 
 【调用关系】
 调度器 (scheduler.py) 
@@ -50,7 +55,7 @@ import os
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta  # ✅ 新增 timedelta 用于时间转换
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
@@ -86,6 +91,10 @@ class Database:
     - 所有数据格式与原Turso版本完全一致
     - 中文字段名完美支持
     - 时间字段自动填充：updated_at（持仓表）、created_at（历史表），使用北京时间
+    
+    【id生成规则】
+    - 持仓表：交易所_开仓合约名_开仓时间（唯一标识一次开仓）
+    - 历史表：交易所_开仓合约名_平仓时间（强制重新生成，确保格式统一）
     ==================================================
     """
     
@@ -95,8 +104,6 @@ class Database:
         【MongoDB】从环境变量读取连接字符串
         """
         # ----- 第1步：从环境变量读取配置 -----
-        # 原来: TURSO_DATABASE_URL 和 TURSO_DATABASE_TOKEN
-        # 现在: MONGODB_URI = mongodb+srv://用户名:密码@集群地址/数据库名
         self.mongo_uri = os.getenv('MONGODB_URI')
         
         # ----- 第2步：验证配置是否存在 -----
@@ -259,11 +266,12 @@ class Database:
         ==================================================
         逻辑：
             - 根据 id 进行 upsert（存在则更新，不存在则插入）
+            - id 格式：交易所_开仓合约名_开仓时间
             - 唯一索引保证同一个 id 只有一条记录
             - 自动添加 updated_at 时间戳（北京时间）
         ==================================================
         """
-        # 生成id（与原逻辑完全一致）
+        # 生成id（如果不存在）
         if 'id' not in data or not data['id']:
             exchange = data.get('交易所', 'unknown')
             contract = data.get('开仓合约名', 'unknown')
@@ -310,36 +318,50 @@ class Database:
         历史区：幂等写入（根据id）
         ==================================================
         逻辑：
+            - 强制使用平仓时间重新生成 id，确保格式统一
+            - id 格式：交易所_开仓合约名_平仓时间
             - 优先：根据 id 检查是否存在，不存在才插入
             - 备选：唯一索引拦截重复插入
             - 确保同一个平仓记录只写一次
             - 自动添加 created_at 时间戳（北京时间）
+        
+        【重要】即使传入的数据中带有 id，也会被删除并用平仓时间重新生成
         ==================================================
         """
         # 创建副本，避免修改原始数据
         clean_data = data.copy()
         
+        # ===== 强制删除可能存在的旧 id =====
+        # 确保历史表使用自己的 id 格式（交易所_开仓合约名_平仓时间）
+        if 'id' in clean_data:
+            logger.debug(f"🗑️ 【数据库】历史表删除旧 id: {clean_data['id']}")
+            del clean_data['id']
+        
         # ===== 删除历史表不存在的字段 =====
-        # 历史表使用 created_at，没有 updated_at
         if 'updated_at' in clean_data:
             logger.debug(f"🗑️ 【数据库】删除历史表不存在的字段: updated_at")
             del clean_data['updated_at']
         
-        # id生成（与原逻辑完全一致）
-        if 'id' not in clean_data or not clean_data['id']:
-            exchange = clean_data.get('交易所', 'unknown')
-            contract = clean_data.get('开仓合约名', 'unknown')
-            close_time = clean_data.get('平仓时间', '')
-            clean_data['id'] = f"{exchange}_{contract}_{close_time}"
-            logger.debug(f"🔑 【数据库】历史表生成id: {clean_data['id']}")
+        # ===== 重新生成 id（使用平仓时间）=====
+        exchange = clean_data.get('交易所', 'unknown')
+        contract = clean_data.get('开仓合约名', 'unknown')
+        close_time = clean_data.get('平仓时间', '')
+        
+        # 如果平仓时间为空，不应该发生，但为了安全加上判断
+        if not close_time:
+            logger.error(f"❌ 【数据库】历史表缺少平仓时间，无法生成id: {exchange}_{contract}")
+            # 使用当前时间作为降级方案
+            close_time = get_beijing_time()
+        
+        clean_data['id'] = f"{exchange}_{contract}_{close_time}"
+        logger.debug(f"🔑 【数据库】历史表生成新 id: {clean_data['id']}")
         
         # 🔥 添加创建时间戳（北京时间，只在首次写入时记录）
         clean_data['created_at'] = get_beijing_time()
         
         record_id = clean_data['id']
-        exchange = clean_data.get('交易所', 'unknown')
-        contract = clean_data.get('开仓合约名', 'unknown')
-        close_time = clean_data.get('平仓时间', 'unknown')
+        exchange_name = clean_data.get('交易所', 'unknown')
+        contract_name = clean_data.get('开仓合约名', 'unknown')
         
         db = await self._get_db()
         loop = asyncio.get_event_loop()
@@ -360,7 +382,7 @@ class Database:
                 None,
                 lambda: self._closed.insert_one(clean_data)
             )
-            logger.debug(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+            logger.debug(f"✅ 【数据库】成功写入历史区{exchange_name}数据 - {contract_name} 平仓时间:{close_time}")
         except DuplicateKeyError:
             logger.debug(f"⏭️ 【数据库】历史区已存在记录（唯一索引拦截），跳过写入: {record_id}")
             return
@@ -488,7 +510,7 @@ class Database:
                 lambda: self._client.admin.command('ping')
             )
             
-            logger.info("✅ 【数据库】连接测试成功")
+            logger.debug("✅ 【数据库】连接测试成功")
             return True
                 
         except Exception as e:
