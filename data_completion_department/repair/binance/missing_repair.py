@@ -212,7 +212,7 @@ class BinanceMissingRepair:
         old_info = self.current_info
         self.current_info = info
 
-        logger.info(f"📨【币安修复区】【持仓缺失修复】 门外标签更新: {old_info} → {info}")
+        logger.debug(f"📨【币安修复区】【持仓缺失修复】 门外标签更新: {old_info} → {info}")
 
         if info == INFO_BINANCE_MISSING:
             await self._start_repair()
@@ -226,7 +226,7 @@ class BinanceMissingRepair:
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.info("【币安修复区】【持仓缺失修复】修复流程已在运行中")
+            logger.debug("【币安修复区】【持仓缺失修复】修复流程已在运行中")
             return
 
         self.is_running = True
@@ -261,13 +261,13 @@ class BinanceMissingRepair:
             - 如果修复过程出错，等待5秒后重试
         ==================================================
         """
-        logger.info("🔄【币安修复区】【持仓缺失修复】 修复循环开始")
+        logger.debug("🔄【币安修复区】【持仓缺失修复】 修复循环开始")
 
         while self.is_running:
             await asyncio.sleep(0)  # ✅ 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_BINANCE_MISSING:
-                    logger.info("【币安修复区】【持仓缺失修复】门外标签已不是币安持仓缺失，停止修复循环")
+                    logger.debug("【币安修复区】【持仓缺失修复】门外标签已不是币安持仓缺失，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -506,23 +506,23 @@ class BinanceMissingRepair:
 
         if not has_history and not has_new:
             # 情况A：无历史 + 无新结算
-            logger.info(" 【币安修复区】【持仓缺失修复】  情况A：无历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况A：无历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         elif not has_history and has_new:
             # 情况B：无历史 + 有新结算
-            logger.info(" 【币安修复区】【持仓缺失修复】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况B：无历史 + 有新结算，更新4个资金费字段后跳到第4步")
             self._update_funding_fields(snapshot_data)
             return 'skip_to_step4'
 
         elif has_history and not has_new:
             # 情况C：有历史 + 无新结算
-            logger.info(" 【币安修复区】【持仓缺失修复】  情况C：有历史 + 无新结算，直接跳到第4步")
+            logger.debug(" 【币安修复区】【持仓缺失修复】  情况C：有历史 + 无新结算，直接跳到第4步")
             return 'skip_to_step4'
 
         else:  # has_history and has_new
             # 情况D：有历史 + 有新结算
-            logger.info("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
+            logger.debug("  【币安修复区】【持仓缺失修复】 情况D：有历史 + 有新结算，进入第3步资金费融合")
             return 'do_fusion'
 
     async def _step3_funding_fusion(self):
@@ -623,7 +623,7 @@ class BinanceMissingRepair:
                 logger.debug(f"✅ 更新平仓字段 {field}: {snapshot_data[field]}")
                 update_count += 1
 
-        logger.info(f"📊 平仓字段提取完成，更新 {update_count} 个字段")
+        logger.debug(f"📊 平仓字段提取完成，更新 {update_count} 个字段")
 
     # ==================== 辅助函数：安全转换 ====================
     
@@ -990,7 +990,7 @@ class BinanceMissingRepair:
         })
 
         contract = data_copy.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅ 【币安修复区】【持仓缺失修复】已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.debug(f"✅ 【币安修复区】【持仓缺失修复】已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 

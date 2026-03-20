@@ -250,7 +250,7 @@ class BinanceSemiRepair:
             await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
             try:
                 if self.current_info != INFO_BINANCE_SEMI:
-                    logger.info("【币安修复区】【半成品修复】门外标签已不是币安半成品，停止修复循环")
+                    logger.debug("【币安修复区】【半成品修复】门外标签已不是币安半成品，停止修复循环")
                     await self._stop_repair()
                     break
 
@@ -670,7 +670,7 @@ class BinanceSemiRepair:
         })
 
         contract = merged_data.get(FIELD_OPEN_CONTRACT, 'unknown')
-        logger.info(f"✅【币安修复区】【半成品修复】 已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
+        logger.debug(f"✅【币安修复区】【半成品修复】 已推送{tag}数据: {EXCHANGE_BINANCE} - {contract}")
 
     # ==================== 辅助方法 ====================
 
