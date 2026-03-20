@@ -2,34 +2,190 @@
 修复区 - 模块入口
 ==================================================
 【文件职责】
-这个文件是修复区的根目录入口，负责导出所有修复类，
-方便外部模块（如调度器）导入。
+这个文件是修复区的根目录入口，负责：
+1. 导出所有修复类，方便外部模块（如调度器）导入
+2. 提供修复区共用的工具函数（如字典字段排序）
 
 【导出内容】
 - BinanceRepairArea    - 币安修复区入口（统一接收数据和标签）
 - BinanceSemiRepair    - 币安半成品修复类
 - BinanceMissingRepair - 币安持仓缺失修复类
 - OkxMissingRepair     - 欧意持仓缺失修复类
+- order_dict           - 字典字段排序函数（工具函数）
+- STANDARD_FIELD_ORDER - 标准字段顺序列表（常量）
 
 【使用示例】
+    # 导入修复类
     from data_completion_department.repair import (
         BinanceRepairArea,
-        BinanceSemiRepair,
         BinanceMissingRepair,
-        OkxMissingRepair
+        OkxMissingRepair,
+        order_dict  # 导入工具函数
     )
     
-    # 创建币安修复区入口
-    binance_repair = BinanceRepairArea(scheduler)
+    # 在修复类中使用
+    data_copy = order_dict(self.cache.copy())
 ==================================================
 """
 
 from .binance import BinanceRepairArea, BinanceSemiRepair, BinanceMissingRepair
 from .okx import OkxMissingRepair
 
+# ==================== 工具函数：字典字段排序 ====================
+
+from typing import Dict
+
+# ----- 标准字段顺序 -----
+"""
+标准字段顺序定义
+用途：让输出的数据字段顺序整齐，便于查看路由数据
+
+为什么需要这个？
+    - MongoDB 存储的字段顺序是随机的（内部优化）
+    - 修复区读取数据后，字段顺序不固定
+    - 路由接口看到的数据字段顺序混乱，看着别扭
+    - 这个函数统一排序，让输出更整齐
+
+注意：
+    - 这个顺序不影响任何业务逻辑
+    - 只影响输出的显示顺序
+    - 只用在修复区推送数据前
+"""
+
+STANDARD_FIELD_ORDER = [
+    # ----- 基础标识 -----
+    "id",                           # 业务ID（交易所_合约名_时间）
+    "交易所",                       # 交易所名称
+    
+    # ----- 账户信息 -----
+    "账户资产额",                   # 当前账户总资产
+    "资产币种",                     # 账户资产币种    
+    
+    # ----- 保证金模式 -----
+    "保证金模式",                   # cross / isolated
+    "保证金币种",                   # USDT / BTC    
+    
+    # ----- 开仓核心信息 -----
+    "开仓合约名",                   # 合约名，如 BTCUSDT
+    "开仓方向",                     # LONG / SHORT
+    "开仓执行方式",                 # MARKET / LIMIT    
+    "开仓价",                       # 开仓价格
+    "持仓币数",                     # 持仓数量（币）
+    "持仓张数",                     # 持仓数量（张）
+    "合约面值",                     # 每张合约的面值
+    "开仓价仓位价值",               # 开仓价 * 持仓币数
+    "杠杆",                         # 杠杆倍数
+    "开仓保证金",                   # 开仓保证金
+    "开仓手续费",                   # 开仓手续费金额
+    "开仓手续费币种",               # 开仓手续费币种
+    "开仓时间",                     # 开仓时间戳
+
+    
+    # ----- 标记价数据 -----
+    "标记价",                       # 当前标记价格
+    "标记价涨跌盈亏幅",             # (标记价-开仓价)/开仓价*100
+    "标记价保证金",                 # 基于标记价计算的保证金
+    "标记价仓位价值",               # 标记价 * 持仓币数
+    "标记价浮盈",                   # 基于标记价的浮动盈亏
+    "标记价浮盈百分比",             # 基于保证金的盈亏百分比
+    
+    # ----- 最新价数据 -----
+    "最新价",                       # 当前最新成交价
+    "最新价涨跌盈亏幅",             # (最新价-开仓价)/开仓价*100
+    "最新价保证金",                 # 基于最新价计算的保证金
+    "最新价仓位价值",               # 最新价 * 持仓币数
+    "最新价浮盈",                   # 基于最新价的浮动盈亏
+    "最新价浮盈百分比",             # 基于保证金的盈亏百分比
+    
+
+    
+    # ----- 止损止盈 -----
+    "止损触发方式",                 # MARK_PRICE / CONTRACT_PRICE
+    "止损触发价",                   # 止损触发价格
+    "止损幅度",                     # 止损幅度百分比
+    "止盈触发方式",                 # MARK_PRICE / CONTRACT_PRICE
+    "止盈触发价",                   # 止盈触发价格
+    "止盈幅度",                     # 止盈幅度百分比
+
+    # ----- 资金费数据 -----
+    "本次资金费",                   # 最近一次资金费
+    "累计资金费",                   # 累计资金费总和
+    "资金费结算次数",               # 资金费结算次数
+    "平均资金费率",                 # 平均资金费率
+    "本次资金费结算时间",           # 最近一次结算时间
+    
+    # ----- 平仓信息（有值表示已平仓）-----
+    "平仓执行方式",                 # 平仓执行方式
+    "平仓价",                       # 平仓价格
+    "平仓价涨跌盈亏幅",             # 平仓价相对开仓价的涨跌幅
+    "平仓价仓位价值",               # 平仓价 * 持仓币数
+    "平仓手续费",                   # 平仓手续费金额
+    "平仓手续费币种",               # 平仓手续费币种
+    "平仓收益",                     # 平仓盈亏金额
+    "平仓收益率",                   # 平仓收益相对于保证金的百分比
+    "平仓时间",                     # 平仓时间戳
+    
+    # ----- 系统字段 -----
+    "updated_at",                   # 最后更新时间（持仓表有，历史表没有）
+    "created_at",                   # 创建时间（历史表有，持仓表没有）
+]
+
+
+def order_dict(data: Dict) -> Dict:
+    """
+    按标准顺序重新排列字典字段
+    
+    ==================================================
+    【函数作用】
+    将字典的字段按 STANDARD_FIELD_ORDER 定义的顺序重新排列，
+    不在标准顺序中的字段放在最后。
+    
+    【为什么需要这个函数？】
+    - MongoDB 存储的字段顺序是随机的（内部优化）
+    - 修复区读取数据后，字段顺序不固定
+    - 路由接口看到的数据字段顺序混乱，看着别扭
+    - 这个函数统一排序，让输出更整齐
+    
+    【使用场景】
+    修复区在推送数据前调用，例如：
+    
+        from data_completion_department.repair import order_dict
+        
+        # 在 _step6_push_complete 或 _step7_extract_and_push 中
+        data_copy = self.cache.copy()
+        data_copy = order_dict(data_copy)  # 重新排序
+        await self.scheduler.handle({'tag': tag, 'data': data_copy})
+    
+    【重要说明】
+    - 这个函数只影响字段显示顺序，不影响任何业务逻辑
+    - 字段值保持不变
+    - 只用在输出前，不修改原始缓存数据
+    
+    :param data: 原始字典
+    :return: 按标准顺序排列的新字典
+    ==================================================
+    """
+    ordered = {}
+    
+    # 第一步：按标准顺序添加字段
+    for key in STANDARD_FIELD_ORDER:
+        if key in data:
+            ordered[key] = data[key]
+    
+    # 第二步：把不在标准顺序里的字段加到最后
+    # 这样即使新增了字段，也不会丢失
+    for key, value in data.items():
+        if key not in ordered:
+            ordered[key] = value
+    
+    return ordered
+
+
 __all__ = [
-    'BinanceRepairArea',      # 币安修复区入口（新增！）
+    'BinanceRepairArea',      # 币安修复区入口
     'BinanceSemiRepair',      # 币安半成品修复
     'BinanceMissingRepair',   # 币安持仓缺失修复
-    'OkxMissingRepair'        # 欧意持仓缺失修复
+    'OkxMissingRepair',       # 欧意持仓缺失修复
+    'order_dict',             # 字典字段排序函数
+    'STANDARD_FIELD_ORDER',   # 标准字段顺序列表
 ]
