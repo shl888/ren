@@ -212,7 +212,7 @@ class BinanceMissingRepair:
         old_info = self.current_info
         self.current_info = info
 
-        logger.debug(f"📨【币安修复区】【持仓缺失修复】 门外标签更新: {old_info} → {info}")
+        logger.info(f"📨【币安修复区】【持仓缺失修复】 门外标签更新: {old_info} → {info}")
 
         if info == INFO_BINANCE_MISSING:
             await self._start_repair()
@@ -226,7 +226,7 @@ class BinanceMissingRepair:
     async def _start_repair(self):
         """启动修复流程（循环运行）"""
         if self.is_running:
-            logger.debug("【币安修复区】【持仓缺失修复】修复流程已在运行中")
+            logger.info("【币安修复区】【持仓缺失修复】修复流程已在运行中")
             return
 
         self.is_running = True
