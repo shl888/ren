@@ -17,14 +17,15 @@
    - 作用：存储当前正在持仓的数据
    - 特点：覆盖更新，每个交易所只能有一条数据
    - id生成：交易所_合约名_开仓时间（作为普通字段存储）
-   - 幂等性：根据id判断首次写入还是静默更新
+   - 操作：根据id进行upsert（存在则更新，不存在则插入）
+   - 清理：根据交易所字段删除该交易所所有数据
    - MongoDB会自动生成 _id 字段，与业务id共存
 
 2. closed_positions（历史集合）
    - 作用：永久保存所有已平仓记录
    - 特点：追加写入，永不删除，永不覆盖
    - id生成：交易所_合约名_平仓时间（作为普通字段存储）
-   - 幂等性：根据id去重，避免重复写入
+   - 操作：根据id进行幂等写入（只写一次，双重保护）
    - MongoDB会自动生成 _id 字段，与业务id共存
 
 【调用关系】
@@ -96,11 +97,11 @@ class Database:
         self._active = None  # active_positions 集合
         self._closed = None  # closed_positions 集合
         
-        # ----- 第5步：初始化日志记录集合 -----
+        # ----- 初始化日志记录集合 -----
         self._logged_active_ids = set()
         logger.info("✅ 【数据库】日志控制集合初始化完成")
         
-        # ----- 第6步：初始化最后日志时间记录 -----
+        # ----- 初始化最后日志时间记录 -----
         self._last_log_time = 0
         self._log_interval = 60
         logger.info(f"✅ 【数据库】日志时间控制初始化完成，间隔{self._log_interval}秒")
@@ -158,14 +159,14 @@ class Database:
         - 验证连接是否成功
         ==================================================
         """
-        # ----- 第3步：测试数据库连接 -----
+        # ----- 测试数据库连接 -----
         try:
             db = await self._get_db()
             logger.info("✅ 【数据库】连接测试成功")
         except Exception as e:
             raise ConnectionError(f"❌ 【数据库】无法连接到MongoDB: {e}")
         
-        # ----- 第4步：初始化索引 -----
+        # ----- 初始化索引 -----
         await self._init_indexes()
         
         logger.info("✅ 【数据库】异步初始化完成")
@@ -234,12 +235,11 @@ class Database:
     
     async def _save_active_position(self, data: Dict[str, Any]):
         """
-        持仓区：覆盖更新（日志控制版本）
+        持仓区：覆盖更新（根据id）
         ==================================================
-        【MongoDB迁移】
-        - 使用 update_one with upsert=True 实现覆盖更新
-        - 根据id判断是否存在，用于日志控制
-        - 数据格式与原Turso版本完全一致
+        逻辑：
+            - 根据 id 进行 upsert（存在则更新，不存在则插入）
+            - 唯一索引保证同一个 id 只有一条记录
         ==================================================
         """
         # 生成id（与原逻辑完全一致）
@@ -254,11 +254,10 @@ class Database:
         exchange = data.get('交易所', 'unknown')
         contract = data.get('开仓合约名', 'unknown')
         
-        # 检查是否首次写入（用于日志控制）
         db = await self._get_db()
         loop = asyncio.get_event_loop()
         
-        # 查询记录是否存在
+        # 检查是否首次写入（用于日志控制）
         exists = await loop.run_in_executor(
             None,
             lambda: self._active.find_one({"id": record_id}) is not None
@@ -284,15 +283,12 @@ class Database:
     
     async def _insert_closed_position(self, data: Dict[str, Any]):
         """
-        历史区：追加写入（带幂等性保护）
+        历史区：幂等写入（根据id）
         ==================================================
-        【重要修复】过滤掉历史表不存在的字段
-        历史表没有 updated_at 字段，需要删除
-        
-        【MongoDB迁移】
-        - 先检查id是否存在，实现幂等性
-        - 不存在才插入
-        - 数据格式与原Turso版本完全一致
+        逻辑：
+            - 优先：根据 id 检查是否存在，不存在才插入
+            - 备选：唯一索引拦截重复插入
+            - 确保同一个平仓记录只写一次
         ==================================================
         """
         # 创建副本，避免修改原始数据
@@ -313,11 +309,14 @@ class Database:
             logger.debug(f"🔑 【数据库】历史表生成id: {clean_data['id']}")
         
         record_id = clean_data['id']
+        exchange = clean_data.get('交易所', 'unknown')
+        contract = clean_data.get('开仓合约名', 'unknown')
+        close_time = clean_data.get('平仓时间', 'unknown')
         
-        # 幂等性检查
         db = await self._get_db()
         loop = asyncio.get_event_loop()
         
+        # ===== 第一层保护：代码层幂等性检查 =====
         exists = await loop.run_in_executor(
             None,
             lambda: self._closed.find_one({"id": record_id}) is not None
@@ -327,16 +326,16 @@ class Database:
             logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
-        # 插入新记录
-        await loop.run_in_executor(
-            None,
-            lambda: self._closed.insert_one(clean_data)
-        )
-        
-        exchange = clean_data.get('交易所', 'unknown')
-        contract = clean_data.get('开仓合约名', 'unknown')
-        close_time = clean_data.get('平仓时间', 'unknown')
-        logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+        # ===== 第二层保护：数据库层唯一索引拦截 =====
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: self._closed.insert_one(clean_data)
+            )
+            logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+        except DuplicateKeyError:
+            logger.info(f"⏭️ 【数据库】历史区已存在记录（唯一索引拦截），跳过写入: {record_id}")
+            return
     
     async def _check_closed_exists(self, record_id: str) -> bool:
         """
@@ -345,9 +344,6 @@ class Database:
         用于历史表的幂等性保护，避免重复写入。
         查询集合: closed_positions（历史集合）
         
-        调用场景：
-            _insert_closed_position() 在写入前调用，判断是否需要跳过
-            
         :param record_id: 记录ID (格式: 交易所_合约名_平仓时间)
         :return: 
             True = 记录已存在（跳过写入）
@@ -380,9 +376,6 @@ class Database:
         用于持仓表的日志控制，判断是首次写入还是覆盖更新。
         查询集合: active_positions（持仓集合）
         
-        调用场景：
-            _save_active_position() 在写入前调用，决定是否打印"首次写入"日志
-            
         :param record_id: 记录ID (格式: 交易所_合约名_开仓时间)
         :return: 
             True = 记录已存在（覆盖更新，不打印首次日志）
@@ -410,10 +403,11 @@ class Database:
     
     async def _delete_active_position(self, exchange: str):
         """
-        清理持仓区 - 只清理指定交易所
+        清理持仓区 - 根据交易所删除所有数据
         ==================================================
-        【MongoDB迁移】
-        使用 delete_many 删除所有符合条件的数据
+        逻辑：
+            - 删除该交易所的所有持仓记录
+            - 防止遗漏，确保完全清理
         ==================================================
         """
         if not exchange:
@@ -479,10 +473,20 @@ class Database:
         """
         初始化数据库索引
         ==================================================
-        【MongoDB迁移】
-        - MongoDB的集合会在第一次插入数据时自动创建
-        - 这里只创建索引，提高查询性能
-        - 索引与原Turso版本保持一致
+        两个集合的 id 字段都设为唯一索引：
+            - 持仓集合：防止同一个开仓记录重复
+            - 历史集合：防止同一个平仓记录重复写入
+        
+        索引列表：
+            持仓集合：
+                - id: 唯一索引（保证业务id不重复）
+                - 交易所: 普通索引（用于按交易所查询和删除）
+                - 开仓合约名: 普通索引（用于查询）
+            
+            历史集合：
+                - id: 唯一索引（防止重复写入）
+                - 交易所: 普通索引
+                - 平仓时间: 普通索引（用于时间范围查询）
         ==================================================
         """
         try:
@@ -493,15 +497,15 @@ class Database:
             db = await self._get_db()
             loop = asyncio.get_event_loop()
             
-            # ----- 持仓集合索引 -----
-            # 1. id唯一索引（保证业务id不重复）
+            # ==================== 持仓集合索引 ====================
+            # 1. id 唯一索引（防止重复开仓记录）
             await loop.run_in_executor(
                 None,
                 lambda: self._active.create_index("id", unique=True, background=True)
             )
             logger.debug("📝 【数据库】持仓集合 id 唯一索引创建完成")
             
-            # 2. 交易所索引（用于按交易所查询）
+            # 2. 交易所索引（用于按交易所查询和删除）
             await loop.run_in_executor(
                 None,
                 lambda: self._active.create_index("交易所", background=True)
@@ -515,13 +519,13 @@ class Database:
             )
             logger.debug("📝 【数据库】持仓集合 开仓合约名 索引创建完成")
             
-            # ----- 历史集合索引 -----
-            # 1. id索引（用于幂等性检查）
+            # ==================== 历史集合索引 ====================
+            # 1. id 唯一索引（防止重复写入平仓记录）
             await loop.run_in_executor(
                 None,
-                lambda: self._closed.create_index("id", unique=False, background=True)
+                lambda: self._closed.create_index("id", unique=True, background=True)
             )
-            logger.debug("📝 【数据库】历史集合 id 索引创建完成")
+            logger.debug("📝 【数据库】历史集合 id 唯一索引创建完成")
             
             # 2. 交易所索引
             await loop.run_in_executor(
@@ -541,7 +545,7 @@ class Database:
             collections_after = await self._get_collections()
             logger.debug(f"📋 【数据库】初始化后数据库中的集合: {collections_after}")
             
-            logger.info("✅ 【数据库】MongoDB索引初始化完成")
+            logger.info("✅ 【数据库】MongoDB索引初始化完成（id字段已设为唯一）")
             
         except Exception as e:
             logger.error(f"❌ 【数据库】索引初始化失败: {e}")
