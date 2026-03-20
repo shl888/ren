@@ -92,7 +92,7 @@ from ...constants import (
 )
 
 # 导入工具函数 - 字典排序
-from .. import order_dict
+from ..utils import order_dict
 
 logger = logging.getLogger(__name__)
 
