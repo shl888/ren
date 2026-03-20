@@ -414,8 +414,14 @@ class OkxMissingRepair:
             
             # ----- 第4层：提取数据到缓存 -----
             # MongoDB返回的已经是字典，直接使用，不需要转换！
-            self.cache = result
+            
 
+            # 🔥 关键修复：删除 MongoDB 的 _id 字段，避免 JSON 序列化报错
+            if '_id' in result:
+                del result['_id']
+
+            self.cache = result
+            
             logger.info(f"✅【欧易持仓缺失修复区】 第1步：成功读取到欧意数据（最新开仓时间）")
             logger.info(f"   交易所: {self.cache.get(FIELD_EXCHANGE)}")
             logger.info(f"   开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
