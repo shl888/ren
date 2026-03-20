@@ -37,7 +37,7 @@
 - 查询方式从 SQL 改为直接字典查询
 - 连接方式从 aiohttp 改为 pymongo（按需连接，用完即弃）
 - 结果处理从 _row_to_dict() 转换改为直接使用（MongoDB返回就是字典）
-- 删除了 _query_database() 和 _row_to_dict() 方法
+- 读取逻辑优化：按开仓时间倒序取最新一条，防止残留数据干扰
 ==================================================
 """
 
@@ -340,11 +340,9 @@ class BinanceMissingRepair:
             2. 如果有缓存，直接使用，不需要连接数据库
             3. 如果没缓存，才去连接MongoDB读取
         
-        【5层检查】
-            第1层：是否拿到环境变量
-            第2层：MongoDB连接是否成功
-            第3层：查询币安数据
-            第4层：提取数据到缓存
+        【读取逻辑优化】
+        - 按开仓时间倒序排序，取最新一条数据
+        - 防止平仓失败时残留的旧数据干扰修复流程
         ==================================================
         """
         # ----- 第1层：检查缓存 -----
@@ -387,11 +385,19 @@ class BinanceMissingRepair:
             db = client["trading_db"]
             collection = db["active_positions"]
             
-            # 查询币安数据（尝试不同写法）
-            result = await loop.run_in_executor(
+            # ✅ 查询币安数据，按开仓时间倒序取最新一条
+            # 防止平仓失败时残留的旧数据干扰修复流程
+            cursor = await loop.run_in_executor(
                 None,
-                lambda: collection.find_one({"交易所": "binance"})
+                lambda: collection.find({"交易所": "binance"}).sort("开仓时间", -1).limit(1)
             )
+            
+            results = await loop.run_in_executor(
+                None,
+                lambda: list(cursor)
+            )
+            
+            result = results[0] if results else None
             
             # 如果没有找到，尝试其他可能的交易所名称
             if not result:
@@ -399,11 +405,16 @@ class BinanceMissingRepair:
                 test_exchanges = ['BINANCE', 'Binance', '币安']
                 for test_exchange in test_exchanges:
                     await asyncio.sleep(0)
-                    result = await loop.run_in_executor(
+                    cursor = await loop.run_in_executor(
                         None,
-                        lambda: collection.find_one({"交易所": test_exchange})
+                        lambda: collection.find({"交易所": test_exchange}).sort("开仓时间", -1).limit(1)
                     )
-                    if result:
+                    results = await loop.run_in_executor(
+                        None,
+                        lambda: list(cursor)
+                    )
+                    if results:
+                        result = results[0]
                         logger.debug(f"✅【币安修复区】【持仓缺失修复】 找到数据！交易所字段实际为: {test_exchange}")
                         break
             
@@ -415,13 +426,13 @@ class BinanceMissingRepair:
             # MongoDB返回的已经是字典，直接使用，不需要转换！
             self.cache = result
 
-            logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据")
+            logger.info(f"✅【币安修复区】【持仓缺失修复】 第1步：成功读取到币安数据（最新开仓时间）")
             logger.info(f"   交易所: {self.cache.get(FIELD_EXCHANGE)}")
             logger.info(f"   开仓合约名: {self.cache.get(FIELD_OPEN_CONTRACT)}")
+            logger.info(f"   开仓时间: {self.cache.get('开仓时间')}")
             logger.info(f"   ID: {self.cache.get('id')}")
             
             # 打印关键字段
-            logger.debug(f"   开仓时间: {self.cache.get('开仓时间')}")
             logger.debug(f"   开仓价: {self.cache.get(FIELD_OPEN_PRICE)}")
             logger.debug(f"   持仓张数: {self.cache.get(FIELD_POSITION_CONTRACTS)}")
             logger.debug(f"   累计资金费: {self.cache.get(FIELD_FUNDING_TOTAL)}")
