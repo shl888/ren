@@ -19,6 +19,7 @@
    - id生成：交易所_合约名_开仓时间（作为普通字段存储）
    - 操作：根据id进行upsert（存在则更新，不存在则插入）
    - 清理：根据交易所字段删除该交易所所有数据
+   - 时间字段：updated_at（每次写入/更新时自动填充）
    - MongoDB会自动生成 _id 字段，与业务id共存
 
 2. closed_positions（历史集合）
@@ -26,6 +27,7 @@
    - 特点：追加写入，永不删除，永不覆盖
    - id生成：交易所_合约名_平仓时间（作为普通字段存储）
    - 操作：根据id进行幂等写入（只写一次，双重保护）
+   - 时间字段：created_at（首次写入时自动填充）
    - MongoDB会自动生成 _id 字段，与业务id共存
 
 【调用关系】
@@ -40,6 +42,7 @@ MongoDB Atlas数据库
 2. 连接方式从 aiohttp + SQL 改为 pymongo + run_in_executor
 3. 不再需要SQL语句，直接操作Python字典
 4. 数据格式完全不变，字段名、字段值原样存储
+5. 时间字段自动填充：updated_at（持仓表）、created_at（历史表）
 ==================================================
 """
 
@@ -47,6 +50,7 @@ import os
 import asyncio
 import logging
 import time
+from datetime import datetime  # ✅ 新增：用于生成时间戳
 from typing import Dict, Any, List, Optional
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError, ConnectionFailure
@@ -66,6 +70,7 @@ class Database:
     - 使用 run_in_executor 将同步的pymongo操作包装成异步
     - 所有数据格式与原Turso版本完全一致
     - 中文字段名完美支持
+    - 时间字段自动填充：updated_at（持仓表）、created_at（历史表）
     ==================================================
     """
     
@@ -240,6 +245,7 @@ class Database:
         逻辑：
             - 根据 id 进行 upsert（存在则更新，不存在则插入）
             - 唯一索引保证同一个 id 只有一条记录
+            - 自动添加 updated_at 时间戳
         ==================================================
         """
         # 生成id（与原逻辑完全一致）
@@ -249,6 +255,9 @@ class Database:
             open_time = data.get('开仓时间', '')
             data['id'] = f"{exchange}_{contract}_{open_time}"
             logger.debug(f"🔑 【数据库】持仓表生成id: {data['id']}")
+        
+        # 🔥 添加更新时间戳（每次写入/更新都刷新）
+        data['updated_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         record_id = data['id']
         exchange = data.get('交易所', 'unknown')
@@ -289,6 +298,7 @@ class Database:
             - 优先：根据 id 检查是否存在，不存在才插入
             - 备选：唯一索引拦截重复插入
             - 确保同一个平仓记录只写一次
+            - 自动添加 created_at 时间戳
         ==================================================
         """
         # 创建副本，避免修改原始数据
@@ -307,6 +317,9 @@ class Database:
             close_time = clean_data.get('平仓时间', '')
             clean_data['id'] = f"{exchange}_{contract}_{close_time}"
             logger.debug(f"🔑 【数据库】历史表生成id: {clean_data['id']}")
+        
+        # 🔥 添加创建时间戳（只在首次写入时记录）
+        clean_data['created_at'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         record_id = clean_data['id']
         exchange = clean_data.get('交易所', 'unknown')
