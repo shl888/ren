@@ -216,7 +216,7 @@ class Database:
                 return
             
             if tag == '平仓完整':
-                logger.info(f"📦 【数据库】收到平仓完整数据: {exchange}")
+                logger.debug(f"📦 【数据库】收到平仓完整数据: {exchange}")
                 await self._handle_closed(data, exchange)
                 
             elif tag == '持仓完整':
@@ -226,7 +226,7 @@ class Database:
                 time_since_last_log = current_time - self._last_log_time
                 
                 if time_since_last_log >= self._log_interval:
-                    logger.info(f"📦 【数据库】收到持仓完整数据: {exchange} - {contract}")
+                    logger.debug(f"📦 【数据库】收到持仓完整数据: {exchange} - {contract}")
                     self._last_log_time = current_time
                 else:
                     logger.debug(f"📦 【数据库】收到持仓完整数据: {exchange} - {contract} (已抑制)")
@@ -245,7 +245,7 @@ class Database:
         """处理平仓完整数据"""
         await self._insert_closed_position(data)
         await self._delete_active_position(exchange)
-        logger.info(f"✅ 【数据库】平仓完整处理完成: {exchange}")
+        logger.debug(f"✅ 【数据库】平仓完整处理完成: {exchange}")
     
     async def _handle_active(self, data: Dict[str, Any]):
         """处理持仓完整数据"""
@@ -299,7 +299,7 @@ class Database:
         
         # 日志控制
         if not exists:
-            logger.info(f"✅ 【数据库】成功写入持仓区{exchange}数据 - {contract}（首次）")
+            logger.debug(f"✅ 【数据库】成功写入持仓区{exchange}数据 - {contract}（首次）")
             self._logged_active_ids.add(record_id)
         else:
             # 抑制重复日志，只打印debug
@@ -351,7 +351,7 @@ class Database:
         )
         
         if exists:
-            logger.info(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
+            logger.debug(f"⏭️ 【数据库】历史区已存在记录，跳过写入: {record_id}")
             return
         
         # ===== 第二层保护：数据库层唯一索引拦截 =====
@@ -360,9 +360,9 @@ class Database:
                 None,
                 lambda: self._closed.insert_one(clean_data)
             )
-            logger.info(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
+            logger.debug(f"✅ 【数据库】成功写入历史区{exchange}数据 - {contract} 平仓时间:{close_time}")
         except DuplicateKeyError:
-            logger.info(f"⏭️ 【数据库】历史区已存在记录（唯一索引拦截），跳过写入: {record_id}")
+            logger.debug(f"⏭️ 【数据库】历史区已存在记录（唯一索引拦截），跳过写入: {record_id}")
             return
     
     async def _check_closed_exists(self, record_id: str) -> bool:
@@ -450,7 +450,7 @@ class Database:
             lambda: self._active.delete_many({"交易所": exchange})
         )
         
-        logger.info(f"✅ 【数据库】成功清除持仓区{exchange}数据，删除了{result.deleted_count}条")
+        logger.debug(f"✅ 【数据库】成功清除持仓区{exchange}数据，删除了{result.deleted_count}条")
     
     # ==================== 集合查询方法（用于兼容原代码）====================
     
