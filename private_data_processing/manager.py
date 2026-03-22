@@ -6,6 +6,7 @@ import logging
 import asyncio
 import threading
 import time
+import sys  # 🔴 新增：用于底层输出
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -29,16 +30,15 @@ class PrivateDataProcessor:
     def __init__(self):
         if not self._initialized:
             self.memory_store = {'private_data': {}}
-            self._lock = threading.Lock()  # 添加线程锁
+            self._lock = threading.Lock()
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
             
-            # ===== 初始化并启动调度器 =====
             self.scheduler = get_scheduler()
             self._start_scheduler()
     
     def _start_scheduler(self):
-        """启动调度器（在模块初始化时立即启动）"""
+        """启动调度器"""
         try:
             loop = asyncio.get_running_loop()
             asyncio.create_task(self.scheduler.start())
@@ -48,7 +48,7 @@ class PrivateDataProcessor:
             self._scheduler_delayed_start = True
     
     async def _ensure_scheduler_started(self):
-        """确保调度器已启动（用于延迟启动的情况）"""
+        """确保调度器已启动"""
         if hasattr(self, '_scheduler_delayed_start') and self._scheduler_delayed_start:
             await self.scheduler.start()
             self._scheduler_delayed_start = False
@@ -58,9 +58,7 @@ class PrivateDataProcessor:
     def _binance_delayed_delete_sync(self, keys: List[str], symbol: str):
         """
         同步版：5秒后删除该symbol所有当前存在的key（币安使用）
-        
-        🔴 关键修复：使用 print 代替 logger，避免异步日志死锁
-        因为清理线程是同步线程，logger.info 可能阻塞导致死锁
+        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免异步日志死锁
         """
         try:
             time.sleep(5)
@@ -72,57 +70,49 @@ class PrivateDataProcessor:
                     return
                     
                 classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
-                # 获取当前symbol相关的所有key
                 keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
             
-            # ===== 如果没有需要删除的，直接返回 =====
             if not keys_to_delete:
                 return
             
             # ===== 第2步：再次获取锁执行删除操作 =====
             deleted_count = 0
             with self._lock:
-                # 重新获取classified，防止被其他线程修改
                 classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
                 for k in keys_to_delete:
-                    # 再次检查key是否存在（可能已被其他线程删除）
                     if k in classified:
                         del classified[k]
                         deleted_count += 1
-                        # 让出CPU时间片
                         time.sleep(0)
             
             # ===== 第3步：锁完全释放后才写日志 =====
-            # 🔴 关键：用 print 代替 logger，避免死锁
+            # 🔴 关键：用 sys.stdout.write 代替 logger，避免死锁
             if deleted_count > 0:
-                print(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {deleted_count}类", flush=True)
-                print(f"⏰【私人数据处理】 [币安订单] 清理线程完成: {symbol}", flush=True)
+                sys.stdout.write(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {deleted_count}类\n")
+                sys.stdout.flush()
+                sys.stdout.write(f"⏰【私人数据处理】 [币安订单] 清理线程完成: {symbol}\n")
+                sys.stdout.flush()
             
         except Exception as e:
-            # 异常也在锁外记录，用 print 代替 logger
-            print(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}", flush=True)
+            sys.stdout.write(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}\n")
+            sys.stdout.flush()
     
     def _binance_delayed_delete(self, keys: List[str], symbol: str):
         """启动独立线程执行清理"""
         thread = threading.Thread(target=self._binance_delayed_delete_sync, args=(keys, symbol))
         thread.daemon = True
         thread.start()
-        # 这个日志用 logger 没问题，因为是在主线程调用，不是清理线程
         logger.info(f"⏰【私人数据处理】 [币安订单] 清理线程已启动: {symbol} 将在5秒后清理")
     
     # ========== OKX清理（同步线程版）==========
     def _okx_delayed_delete_sync(self, symbol: str):
         """
         同步版：5秒后清理该symbol的所有相关数据
-        包括：订单数据和持仓数据
-        
-        🔴 关键修复：使用 print 代替 logger，避免异步日志死锁
-        因为清理线程是同步线程，logger.info 可能阻塞导致死锁
+        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免异步日志死锁
         """
         try:
             time.sleep(5)
             
-            # ===== 记录操作结果，用于锁外写日志 =====
             has_order_data = False
             has_pos_data = False
             order_deleted_count = 0
@@ -134,7 +124,6 @@ class PrivateDataProcessor:
                     classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
                     order_keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
             
-            # 执行删除（如果有关键需要删除）
             if order_keys_to_delete:
                 with self._lock:
                     classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
@@ -146,13 +135,13 @@ class PrivateDataProcessor:
                 
                 if order_deleted_count > 0:
                     has_order_data = True
-                    print(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {order_deleted_count}个订单分类", flush=True)
+                    sys.stdout.write(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {order_deleted_count}个订单分类\n")
+                    sys.stdout.flush()
             
             # ===== 第2部分：清理持仓数据 =====
             pos_key = 'okx_position_update'
             need_delete_pos = False
             
-            # 先检查是否需要删除持仓
             with self._lock:
                 if pos_key in self.memory_store['private_data']:
                     pos_data = self.memory_store['private_data'][pos_key]
@@ -165,7 +154,6 @@ class PrivateDataProcessor:
                         if pos_symbol == symbol:
                             need_delete_pos = True
             
-            # 执行删除（如果需要）
             if need_delete_pos:
                 with self._lock:
                     if pos_key in self.memory_store['private_data']:
@@ -173,25 +161,26 @@ class PrivateDataProcessor:
                         has_pos_data = True
                 
                 if has_pos_data:
-                    print(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})", flush=True)
+                    sys.stdout.write(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})\n")
+                    sys.stdout.flush()
             
             # ===== 第3部分：锁完全释放后才写汇总日志 =====
-            # 🔴 关键：用 print 代替 logger，避免死锁
             if has_order_data or has_pos_data:
-                print(f"✅【私人数据处理】[OKX订单清理] {symbol} 所有相关数据清理完成", flush=True)
+                sys.stdout.write(f"✅【私人数据处理】[OKX订单清理] {symbol} 所有相关数据清理完成\n")
+                sys.stdout.flush()
             
         except Exception as e:
-            # 异常也在锁外记录，用 print 代替 logger
-            print(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}", flush=True)
+            sys.stdout.write(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}\n")
+            sys.stdout.flush()
             import traceback
-            traceback.print_exc()
+            traceback.print_exc(file=sys.stdout)
+            sys.stdout.flush()
     
     def _okx_delayed_delete(self, symbol: str):
         """启动独立线程执行清理"""
         thread = threading.Thread(target=self._okx_delayed_delete_sync, args=(symbol,))
         thread.daemon = True
         thread.start()
-        # 这个日志用 logger 没问题，因为是在主线程调用，不是清理线程
         logger.info(f"⏰ 【私人数据处理】[OKX订单] 清理线程已启动: {symbol} 将在5秒后清理")
     
     # ===== 将完整存储区喂给Step1 =====
