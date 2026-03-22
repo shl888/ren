@@ -213,8 +213,11 @@ class PrivateDataProcessor:
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
+                order_id = raw_data['o'].get('i')
                 
-                # 初始化存储
+                # ========== 修复：将去重检查移到锁外，避免锁内 await ==========
+                # 第1步：锁内快速获取现有订单ID列表
+                existing_ids = []
                 with self._lock:
                     if 'binance_order_update' not in self.memory_store['private_data']:
                         self.memory_store['private_data']['binance_order_update'] = {
@@ -232,7 +235,6 @@ class PrivateDataProcessor:
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
                             logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
-#                        await self._feed_full_storage_to_step1()
                         return
                     
                     if category == '12_取消止盈':
@@ -258,35 +260,48 @@ class PrivateDataProcessor:
                         classified[classified_key] = []
                         logger.debug(f"🔄【私人数据处理】 [币安订单] {symbol} {category} 已清空旧记录")
                     
-                    # 去重追加
-                    order_id = raw_data['o'].get('i')
+                    # 如果有订单ID，获取现有订单ID列表用于去重（锁内快速读取）
                     if order_id:
-                        existing = False
+                        existing_ids = [item['data']['o'].get('i') for item in classified[classified_key]]
+                
+                # 第2步：锁外检查重复（无锁，安全）
+                if order_id and order_id in existing_ids:
+                    logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
+                    return
+                
+                # 第3步：锁内写入数据
+                with self._lock:
+                    # 重新获取 classified（可能已被其他线程修改）
+                    classified = self.memory_store['private_data']['binance_order_update']['classified']
+                    
+                    # 再次检查分类是否存在（可能被其他线程创建）
+                    if classified_key not in classified:
+                        classified[classified_key] = []
+                    
+                    # 再次检查重复（双重检查，防止在锁外检查后到锁内写入前被其他线程写入）
+                    if order_id:
                         for item in classified[classified_key]:
-                            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
                             if item['data']['o'].get('i') == order_id:
-                                existing = True
-                                logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
-                                break
-                        
-                        if not existing:
-                            classified[classified_key].append({
-                                'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                                'received_at': private_data.get('received_at', datetime.now().isoformat()),
-                                'data': raw_data
-                            })
-                            # ✅ 有订单ID时用这个日志
-                            logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
+                                logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单（二次检查）: {order_id}")
+                                return
+                    
+                    # 写入数据
+                    if order_id:
+                        classified[classified_key].append({
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                            'data': raw_data
+                        })
+                        logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
                     else:
                         classified[classified_key].append({
                             'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
-                        # ✅ 没有订单ID时用这个日志
                         logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 已保存")
                     
-                    # 平仓处理：启动独立线程清理（修复：只传 symbol，不传 keys）
+                    # 平仓处理：启动独立线程清理
                     if is_binance_closing(category):
                         self._binance_delayed_delete(symbol)
                         logger.info(f"⏰【私人数据处理】 [币安订单] 平仓全部成交标记: {symbol} 清理线程已启动")
@@ -345,6 +360,9 @@ class PrivateDataProcessor:
                     
                     classified_key = f"{symbol}_{category}"
                     
+                    # ========== 修复：将去重检查移到锁外，避免锁内 await ==========
+                    # 第1步：锁内快速获取现有订单ID列表
+                    existing_ids = []
                     with self._lock:
                         if 'okx_order_update' not in self.memory_store['private_data']:
                             self.memory_store['private_data']['okx_order_update'] = {
@@ -367,32 +385,50 @@ class PrivateDataProcessor:
                             classified[classified_key] = []
                             logger.debug(f"🔄【私人数据处理】 [OKX订单] {symbol} {category} 已清空旧记录")
                         
+                        # 获取现有订单ID列表用于去重（锁内快速读取）
                         if order_id and order_id != 'unknown':
-                            existing = False
+                            existing_ids = []
                             for item in classified[classified_key]:
-                                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
+                                item_data = item.get('data', {})
+                                if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
+                                    existing_ids.append(item_data['data'][0].get('ordId'))
+                    
+                    # 第2步：锁外检查重复（无锁，安全）
+                    if order_id and order_id != 'unknown' and order_id in existing_ids:
+                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单: {order_id}")
+                        return
+                    
+                    # 第3步：锁内写入数据
+                    with self._lock:
+                        classified = self.memory_store['private_data']['okx_order_update']['classified']
+                        
+                        # 再次检查分类是否存在
+                        if classified_key not in classified:
+                            classified[classified_key] = []
+                        
+                        # 再次检查重复（双重检查）
+                        if order_id and order_id != 'unknown':
+                            for item in classified[classified_key]:
                                 item_data = item.get('data', {})
                                 if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
                                     if item_data['data'][0].get('ordId') == order_id:
-                                        existing = True
-                                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单: {order_id}")
-                                        break
-                            
-                            if not existing:
-                                classified[classified_key].append({
-                                    'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
-                                    'received_at': private_data.get('received_at', datetime.now().isoformat()),
-                                    'data': raw_data
-                                })
-                                # ✅ 有订单ID时用这个日志
-                                logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
+                                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单（二次检查）: {order_id}")
+                                        return
+                        
+                        # 写入数据
+                        if order_id and order_id != 'unknown':
+                            classified[classified_key].append({
+                                'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                                'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                                'data': raw_data
+                            })
+                            logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
                         else:
                             classified[classified_key].append({
                                 'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
-                            # ✅ 没有订单ID时用这个日志
                             logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         
                         # ===== 平仓全部成交：启动独立线程清理 =====
