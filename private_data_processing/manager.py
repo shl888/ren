@@ -57,40 +57,54 @@ class PrivateDataProcessor:
     # ========== 币安清理（同步线程版）==========
     def _binance_delayed_delete_sync(self, symbol: str):
         """
-        同步版：5秒后删除该symbol所有订单数据（币安使用）
+        同步版：5秒后删除该symbol所有订单数据 + 清理账户资产中的该合约持仓
         
         修复说明：
         - 原逻辑：两次持锁，锁内循环删除 + time.sleep(0)，死锁风险高
         - 新逻辑：一次持锁，按合约名批量删除，锁内无 sleep，持锁时间极短
         - 只删除当前合约的数据，不影响其他合约
+        - 新增：清理 binance_http_account 中该合约的持仓数据，防止残留
         """
         try:
             time.sleep(5)
             
             # ===== 一次持锁，完成所有操作 =====
             with self._lock:
-                if 'binance_order_update' not in self.memory_store['private_data']:
-                    return
+                # 1. 清理订单数据
+                if 'binance_order_update' in self.memory_store['private_data']:
+                    classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
+                    
+                    # 找出该合约的所有分类key
+                    keys_to_delete = [k for k in list(classified.keys()) if k.startswith(f"{symbol}_")]
+                    
+                    # 批量删除（无 sleep，持锁时间极短）
+                    for k in keys_to_delete:
+                        del classified[k]
+                    
+                    if keys_to_delete:
+                        logger.debug(f"🧹【私人数据处理】 [币安订单] 已删除 {symbol} 的 {len(keys_to_delete)} 个分类")
                 
-                classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
-                
-                # 找出该合约的所有分类key
-                keys_to_delete = [k for k in list(classified.keys()) if k.startswith(f"{symbol}_")]
-                
-                # 批量删除（无 sleep，持锁时间极短）
-                for k in keys_to_delete:
-                    del classified[k]
-                
-                if keys_to_delete:
-                    logger.debug(f"🧹【私人数据处理】 [币安订单] 已删除 {symbol} 的 {len(keys_to_delete)} 个分类")
+                # 2. 清理账户资产中的该合约持仓
+                if 'binance_http_account' in self.memory_store['private_data']:
+                    account_data = self.memory_store['private_data']['binance_http_account']
+                    data = account_data.get('data', {})
+                    
+                    if 'positions' in data and isinstance(data['positions'], list):
+                        original_count = len(data['positions'])
+                        # 过滤掉该合约的持仓
+                        data['positions'] = [p for p in data['positions'] if p.get('symbol') != symbol]
+                        if len(data['positions']) < original_count:
+                            account_data['data'] = data
+                            logger.debug(f"🧹【私人数据处理】 [币安账户] 已清理 {symbol} 的持仓数据")
             
             # ===== 锁外写日志 =====
-            if keys_to_delete:
-                logger.info(f"🧹【私人数据处理】 [币安订单] 清理完成: {symbol}")
+            logger.info(f"🧹【私人数据处理】 [币安] 清理完成: {symbol}")
             
         except Exception as e:
             # 异常也在锁外记录
             logger.error(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     def _binance_delayed_delete(self, symbol: str):
         """启动独立线程执行清理"""
@@ -213,11 +227,8 @@ class PrivateDataProcessor:
                 
                 symbol = raw_data['o']['s']
                 classified_key = f"{symbol}_{category}"
-                order_id = raw_data['o'].get('i')
                 
-                # ========== 修复：将去重检查移到锁外，避免锁内 await ==========
-                # 第1步：锁内快速获取现有订单ID列表
-                existing_ids = []
+                # 初始化存储
                 with self._lock:
                     if 'binance_order_update' not in self.memory_store['private_data']:
                         self.memory_store['private_data']['binance_order_update'] = {
@@ -235,6 +246,7 @@ class PrivateDataProcessor:
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
                             logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
+#                        await self._feed_full_storage_to_step1()
                         return
                     
                     if category == '12_取消止盈':
@@ -260,29 +272,45 @@ class PrivateDataProcessor:
                         classified[classified_key] = []
                         logger.debug(f"🔄【私人数据处理】 [币安订单] {symbol} {category} 已清空旧记录")
                     
-                    # 如果有订单ID，获取现有订单ID列表用于去重（锁内快速读取）
-                    if order_id:
+                    # ===== 修复：去重检查移到锁外，避免锁内 await =====
+                    # 先快速获取现有订单ID列表（锁内，无 await）
+                    existing_ids = []
+                    order_id = raw_data['o'].get('i')
+                    if order_id and classified_key in classified:
                         existing_ids = [item['data']['o'].get('i') for item in classified[classified_key]]
                 
-                # 第2步：锁外检查重复（无锁，安全）
+                # ===== 锁外：检查重复 =====
                 if order_id and order_id in existing_ids:
                     logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
                     return
                 
-                # 第3步：锁内写入数据
+                # ===== 再次持锁：写入数据 =====
                 with self._lock:
                     # 重新获取 classified（可能已被其他线程修改）
+                    if 'binance_order_update' not in self.memory_store['private_data']:
+                        self.memory_store['private_data']['binance_order_update'] = {
+                            'key': 'binance_order_update',
+                            'exchange': 'binance',
+                            'data_type': 'order_update',
+                            'classified': {}
+                        }
+                    
                     classified = self.memory_store['private_data']['binance_order_update']['classified']
                     
-                    # 再次检查分类是否存在（可能被其他线程创建）
+                    # 确保分类列表存在
                     if classified_key not in classified:
                         classified[classified_key] = []
                     
-                    # 再次检查重复（双重检查，防止在锁外检查后到锁内写入前被其他线程写入）
+                    # 止盈止损的设置事件只保留最新一条（再次确认）
+                    if category in ['03_设置止损', '04_设置止盈']:
+                        classified[classified_key] = []
+                        logger.debug(f"🔄【私人数据处理】 [币安订单] {symbol} {category} 已清空旧记录")
+                    
+                    # 二次去重检查（防止在锁外检查后、锁内写入前被其他线程写入）
                     if order_id:
                         for item in classified[classified_key]:
                             if item['data']['o'].get('i') == order_id:
-                                logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单（二次检查）: {order_id}")
+                                logger.debug(f"🔄【私人数据处理】 [币安订单] 二次检查跳过重复订单: {order_id}")
                                 return
                     
                     # 写入数据
@@ -360,8 +388,8 @@ class PrivateDataProcessor:
                     
                     classified_key = f"{symbol}_{category}"
                     
-                    # ========== 修复：将去重检查移到锁外，避免锁内 await ==========
-                    # 第1步：锁内快速获取现有订单ID列表
+                    # ===== 修复：去重检查移到锁外，避免锁内 await =====
+                    # 先快速获取现有订单ID列表（锁内，无 await）
                     existing_ids = []
                     with self._lock:
                         if 'okx_order_update' not in self.memory_store['private_data']:
@@ -374,9 +402,35 @@ class PrivateDataProcessor:
                         
                         classified = self.memory_store['private_data']['okx_order_update']['classified']
                         
+                        # 取消订单不保存
                         if category == '06_已取消':
                             logger.debug(f"🗑️【私人数据处理】 [OKX订单] {symbol} 订单取消，等待后续清理")
                             return
+                        
+                        # 获取现有订单ID列表
+                        if order_id and order_id != 'unknown' and classified_key in classified:
+                            existing_ids = []
+                            for item in classified[classified_key]:
+                                item_data = item.get('data', {})
+                                if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
+                                    existing_ids.append(item_data['data'][0].get('ordId'))
+                    
+                    # ===== 锁外：检查重复 =====
+                    if order_id and order_id != 'unknown' and order_id in existing_ids:
+                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单: {order_id}")
+                        return
+                    
+                    # ===== 再次持锁：写入数据 =====
+                    with self._lock:
+                        if 'okx_order_update' not in self.memory_store['private_data']:
+                            self.memory_store['private_data']['okx_order_update'] = {
+                                'key': 'okx_order_update',
+                                'exchange': 'okx',
+                                'data_type': 'order_update',
+                                'classified': {}
+                            }
+                        
+                        classified = self.memory_store['private_data']['okx_order_update']['classified']
                         
                         if classified_key not in classified:
                             classified[classified_key] = []
@@ -385,34 +439,13 @@ class PrivateDataProcessor:
                             classified[classified_key] = []
                             logger.debug(f"🔄【私人数据处理】 [OKX订单] {symbol} {category} 已清空旧记录")
                         
-                        # 获取现有订单ID列表用于去重（锁内快速读取）
-                        if order_id and order_id != 'unknown':
-                            existing_ids = []
-                            for item in classified[classified_key]:
-                                item_data = item.get('data', {})
-                                if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
-                                    existing_ids.append(item_data['data'][0].get('ordId'))
-                    
-                    # 第2步：锁外检查重复（无锁，安全）
-                    if order_id and order_id != 'unknown' and order_id in existing_ids:
-                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单: {order_id}")
-                        return
-                    
-                    # 第3步：锁内写入数据
-                    with self._lock:
-                        classified = self.memory_store['private_data']['okx_order_update']['classified']
-                        
-                        # 再次检查分类是否存在
-                        if classified_key not in classified:
-                            classified[classified_key] = []
-                        
-                        # 再次检查重复（双重检查）
+                        # 二次去重检查
                         if order_id and order_id != 'unknown':
                             for item in classified[classified_key]:
                                 item_data = item.get('data', {})
                                 if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
                                     if item_data['data'][0].get('ordId') == order_id:
-                                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 跳过重复订单（二次检查）: {order_id}")
+                                        logger.debug(f"🔄【私人数据处理】 [OKX订单] 二次检查跳过重复订单: {order_id}")
                                         return
                         
                         # 写入数据
