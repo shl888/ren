@@ -9,6 +9,7 @@
 import time
 import logging
 import threading
+import sys  # 🔴 新增：用于底层输出
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,10 @@ class Step2Fusion:
         logger.info("✅【私人step2】容器缓存已创建: binance, okx")
     
     def _delayed_reset(self, exchange: str):
-        """5秒后重置容器"""
+        """
+        5秒后重置容器
+        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免死锁
+        """
         try:
             # 分段睡眠，期间可以检查是否需要取消
             for i in range(5):
@@ -101,7 +105,8 @@ class Step2Fusion:
                 # 检查这个重置线程是否还是当前有效的
                 with self._lock:
                     if self.reset_threads[exchange] != threading.current_thread():
-                        logger.debug(f"⏰【私人step2】【{exchange}】重置线程已被取代，放弃执行")
+                        sys.stdout.write(f"⏰【私人step2】【{exchange}】重置线程已被取代，放弃执行\n")
+                        sys.stdout.flush()
                         return
             
             with self._lock:
@@ -111,10 +116,12 @@ class Step2Fusion:
                 
                 # 完全重置容器
                 self._reset_container(self.containers[exchange])
-                logger.info(f"🔄【私人step2】【{exchange}】5秒倒计时结束，容器已完全重置")
+                sys.stdout.write(f"🔄【私人step2】【{exchange}】5秒倒计时结束，容器已完全重置\n")
+                sys.stdout.flush()
             
         except Exception as e:
-            logger.error(f"❌【私人step2】【{exchange}】延迟重置失败: {e}")
+            sys.stdout.write(f"❌【私人step2】【{exchange}】延迟重置失败: {e}\n")
+            sys.stdout.flush()
         finally:
             with self._lock:
                 if self.reset_threads[exchange] == threading.current_thread():

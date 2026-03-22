@@ -21,6 +21,7 @@
 import logging
 import threading
 import time
+import sys  # 🔴 新增：用于底层输出
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
@@ -133,7 +134,7 @@ class Step4Funding:
                 
                 # 计算累计资金费 = 旧累计 + 新本次
                 new_accum = old_accum + this_fee_float
-                new_accum_rounded = self._round_4(new_accum)
+                new_accum_rounded = round(new_accum, 4)
                 
                 # 更新缓存
                 # 1. 本次资金费 - 直接覆盖
@@ -155,7 +156,7 @@ class Step4Funding:
                         pv = float(position_value)
                         if pv > 0:
                             avg_rate = new_accum_rounded * 100 / pv
-                            cached["平均资金费率"] = self._round_4(avg_rate)
+                            cached["平均资金费率"] = round(avg_rate, 4)
                     except (ValueError, TypeError, ZeroDivisionError):
                         pass
                 
@@ -230,7 +231,7 @@ class Step4Funding:
                 
                 # 计算本次资金费 = 新累计 - 旧累计
                 this_fee = new_accum_float - old_accum_float
-                cached["本次资金费"] = self._round_4(this_fee)
+                cached["本次资金费"] = round(this_fee, 4)
                 
                 # 更新累计资金费
                 cached["累计资金费"] = new_accum_float
@@ -248,7 +249,7 @@ class Step4Funding:
                         pv = float(position_value)
                         if pv > 0:
                             avg_rate = new_accum_float * 100 / pv
-                            cached["平均资金费率"] = self._round_4(avg_rate)
+                            cached["平均资金费率"] = round(avg_rate, 4)
                     except (ValueError, TypeError):
                         pass
                 
@@ -314,17 +315,22 @@ class Step4Funding:
         logger.debug(f"💰 资金费数据已重置")
     
     def _delayed_reset_sync(self, exchange: str):
-        """同步版：延迟重置容器"""
+        """
+        同步版：延迟重置容器
+        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免死锁
+        """
         try:
             time.sleep(self.reset_countdown)
             
             with self._lock:
                 if self.cache[exchange] is not None:
                     self._reset_container(self.cache[exchange])
-                    logger.debug(f"✨【私人step4】【{exchange}】平仓清理完成，缓存已重置")
+                    sys.stdout.write(f"✨【私人step4】【{exchange}】平仓清理完成，缓存已重置\n")
+                    sys.stdout.flush()
             
         except Exception as e:
-            logger.error(f"❌【私人step4】【{exchange}】延迟重置失败: {e}")
+            sys.stdout.write(f"❌【私人step4】【{exchange}】延迟重置失败: {e}\n")
+            sys.stdout.flush()
         finally:
             self.reset_threads[exchange] = None
     
