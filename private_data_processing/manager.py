@@ -6,7 +6,6 @@ import logging
 import asyncio
 import threading
 import time
-import sys  # 🔴 新增：用于底层输出
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -30,15 +29,16 @@ class PrivateDataProcessor:
     def __init__(self):
         if not self._initialized:
             self.memory_store = {'private_data': {}}
-            self._lock = threading.Lock()
+            self._lock = threading.Lock()  # 添加线程锁
             self._initialized = True
             logger.info("✅ [私人数据处理] 模块已初始化")
             
+            # ===== 初始化并启动调度器 =====
             self.scheduler = get_scheduler()
             self._start_scheduler()
     
     def _start_scheduler(self):
-        """启动调度器"""
+        """启动调度器（在模块初始化时立即启动）"""
         try:
             loop = asyncio.get_running_loop()
             asyncio.create_task(self.scheduler.start())
@@ -48,58 +48,53 @@ class PrivateDataProcessor:
             self._scheduler_delayed_start = True
     
     async def _ensure_scheduler_started(self):
-        """确保调度器已启动"""
+        """确保调度器已启动（用于延迟启动的情况）"""
         if hasattr(self, '_scheduler_delayed_start') and self._scheduler_delayed_start:
             await self.scheduler.start()
             self._scheduler_delayed_start = False
             logger.info("🚀 [私人数据处理] 调度器延迟启动完成")
     
     # ========== 币安清理（同步线程版）==========
-    def _binance_delayed_delete_sync(self, keys: List[str], symbol: str):
+    def _binance_delayed_delete_sync(self, symbol: str):
         """
-        同步版：5秒后删除该symbol所有当前存在的key（币安使用）
-        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免异步日志死锁
+        同步版：5秒后删除该symbol所有订单数据（币安使用）
+        
+        修复说明：
+        - 原逻辑：两次持锁，锁内循环删除 + time.sleep(0)，死锁风险高
+        - 新逻辑：一次持锁，按合约名批量删除，锁内无 sleep，持锁时间极短
+        - 只删除当前合约的数据，不影响其他合约
         """
         try:
             time.sleep(5)
             
-            # ===== 第1步：快速获取锁，只记录需要删除的key列表 =====
-            keys_to_delete = []
+            # ===== 一次持锁，完成所有操作 =====
             with self._lock:
                 if 'binance_order_update' not in self.memory_store['private_data']:
                     return
-                    
+                
                 classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
-                keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-            
-            if not keys_to_delete:
-                return
-            
-            # ===== 第2步：再次获取锁执行删除操作 =====
-            deleted_count = 0
-            with self._lock:
-                classified = self.memory_store['private_data']['binance_order_update'].get('classified', {})
+                
+                # 找出该合约的所有分类key
+                keys_to_delete = [k for k in list(classified.keys()) if k.startswith(f"{symbol}_")]
+                
+                # 批量删除（无 sleep，持锁时间极短）
                 for k in keys_to_delete:
-                    if k in classified:
-                        del classified[k]
-                        deleted_count += 1
-                        time.sleep(0)
+                    del classified[k]
+                
+                if keys_to_delete:
+                    logger.debug(f"🧹【私人数据处理】 [币安订单] 已删除 {symbol} 的 {len(keys_to_delete)} 个分类")
             
-            # ===== 第3步：锁完全释放后才写日志 =====
-            # 🔴 关键：用 sys.stdout.write 代替 logger，避免死锁
-            if deleted_count > 0:
-                sys.stdout.write(f"🧹【私人数据处理】 [币安订单] 延迟清理完成: {symbol} 已删除 {deleted_count}类\n")
-                sys.stdout.flush()
-                sys.stdout.write(f"⏰【私人数据处理】 [币安订单] 清理线程完成: {symbol}\n")
-                sys.stdout.flush()
+            # ===== 锁外写日志 =====
+            if keys_to_delete:
+                logger.info(f"🧹【私人数据处理】 [币安订单] 清理完成: {symbol}")
             
         except Exception as e:
-            sys.stdout.write(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}\n")
-            sys.stdout.flush()
+            # 异常也在锁外记录
+            logger.error(f"❌ 【私人数据处理】[币安订单] 延迟清理失败: {e}")
     
-    def _binance_delayed_delete(self, keys: List[str], symbol: str):
+    def _binance_delayed_delete(self, symbol: str):
         """启动独立线程执行清理"""
-        thread = threading.Thread(target=self._binance_delayed_delete_sync, args=(keys, symbol))
+        thread = threading.Thread(target=self._binance_delayed_delete_sync, args=(symbol,))
         thread.daemon = True
         thread.start()
         logger.info(f"⏰【私人数据处理】 [币安订单] 清理线程已启动: {symbol} 将在5秒后清理")
@@ -107,74 +102,53 @@ class PrivateDataProcessor:
     # ========== OKX清理（同步线程版）==========
     def _okx_delayed_delete_sync(self, symbol: str):
         """
-        同步版：5秒后清理该symbol的所有相关数据
-        🔴 关键修复：使用 sys.stdout.write 代替 logger，避免异步日志死锁
+        同步版：5秒后删除该symbol的所有相关数据
+        包括：订单数据和持仓数据
+        
+        修复说明：
+        - 原逻辑：两次持锁，锁内循环删除 + time.sleep(0)，死锁风险高
+        - 新逻辑：一次持锁，按合约名批量删除订单 + 检查并删除持仓
+        - 锁内无 sleep，持锁时间极短
+        - 只删除当前合约的数据，不影响其他合约
         """
         try:
             time.sleep(5)
             
-            has_order_data = False
-            has_pos_data = False
-            order_deleted_count = 0
-            
-            # ===== 第1部分：清理订单数据 =====
-            order_keys_to_delete = []
+            # ===== 一次持锁，完成所有操作 =====
             with self._lock:
+                # 1. 清理订单数据中的该合约
                 if 'okx_order_update' in self.memory_store['private_data']:
                     classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
-                    order_keys_to_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-            
-            if order_keys_to_delete:
-                with self._lock:
-                    classified = self.memory_store['private_data']['okx_order_update'].get('classified', {})
+                    order_keys_to_delete = [k for k in list(classified.keys()) if k.startswith(f"{symbol}_")]
+                    
                     for k in order_keys_to_delete:
-                        if k in classified:
-                            del classified[k]
-                            order_deleted_count += 1
-                            time.sleep(0)
+                        del classified[k]
+                    
+                    if order_keys_to_delete:
+                        logger.debug(f"🧹【私人数据处理】 [OKX订单] 已删除 {symbol} 的 {len(order_keys_to_delete)} 个订单分类")
                 
-                if order_deleted_count > 0:
-                    has_order_data = True
-                    sys.stdout.write(f"🧹【私人数据处理】 [OKX订单] 延迟清理完成: {symbol} 已删除 {order_deleted_count}个订单分类\n")
-                    sys.stdout.flush()
-            
-            # ===== 第2部分：清理持仓数据 =====
-            pos_key = 'okx_position_update'
-            need_delete_pos = False
-            
-            with self._lock:
+                # 2. 清理持仓数据（如果是该合约）
+                pos_key = 'okx_position_update'
                 if pos_key in self.memory_store['private_data']:
                     pos_data = self.memory_store['private_data'][pos_key]
-                    data_field = pos_data.get('data', {})
+                    raw_data = pos_data.get('data', {})
                     
-                    if 'data' in data_field and isinstance(data_field['data'], list) and len(data_field['data']) > 0:
-                        inst_id = data_field['data'][0].get('instId', '')
+                    if 'data' in raw_data and isinstance(raw_data['data'], list) and len(raw_data['data']) > 0:
+                        inst_id = raw_data['data'][0].get('instId', '')
                         pos_symbol = inst_id.replace('-SWAP', '').replace('-USDT', '')
                         
                         if pos_symbol == symbol:
-                            need_delete_pos = True
+                            del self.memory_store['private_data'][pos_key]
+                            logger.debug(f"🧹【私人数据处理】 [OKX持仓] 已删除 {symbol} 的持仓数据")
             
-            if need_delete_pos:
-                with self._lock:
-                    if pos_key in self.memory_store['private_data']:
-                        del self.memory_store['private_data'][pos_key]
-                        has_pos_data = True
-                
-                if has_pos_data:
-                    sys.stdout.write(f"🧹【私人数据处理】 [OKX持仓] 延迟清理完成: 已删除 {pos_key} (symbol: {symbol})\n")
-                    sys.stdout.flush()
-            
-            # ===== 第3部分：锁完全释放后才写汇总日志 =====
-            if has_order_data or has_pos_data:
-                sys.stdout.write(f"✅【私人数据处理】[OKX订单清理] {symbol} 所有相关数据清理完成\n")
-                sys.stdout.flush()
+            # ===== 锁外写日志 =====
+            logger.info(f"🧹【私人数据处理】 [OKX] 清理完成: {symbol}")
             
         except Exception as e:
-            sys.stdout.write(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}\n")
-            sys.stdout.flush()
+            # 异常也在锁外记录
+            logger.error(f"❌【私人数据处理】 [OKX订单] 延迟清理失败: {e}")
             import traceback
-            traceback.print_exc(file=sys.stdout)
-            sys.stdout.flush()
+            logger.error(traceback.format_exc())
     
     def _okx_delayed_delete(self, symbol: str):
         """启动独立线程执行清理"""
@@ -190,7 +164,7 @@ class PrivateDataProcessor:
             full_storage_item = {
                 'full_storage': self.memory_store['private_data'].copy()
             }
-            await self.scheduler.feed_step1(full_storage_item)
+            await self.scheduler.feed_step1(full_storage_item) # ✅ 加上 await
             logger.debug(f"📤【私人数据处理】【Manager】已将完整存储区喂给Step1，包含 {len(self.memory_store['private_data'])} 个数据项")
         except Exception as e:
             logger.error(f"❌【私人数据处理】【Manager】喂给Step1完整存储区失败: {e}")
@@ -258,7 +232,7 @@ class PrivateDataProcessor:
                         if stop_loss_key in classified:
                             del classified[stop_loss_key]
                             logger.debug(f"🗑️【私人数据处理】 [币安订单] {symbol} 取消止损，已删除设置止损记录")
-                        await self._feed_full_storage_to_step1()
+#                        await self._feed_full_storage_to_step1()
                         return
                     
                     if category == '12_取消止盈':
@@ -289,7 +263,7 @@ class PrivateDataProcessor:
                     if order_id:
                         existing = False
                         for item in classified[classified_key]:
-                            await asyncio.sleep(0)
+                            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
                             if item['data']['o'].get('i') == order_id:
                                 existing = True
                                 logger.debug(f"🔄【私人数据处理】 [币安订单] 跳过重复订单: {order_id}")
@@ -301,6 +275,7 @@ class PrivateDataProcessor:
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
+                            # ✅ 有订单ID时用这个日志
                             logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 订单 {order_id} 已保存")
                     else:
                         classified[classified_key].append({
@@ -308,12 +283,12 @@ class PrivateDataProcessor:
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
                             'data': raw_data
                         })
+                        # ✅ 没有订单ID时用这个日志
                         logger.debug(f"📦【私人数据处理】 [币安订单] {symbol} {category} 已保存")
                     
-                    # 平仓处理：启动独立线程清理
+                    # 平仓处理：启动独立线程清理（修复：只传 symbol，不传 keys）
                     if is_binance_closing(category):
-                        keys_to_delayed_delete = [k for k in classified.keys() if k.startswith(f"{symbol}_")]
-                        self._binance_delayed_delete(keys_to_delayed_delete, symbol)
+                        self._binance_delayed_delete(symbol)
                         logger.info(f"⏰【私人数据处理】 [币安订单] 平仓全部成交标记: {symbol} 清理线程已启动")
                 
                 # 保存后，将完整存储区喂给Step1
@@ -395,7 +370,7 @@ class PrivateDataProcessor:
                         if order_id and order_id != 'unknown':
                             existing = False
                             for item in classified[classified_key]:
-                                await asyncio.sleep(0)
+                                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步循环让出CPU，避免订单列表过长阻塞
                                 item_data = item.get('data', {})
                                 if 'data' in item_data and isinstance(item_data['data'], list) and len(item_data['data']) > 0:
                                     if item_data['data'][0].get('ordId') == order_id:
@@ -409,6 +384,7 @@ class PrivateDataProcessor:
                                     'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                     'data': raw_data
                                 })
+                                # ✅ 有订单ID时用这个日志
                                 logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 订单 {order_id} 已保存")
                         else:
                             classified[classified_key].append({
@@ -416,6 +392,7 @@ class PrivateDataProcessor:
                                 'received_at': private_data.get('received_at', datetime.now().isoformat()),
                                 'data': raw_data
                             })
+                            # ✅ 没有订单ID时用这个日志
                             logger.debug(f"📦【私人数据处理】 [OKX订单] {symbol} {category} 已保存")
                         
                         # ===== 平仓全部成交：启动独立线程清理 =====
@@ -509,7 +486,7 @@ class PrivateDataProcessor:
         try:
             formatted_data = {}
             for key, data in self.memory_store['private_data'].items():
-                await asyncio.sleep(0)
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步方法中的循环让出CPU，避免数据量大时阻塞
                 if key in ['binance_order_update', 'okx_order_update']:
                     classified = data.get('classified', {})
                     summary = {}
@@ -562,7 +539,7 @@ class PrivateDataProcessor:
         try:
             exchange_data = {}
             for key, data in self.memory_store['private_data'].items():
-                await asyncio.sleep(0)
+                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 异步方法中的循环让出CPU，避免数据量大时阻塞
                 if key.startswith(f"{exchange.lower()}_"):
                     
                     if key in ['binance_order_update', 'okx_order_update']:
