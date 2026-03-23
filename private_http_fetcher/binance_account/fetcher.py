@@ -1,6 +1,8 @@
 """
-私人HTTP数据获取器 - 冷酷版
-修复：僵尸连接问题，彻底杜绝平仓急刹车卡死
+私人HTTP数据获取器 - 冷酷重启版
+支持两种恢复机制：
+1. 平仓重置（_rebuild_session）- 预防性清理，防止急刹车
+2. 服务重启（_handle_restart）- 卡死/异常时完全重启
 """
 
 import asyncio
@@ -19,11 +21,26 @@ logger = logging.getLogger(__name__)
 class PrivateHTTPFetcher:
     """
     私人HTTP数据获取器
-    冷酷版：用完就关，不留回味，杜绝僵尸
+    冷酷版：force_close=True + 真正重启 + 超时保护
+    
+    两种恢复机制：
+    ┌─────────────────────────────────────────────────────────────┐
+    │ 1. 平仓重置（_rebuild_session）                              │
+    │    - 触发：检测到平仓（持仓从有变无）                         │
+    │    - 作用：重建 HTTP 连接，清理僵尸，防止急刹车               │
+    │    - 恢复时间：毫秒级                                        │
+    │    - 调度器：继续运行，不重启                                │
+    ├─────────────────────────────────────────────────────────────┤
+    │ 2. 服务重启（_handle_restart）                               │
+    │    - 触发：账户获取失败/418/401/调度器异常/任务异常           │
+    │    - 作用：取消所有任务 → 重建 session → 重新创建调度器       │
+    │    - 恢复时间：2分钟 + 账户获取时间                          │
+    │    - 调度器：完全重启，从头开始                              │
+    └─────────────────────────────────────────────────────────────┘
     """
 
     def __init__(self):
-        # 与private_ws_pool相同的结构
+        # ==================== 基础组件 ====================
         self.brain_store = None  # DataManager实例
         self.running = False
 
@@ -33,34 +50,34 @@ class PrivateHTTPFetcher:
         self.listen_key = None
 
         # 任务管理
-        self.scheduler_task = None
-        self.fetch_tasks = []
+        self.scheduler_task = None      # 主调度器任务
+        self.fetch_tasks = []           # 子任务列表
 
-        # 🔴 冷酷版：改用强连接器（每次请求后强制关闭）
+        # HTTP 会话（冷酷版：使用 connector）
         self.session = None
-        self.connector = None  # 显式管理连接器
+        self.connector = None
 
-        # 状态标志
+        # ==================== 状态标志 ====================
         self.account_fetched = False
         self.account_fetch_success = False
 
-        # 重试策略：指数退避
-        self.account_retry_delays = [10, 20, 40, 60]
-        self.max_account_retries = 4
+        # ==================== 重试策略 ====================
+        self.account_retry_delays = [10, 20, 40, 60]  # 指数退避延迟
+        self.max_account_retries = 4                   # 最多重试4次
 
-        # 自适应频率控制
-        self.account_check_interval = 1
-        self.account_high_freq = 1   # 有持仓：1秒
-        self.account_low_freq = 60   # 无持仓：60秒
-        self.has_position = False
-        self.last_log_time = 0
-        self.log_interval = 60
+        # ==================== 自适应频率控制 ====================
+        self.account_check_interval = 1   # 当前检查间隔（秒）
+        self.account_high_freq = 1        # 有持仓：1秒高频
+        self.account_low_freq = 60        # 无持仓：60秒低频
+        self.has_position = False         # 当前是否有持仓
+        self.last_log_time = 0            # 上次日志时间
+        self.log_interval = 60            # 日志间隔（秒）
 
-        # 重启机制
-        self.restart_attempts = 0
-        self.in_restart_cooldown = False
+        # ==================== 重启机制 ====================
+        self.restart_attempts = 0         # 重启尝试次数
+        self.in_restart_cooldown = False  # 是否在重启冷却中
 
-        # 连接质量统计
+        # ==================== 质量统计 ====================
         self.quality_stats = {
             'account_fetch': {
                 'total_attempts': 0,
@@ -74,15 +91,19 @@ class PrivateHTTPFetcher:
             }
         }
 
-        # 🔴 冷酷版：使用模拟交易端点（可切换）
+        # ==================== API 配置 ====================
+        # 模拟交易端点（Testnet）
         self.BASE_URL = "https://testnet.binancefuture.com"
-        # self.BASE_URL = "https://fapi.binance.com"  # 正式环境取消注释
+        # 真实交易端点（正式环境取消注释）
+        # self.BASE_URL = "https://fapi.binance.com"
 
         self.ACCOUNT_ENDPOINT = "/fapi/v3/account"
-        self.RECV_WINDOW = 5000
+        self.RECV_WINDOW = 5000  # 5秒接收窗口
 
         self.environment = "testnet" if "testnet" in self.BASE_URL else "live"
-        logger.info(f"🔗 [HTTP获取器] 冷酷版初始化完成（环境: {self.environment} | force_close=True | 用完即关）")
+        logger.info(f"🔗 [HTTP获取器] 冷酷重启版初始化完成（环境: {self.environment}）")
+
+    # ==================== 启动方法 ====================
 
     async def start(self, brain_store):
         """
@@ -91,38 +112,40 @@ class PrivateHTTPFetcher:
         Args:
             brain_store: DataManager实例
         """
-        logger.info(f"🚀 [HTTP获取器] 冷酷版启动（环境: {self.environment}）")
+        logger.info(f"🚀 [HTTP获取器] 冷酷重启版启动（环境: {self.environment}）")
 
         self.brain_store = brain_store
         self.running = True
 
-        # 🔴 冷酷核心：创建强连接器，用完就关，不留回味
-        # force_close=True: 每次请求后立即关闭TCP连接，不放回池子
-        # enable_cleanup_closed=True: 自动清理已关闭的连接
-        # limit=20: 限制最大连接数，防止资源耗尽
+        # 🔴 冷酷核心：force_close=True，用完就关，不留回味
+        # 这是防止僵尸连接的关键配置
         timeout = aiohttp.ClientTimeout(total=30)
         self.connector = aiohttp.TCPConnector(
-            force_close=True,           # 🔴 关键！用完就挂电话
-            enable_cleanup_closed=True, # 自动清理僵尸
-            limit=20,                   # 限制连接数
-            limit_per_host=10,          # 每个主机限制
-            ttl_dns_cache=300           # DNS缓存5分钟
+            force_close=True,           # 关键！每次请求后立即关闭连接
+            enable_cleanup_closed=True, # 自动清理已关闭的连接
+            limit=20,                   # 限制最大连接数
+            limit_per_host=10           # 每个主机限制
         )
         self.session = aiohttp.ClientSession(
             timeout=timeout,
             connector=self.connector
         )
 
-        # 启动调度器
+        # 创建主调度器任务
         self.scheduler_task = asyncio.create_task(self._controlled_scheduler())
-
-        logger.info("✅ [HTTP获取器] 冷酷版调度器已启动，force_close=True 生效")
+        logger.info("✅ [HTTP获取器] 调度器已启动，force_close=True 生效")
         return True
+
+    # ==================== 机制1：平仓重置（预防性清理）====================
 
     async def _rebuild_session(self, reason: str = ""):
         """
-        重建session - 平仓急刹车时主动调用
-        加超时保护，确保卡了也不死
+        【机制1：平仓重置】
+        重建 HTTP session - 平仓急刹车时主动调用
+        
+        触发时机：检测到平仓（持仓从有变无）
+        作用：清理僵尸连接，防止 session.close() 卡死
+        特点：只重建连接，不重启调度器，毫秒级恢复
         
         Args:
             reason: 重建原因（用于日志）
@@ -130,36 +153,34 @@ class PrivateHTTPFetcher:
         try:
             logger.info(f"🔄 [HTTP获取器] 重建session (原因: {reason})")
             
-            # 关闭旧session - 加3秒超时，卡了就跳过
+            # 1. 关闭旧 session（加超时保护）
             if self.session and not self.session.closed:
                 try:
                     await asyncio.wait_for(self.session.close(), timeout=3.0)
                     logger.debug("✅ 旧session关闭成功")
                 except asyncio.TimeoutError:
-                    # 超时也不怕，直接跳过，让垃圾回收处理
-                    logger.warning("⚠️ 旧session关闭超时，强制跳过（防止卡死）")
+                    # 超时也不怕，强制跳过，防止死锁
+                    logger.warning("⚠️ 旧session关闭超时，强制跳过")
                 except Exception as e:
                     logger.warning(f"⚠️ 关闭旧session异常: {e}")
             
-            # 创建新session
+            # 2. 重新创建 session（保持 force_close=True）
             timeout = aiohttp.ClientTimeout(total=30)
             self.connector = aiohttp.TCPConnector(
                 force_close=True,
                 enable_cleanup_closed=True,
                 limit=20,
-                limit_per_host=10,
-                ttl_dns_cache=300
+                limit_per_host=10
             )
             self.session = aiohttp.ClientSession(
                 timeout=timeout,
                 connector=self.connector
             )
-            
             logger.info(f"✅ [HTTP获取器] session重建完成 {reason}")
             
         except Exception as e:
             logger.error(f"❌ [HTTP获取器] session重建失败: {e}")
-            # 兜底：确保session不为None
+            # 兜底：确保 session 不为 None
             if not self.session or self.session.closed:
                 timeout = aiohttp.ClientTimeout(total=30)
                 self.connector = aiohttp.TCPConnector(
@@ -172,10 +193,110 @@ class PrivateHTTPFetcher:
                     connector=self.connector
                 )
 
+    # ==================== 机制2：服务重启（完全恢复）====================
+
+    async def _handle_restart(self, reason: str):
+        """
+        【机制2：服务重启】
+        处理重启逻辑 - 所有严重错误都立即重启，并自动恢复运行
+        
+        触发时机：
+        - 账户获取失败（5次重试都失败）
+        - 调度器异常
+        - 418/401 严重错误
+        - 账户任务异常退出
+        
+        作用：
+        1. 取消所有任务（fetch_tasks + scheduler_task）
+        2. 关闭并重建 session
+        3. 重置状态标志
+        4. 🔴 重新创建调度器任务（从头开始执行完整流程）
+        
+        特点：完全重启，恢复时间约 2分钟 + 账户获取时间
+        """
+        if self.in_restart_cooldown:
+            return
+            
+        self.in_restart_cooldown = True
+        self.restart_attempts += 1
+        
+        logger.warning(f"🔄 [HTTP获取器] 服务重启（原因: {reason} | 第{self.restart_attempts}次重启）")
+        
+        # ----- 步骤1：取消所有 fetch 任务（加超时保护）-----
+        for task in self.fetch_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=3.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+        self.fetch_tasks.clear()
+        
+        # ----- 步骤2：取消调度器任务（加超时保护）-----
+        if self.scheduler_task and not self.scheduler_task.done():
+            old_task = self.scheduler_task
+            self.scheduler_task = None
+            old_task.cancel()
+            try:
+                await asyncio.wait_for(old_task, timeout=3.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        
+        # ----- 步骤3：关闭旧 session（加超时保护）-----
+        if self.session and not self.session.closed:
+            try:
+                await asyncio.wait_for(self.session.close(), timeout=3.0)
+                logger.info("✅ 旧session关闭成功")
+            except asyncio.TimeoutError:
+                logger.error("❌ session.close()超时！强制跳过（防止卡死）")
+            except Exception as e:
+                logger.warning(f"⚠️ 关闭session异常: {e}")
+        
+        if not self.running:
+            return
+        
+        # ----- 步骤4：重新创建 session（保持 force_close=True）-----
+        timeout = aiohttp.ClientTimeout(total=30)
+        self.connector = aiohttp.TCPConnector(
+            force_close=True,
+            enable_cleanup_closed=True,
+            limit=20,
+            limit_per_host=10
+        )
+        self.session = aiohttp.ClientSession(
+            timeout=timeout,
+            connector=self.connector
+        )
+        
+        # ----- 步骤5：重置状态标志 -----
+        self.account_fetched = False
+        self.account_fetch_success = False
+        self.has_position = False
+        self.account_check_interval = 1
+        
+        # ----- 步骤6：退出冷却标志 -----
+        self.in_restart_cooldown = False
+        
+        # ----- 步骤7：🔴 关键！重新创建调度器任务（从头开始）-----
+        self.scheduler_task = asyncio.create_task(self._controlled_scheduler())
+        
+        # 更新统计
+        self.quality_stats['account_fetch']['restart_count'] = self.restart_attempts
+        self.quality_stats['account_fetch']['last_restart'] = datetime.now().isoformat()
+        
+        logger.info(f"✅ [HTTP获取器] 服务重启完成，调度器已重新启动（将从头开始执行完整流程）")
+
+    # ==================== 主调度器 ====================
+
     async def _controlled_scheduler(self):
         """
-        受控调度器 - 冷酷版
-        严格按照时间顺序执行，带重启保护
+        受控调度器 - 支持循环自愈
+        
+        执行流程：
+        1. 等待2分钟（让其他模块先运行）
+        2. 尝试获取账户资产（5次指数退避重试）
+        3. 成功后启动自适应频率任务
+        4. 监控任务状态，异常时触发重启
         """
         while self.running:
             try:
@@ -192,16 +313,15 @@ class PrivateHTTPFetcher:
                         logger.info(f"⏳ [HTTP获取器] 等待中...剩余{remaining}秒")
                     await asyncio.sleep(1)
 
-                logger.info("✅ [HTTP获取器] 2分钟等待完成，开始账户获取")
+                logger.info("✅ [HTTP获取器] 2分钟等待完成，开始账户获取（5次尝试）")
 
                 # ========== 第二阶段：获取账户资产 ==========
                 self.account_fetch_success = await self._fetch_account_with_retry()
 
                 if self.account_fetch_success:
                     logger.info("✅ [HTTP获取器] 账户获取成功，启动自适应频率任务")
-                    
+
                     # 冷却30秒
-                    logger.info("⏳ [HTTP获取器] 账户成功后冷却30秒...")
                     for i in range(30):
                         await asyncio.sleep(0)
                         if not self.running or self.in_restart_cooldown:
@@ -213,9 +333,9 @@ class PrivateHTTPFetcher:
                         account_task = asyncio.create_task(
                             self._fetch_account_adaptive_freq())
                         self.fetch_tasks.append(account_task)
-                        logger.info("✅ [HTTP获取器] 自适应频率任务已启动（冷酷版）")
+                        logger.info("✅ [HTTP获取器] 自适应频率任务已启动")
                         
-                        # 监控模式
+                        # 监控模式：不阻塞，每秒检查任务状态
                         while self.running and not self.in_restart_cooldown:
                             if account_task.done():
                                 try:
@@ -241,8 +361,13 @@ class PrivateHTTPFetcher:
                 if self.running and not self.in_restart_cooldown:
                     await self._handle_restart(f"调度器异常: {e}")
 
+    # ==================== 账户获取（带重试）====================
+
     async def _fetch_account_with_retry(self):
-        """获取账户资产 - 指数退避重试"""
+        """
+        获取账户资产 - 5次指数退避重试
+        第1次尝试 + 4次重试（10秒, 20秒, 40秒, 60秒后）
+        """
         retry_count = 0
         total_attempts = 0
 
@@ -286,8 +411,12 @@ class PrivateHTTPFetcher:
 
     async def _fetch_account_single(self):
         """
-        单次获取账户资产 - 冷酷版
-        每个请求独立，用完即关
+        单次获取账户资产
+        
+        Returns:
+            True: 成功
+            False: 失败，可重试
+            'NEED_RESTART': 遇到需要重启的错误（418/401），触发服务重启
         """
         try:
             self.quality_stats['account_fetch']['total_attempts'] += 1
@@ -306,7 +435,6 @@ class PrivateHTTPFetcher:
             url = f"{self.BASE_URL}{self.ACCOUNT_ENDPOINT}"
             headers = {'X-MBX-APIKEY': api_key}
 
-            # 🔴 冷酷核心：使用session.get，force_close=True确保用完就关
             async with self.session.get(url, params=signed_params, headers=headers) as resp:
 
                 if resp.status == 200:
@@ -330,12 +458,12 @@ class PrivateHTTPFetcher:
                     error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                     self.quality_stats['account_fetch']['last_error'] = error_msg
 
-                    # 418/401 触发重启
+                    # 418/401 触发服务重启
                     if resp.status in [418, 401]:
                         logger.warning(f"⚠️ [HTTP获取器] 严重错误({resp.status})，触发重启")
                         return 'NEED_RESTART'
 
-                    # 429 频率限制
+                    # 429 频率限制 - 等待后重试
                     if resp.status == 429:
                         wait_time = await self._get_retry_after_time(resp)
                         logger.warning(f"⚠️ [HTTP获取器] 频率限制(429)，等待{wait_time}秒")
@@ -354,14 +482,20 @@ class PrivateHTTPFetcher:
             self.quality_stats['account_fetch']['last_error'] = str(e)
             return False
 
+    # ==================== 自适应频率任务（核心监控）====================
+
     async def _fetch_account_adaptive_freq(self):
         """
-        自适应频率获取账户数据 - 冷酷版
-        🔴 核心修复：检测到平仓（急刹车）时主动重建session
+        自适应频率获取账户数据
+        
+        核心逻辑：
+        - 有持仓 → 1秒高频（快速响应）
+        - 无持仓 → 60秒低频（节省资源）
+        - 🔴 检测到平仓时主动调用 _rebuild_session（机制1：平仓重置）
         """
         request_count = 0
         last_position_state = False  # 记录上次持仓状态，用于检测变化
-        
+
         await asyncio.sleep(30)
 
         while self.running and not self.in_restart_cooldown:
@@ -383,13 +517,12 @@ class PrivateHTTPFetcher:
                 url = f"{self.BASE_URL}{self.ACCOUNT_ENDPOINT}"
                 headers = {'X-MBX-APIKEY': api_key}
 
-                # 🔴 冷酷核心：使用session.get，force_close=True确保用完就关
                 async with self.session.get(url, params=signed_params, headers=headers) as resp:
 
                     if resp.status == 200:
                         data = await resp.json()
 
-                        # 检测持仓
+                        # 检查持仓
                         positions = data.get('positions', [])
                         has_position_now = False
                         for pos in positions:
@@ -397,13 +530,12 @@ class PrivateHTTPFetcher:
                                 has_position_now = True
                                 break
 
-                        # 🔴🔴🔴 核心修复：检测到平仓（从有持仓变为无持仓）时，主动重建session
-                        # 这就是"急刹车"的关键点！提前清理，防止卡死
+                        # 🔴 机制1触发：检测到平仓（从有持仓变为无持仓）
                         if last_position_state and not has_position_now:
-                            logger.warning("🚨🚨🚨 [HTTP获取器] 检测到平仓事件！主动重建session防止急刹车崩溃")
+                            logger.warning("🚨 [HTTP获取器] 检测到平仓！主动重建session防止急刹车")
                             await self._rebuild_session(reason="平仓急刹车")
 
-                        # 更新频率
+                        # 自适应频率调整
                         if has_position_now:
                             if not self.has_position:
                                 logger.info("🚀 [HTTP获取器] 开仓检测，切换到高频模式(1秒)")
@@ -413,7 +545,6 @@ class PrivateHTTPFetcher:
                                 logger.info("💤 [HTTP获取器] 平仓检测，切换到低频模式(60秒)")
                             self.account_check_interval = self.account_low_freq
 
-                        # 更新状态
                         self.has_position = has_position_now
                         last_position_state = has_position_now
 
@@ -434,7 +565,6 @@ class PrivateHTTPFetcher:
                         self.quality_stats['account_fetch']['last_success'] = datetime.now().isoformat()
                         self.quality_stats['account_fetch']['last_error'] = None
 
-                        # 按当前频率等待
                         await asyncio.sleep(self.account_check_interval)
 
                     else:
@@ -442,7 +572,7 @@ class PrivateHTTPFetcher:
                         error_msg = f"HTTP {resp.status}: {error_text[:100]}"
                         self.quality_stats['account_fetch']['last_error'] = error_msg
 
-                        # 418/401 触发重启
+                        # 418/401 触发服务重启
                         if resp.status in [418, 401]:
                             logger.warning(f"⚠️ [HTTP获取器] 严重错误({resp.status})，触发重启")
                             await self._handle_restart(f"HTTP {resp.status}错误")
@@ -465,6 +595,8 @@ class PrivateHTTPFetcher:
                 logger.error(f"❌ [HTTP获取器] 账户循环异常: {e}")
                 await asyncio.sleep(self.account_check_interval)
 
+    # ==================== 工具方法 ====================
+
     async def _get_retry_after_time(self, resp) -> int:
         """从429响应获取等待时间"""
         for header in ['Retry-After', 'retry-after']:
@@ -476,70 +608,8 @@ class PrivateHTTPFetcher:
                     continue
         return 60
 
-    async def _handle_restart(self, reason: str):
-        """
-        处理重启逻辑 - 冷酷版
-        加超时保护，确保卡了也不死
-        """
-        if self.in_restart_cooldown:
-            return
-            
-        self.in_restart_cooldown = True
-        self.restart_attempts += 1
-        
-        logger.warning(f"🔄 [HTTP获取器] 重启（原因: {reason} | 第{self.restart_attempts}次）")
-        
-        # 1. 取消所有fetch任务（加超时）
-        for task in self.fetch_tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await asyncio.wait_for(task, timeout=3.0)
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-        self.fetch_tasks.clear()
-        
-        # 2. 关闭旧session（加超时保护）
-        if self.session and not self.session.closed:
-            try:
-                await asyncio.wait_for(self.session.close(), timeout=3.0)
-                logger.info("✅ 旧session关闭成功")
-            except asyncio.TimeoutError:
-                # 超时也不怕，直接跳过
-                logger.error("❌ session.close()超时！强制跳过（防止卡死）")
-            except Exception as e:
-                logger.warning(f"⚠️ 关闭session异常: {e}")
-        
-        if not self.running:
-            return
-        
-        # 3. 重新创建session
-        timeout = aiohttp.ClientTimeout(total=30)
-        self.connector = aiohttp.TCPConnector(
-            force_close=True,
-            enable_cleanup_closed=True,
-            limit=20,
-            limit_per_host=10
-        )
-        self.session = aiohttp.ClientSession(
-            timeout=timeout,
-            connector=self.connector
-        )
-        
-        # 4. 重置状态
-        self.account_fetched = False
-        self.account_fetch_success = False
-        self.has_position = False
-        self.account_check_interval = 1
-        self.in_restart_cooldown = False
-        
-        self.quality_stats['account_fetch']['restart_count'] = self.restart_attempts
-        self.quality_stats['account_fetch']['last_restart'] = datetime.now().isoformat()
-        
-        logger.info(f"✅ [HTTP获取器] 重启完成，force_close=True 继续生效")
-
     async def on_listen_key_updated(self, exchange: str, listen_key: str):
-        """接收listenKey更新（保留接口）"""
+        """接收listenKey更新"""
         if exchange == 'binance':
             logger.debug(f"📢 [HTTP获取器] 收到{exchange} listenKey更新")
 
@@ -558,8 +628,7 @@ class PrivateHTTPFetcher:
     def _sign_params(self, params: Dict, api_secret: str) -> Dict:
         """生成币安API签名"""
         query = urllib.parse.urlencode(params)
-        signature = hmac.new(api_secret.encode(),
-                             query.encode(), hashlib.sha256).hexdigest()
+        signature = hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
         params['signature'] = signature
         return params
 
@@ -580,12 +649,11 @@ class PrivateHTTPFetcher:
             logger.error(f"❌ [HTTP获取器] 推送数据失败: {e}")
 
     async def shutdown(self):
-        """关闭获取器 - 冷酷版"""
+        """关闭获取器"""
         logger.info("🛑 [HTTP获取器] 正在关闭...")
         self.running = False
         self.in_restart_cooldown = True
 
-        # 取消调度任务
         if self.scheduler_task:
             self.scheduler_task.cancel()
             try:
@@ -593,7 +661,6 @@ class PrivateHTTPFetcher:
             except asyncio.CancelledError:
                 pass
 
-        # 取消所有获取任务
         for task in self.fetch_tasks:
             if not task.done():
                 task.cancel()
@@ -602,15 +669,13 @@ class PrivateHTTPFetcher:
                 except asyncio.CancelledError:
                     pass
 
-        # 关闭session（加超时）
-        if self.session and not self.session.closed:
+        if self.session:
             try:
                 await asyncio.wait_for(self.session.close(), timeout=3.0)
             except:
                 pass
 
-        # 关闭连接器
-        if self.connector and not self.connector.closed:
+        if self.connector:
             try:
                 await asyncio.wait_for(self.connector.close(), timeout=3.0)
             except:
@@ -620,13 +685,13 @@ class PrivateHTTPFetcher:
 
     def get_status(self) -> Dict[str, Any]:
         """获取状态信息"""
-        status = {
+        return {
             'timestamp': datetime.now().isoformat(),
             'running': self.running,
             'account_fetched': self.account_fetched,
             'account_fetch_success': self.account_fetch_success,
             'environment': self.environment,
-            'connection_mode': 'force_close=True (冷酷版，用完即关，不留回味)',  # 🔴 骚气注释
+            'connection_mode': 'force_close=True (冷酷版，用完即关)',
             'adaptive_frequency': {
                 'current_interval': self.account_check_interval,
                 'has_position': self.has_position,
@@ -638,26 +703,14 @@ class PrivateHTTPFetcher:
                 'in_restart_cooldown': self.in_restart_cooldown,
                 'last_restart': self.quality_stats['account_fetch'].get('last_restart')
             },
-            'quality_stats': self.quality_stats,
-            'retry_strategy': {
-                'account_retries': f"{self.max_account_retries}次重试",
-                'retry_delays': self.account_retry_delays
+            'recovery_mechanisms': {
+                '平仓重置': '_rebuild_session - 检测到平仓时重建连接，毫秒级恢复',
+                '服务重启': '_handle_restart - 账户失败/异常时完全重启，2分钟+恢复'
             },
+            'quality_stats': self.quality_stats,
             'api_config': {
                 'recvWindow': self.RECV_WINDOW,
-                'force_close': True,  # 🔴 冷酷标志
-                'session_reuse': False  # 不复用，用完就关
-            },
-            'schedule': {
-                'account': '启动后2分钟开始，自适应频率',
-                'data_type': '仅获取账户数据',
-                'auto_restart': '遇到418/401错误立即重启',
-                'rate_limit': '429错误等待后继续'
-            },
-            'endpoints': {
-                'account': self.ACCOUNT_ENDPOINT,
-                'base_url': self.BASE_URL
-            },
-            'data_destination': 'private_data_processing.manager'
+                'force_close': True,
+                'session_reuse': False
+            }
         }
-        return status
