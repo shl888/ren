@@ -88,7 +88,7 @@ class DataManager:
                 if self.brain.frontend_relay:
                     user_data_to_push = self.memory_store.get('user_data', {})
                     await self.brain.frontend_relay.broadcast_private_data(user_data_to_push)
-                    logger.info(f"📤【智能大脑】已推送私人数据，共{len(user_data_to_push)}条")
+                    logger.debug(f"📤【智能大脑】已推送私人数据，共{len(user_data_to_push)}条")
                 
             elif data_type == 'listen_key':
                 # 🎯 单独处理listenKey，存到 exchange_tokens
