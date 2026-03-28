@@ -19,11 +19,11 @@ class DataManager:
         self.last_market_count = 0
         self.last_account_time = None
         self.last_trade_time = None
-        self.last_reference_time = None  # 新增：参考数据更新时间
+        self.last_reference_time = None
         
         # 批量存储日志控制
         self.last_batch_log_time = 0
-        self.batch_log_interval = 60  # 60秒打印一次
+        self.batch_log_interval = 60
         
         # 内存存储（按来源分类）
         self.memory_store = {
@@ -45,7 +45,7 @@ class DataManager:
             exchange = private_data.get('exchange', 'unknown')
             data_type = private_data.get('data_type', 'unknown')
             
-            logger.debug(f"📨【智能大脑】 【接收】DataManager收到{exchange}.{data_type}数据")
+            logger.debug(f"📨【智能大脑】DataManager收到{exchange}.{data_type}数据")
             
             now = datetime.now()
             
@@ -62,7 +62,13 @@ class DataManager:
                     'source': 'reference_task'
                 }
                 self.last_reference_time = now
-                logger.debug(f"✅【智能大脑】 【保存】参考数据 {exchange}.{data_type} 已保存")
+                logger.debug(f"✅【智能大脑】参考数据 {exchange}.{data_type} 已保存")
+                
+                # ✅ 推送存储后的面值数据
+                if self.brain.frontend_relay:
+                    reference_data_to_push = self.memory_store.get('reference_data', {})
+                    await self.brain.frontend_relay.broadcast_reference_data(reference_data_to_push)
+                    logger.debug(f"📤【智能大脑】已推送面值数据，共{len(reference_data_to_push)}条")
                 
             elif data_type == 'user_summary':
                 # 🎯 用户数据：账户、持仓、订单等
@@ -76,7 +82,13 @@ class DataManager:
                     'source': 'private_processor'
                 }
                 self.last_account_time = now
-                logger.debug(f"✅【智能大脑】 【保存】用户数据 {exchange} 已保存")
+                logger.debug(f"✅【智能大脑】用户数据 {exchange} 已保存")
+                
+                # ✅ 推送存储后的私人数据
+                if self.brain.frontend_relay:
+                    user_data_to_push = self.memory_store.get('user_data', {})
+                    await self.brain.frontend_relay.broadcast_private_data(user_data_to_push)
+                    logger.info(f"📤【智能大脑】已推送私人数据，共{len(user_data_to_push)}条")
                 
             elif data_type == 'listen_key':
                 # 🎯 单独处理listenKey，存到 exchange_tokens
@@ -89,13 +101,13 @@ class DataManager:
                         'exchange': exchange,
                         'data_type': 'listen_key'
                     }
-                    logger.info(f"✅【智能大脑】 【保存】{exchange} listenKey已保存: {listen_key[:5]}...")
+                    logger.info(f"✅【智能大脑】{exchange} listenKey已保存: {listen_key[:5]}...")
                     
                     # 通知连接池
                     if hasattr(self.brain, 'private_pool') and self.brain.private_pool:
                         asyncio.create_task(self._notify_listen_key_updated(exchange, listen_key))
                 else:
-                    logger.warning(f"⚠️【智能大脑】 收到空的listenKey: {exchange}")
+                    logger.warning(f"⚠️【智能大脑】收到空的listenKey: {exchange}")
                 
             else:
                 # 🎯 未知类型，暂时存到user_data（带warning）
@@ -108,32 +120,24 @@ class DataManager:
                     'timestamp': private_data.get('timestamp', now.isoformat()),
                     'received_at': now.isoformat()
                 }
+                
+                # 推送未知类型数据
+                if self.brain.frontend_relay:
+                    user_data_to_push = self.memory_store.get('user_data', {})
+                    await self.brain.frontend_relay.broadcast_private_data(user_data_to_push)
             
             # 记录日志
             if data_type in ['account_update', 'user_summary']:
                 self.last_account_time = now
-                logger.debug(f"💰【智能大脑】 收到账户私人数据: {exchange}")
+                logger.debug(f"💰【智能大脑】收到账户私人数据: {exchange}")
             elif data_type in ['order_update', 'trade']:
                 self.last_trade_time = now
-                logger.debug(f"📝【智能大脑】 收到交易私人数据: {exchange}")
+                logger.debug(f"📝【智能大脑】收到交易私人数据: {exchange}")
             elif data_type == 'position_update':
                 self.last_account_time = now
-                logger.debug(f"📊【智能大脑】 收到持仓私人数据: {exchange}")
+                logger.debug(f"📊【智能大脑】收到持仓私人数据: {exchange}")
             elif data_type == 'contract_info':
-                logger.debug(f"📋【智能大脑】 收到参考数据: {exchange}.{data_type}")
-            
-            # ✅ 推送到前端
-            if self.brain.frontend_relay:
-                try:
-                    await self.brain.frontend_relay.broadcast_private_data({
-                        'type': 'data_stored',
-                        'source': 'reference' if data_type == 'contract_info' else 'user',
-                        'exchange': exchange,
-                        'data_type': data_type,
-                        'received_at': now.isoformat()
-                    })
-                except Exception as e:
-                    logger.error(f"❌【智能大脑】推送数据到前端失败: {e}")
+                logger.debug(f"📋【智能大脑】收到参考数据: {exchange}.{data_type}")
                     
         except Exception as e:
             logger.error(f"⚠️【智能大脑】接收私人数据失败: {e}")
@@ -153,24 +157,19 @@ class DataManager:
                         symbol = processed_data[0].get('symbol', 'unknown')
                         logger.debug(f"📣【智能大脑】收到批量数据: {len(processed_data)}条, 第一个合约: {symbol}")
             else:
-                logger.warning(f"⚠️【智能大脑】 收到非列表类型市场数据: {type(processed_data)}")
+                logger.warning(f"⚠️【智能大脑】收到非列表类型市场数据: {type(processed_data)}")
                 self.last_market_count = 1
             
             self.last_market_time = datetime.now()
             
-            # ✅ 存储市场数据到memory_store
+            # ✅ 存储市场数据
             stored_data = await self._store_market_data_simplified(processed_data)
             
-            # ✅ 推送到前端
-            if self.brain.frontend_relay:
-                try:
-                    await self.brain.frontend_relay.broadcast_market_data({
-                        'type': 'market_data_stored',
-                        'count': len(stored_data) if isinstance(stored_data, dict) else 1,
-                        'stored_at': datetime.now().isoformat()
-                    })
-                except Exception as e:
-                    logger.error(f"️❌【智能大脑】推送市场数据到前端失败: {e}")
+            # ✅ 推送存储后的市场数据
+            if self.brain.frontend_relay and stored_data:
+                market_data_to_push = self.memory_store.get('market_data', {})
+                await self.brain.frontend_relay.broadcast_market_data(market_data_to_push)
+                logger.debug(f"📤【智能大脑】已推送市场数据，共{len(market_data_to_push)}条")
             
         except Exception as e:
             logger.error(f"⚠️【智能大脑】接收数据错误: {e}")
@@ -187,7 +186,7 @@ class DataManager:
             
             if isinstance(data, list) and len(data) > 0:
                 for item in data:
-                    await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                    await asyncio.sleep(0)
                     symbol = item.get('symbol', 'unknown')
                     if not symbol or symbol == 'unknown':
                         continue
@@ -250,7 +249,7 @@ class DataManager:
                 'source': metadata.get('source', 'step5_cross_calc')
             }
         except Exception as e:
-            logger.error(f"❌【智能大脑】 创建简化市场数据失败: {e}")
+            logger.error(f"❌【智能大脑】创建简化市场数据失败: {e}")
             return {
                 'symbol': raw_data.get('symbol', 'unknown'),
                 'trade_price_diff': None,
@@ -297,7 +296,7 @@ class DataManager:
                     "last_update": self._format_time_iso(self.last_market_time)
                 })
             
-            # 2. 私人用户数据（未来）
+            # 2. 私人用户数据
             if self.memory_store['user_data']:
                 sources.append({
                     "name": "private_user",
@@ -309,7 +308,6 @@ class DataManager:
             
             # 3. 参考数据（欧易面值）
             if self.memory_store['reference_data']:
-                # 计算实际合约数量
                 contract_count = 0
                 for key, data in self.memory_store['reference_data'].items():
                     if 'okx' in key and 'contract' in key:
@@ -327,12 +325,12 @@ class DataManager:
             
             return {
                 "timestamp": datetime.now().isoformat(),
-                "source_count": len(sources),  # ← 改为 source_count，表示数据来源数量
+                "source_count": len(sources),
                 "sources": sources,
                 "note": f"共{len(sources)}个数据来源，点击endpoint查看详情"
             }
         except Exception as e:
-            logger.error(f"❌ 【智能大脑】获取数据大纲失败: {e}")
+            logger.error(f"❌【智能大脑】获取数据大纲失败: {e}")
             return {"timestamp": datetime.now().isoformat(), "error": str(e), "sources": []}
     
     async def get_public_market_data(self):
@@ -346,16 +344,15 @@ class DataManager:
                 "data": self.memory_store['market_data']
             }
         except Exception as e:
-            logger.error(f"❌【智能大脑】 获取公开市场数据失败: {e}")
+            logger.error(f"❌【智能大脑】获取公开市场数据失败: {e}")
             return {"error": str(e)}
     
     async def get_private_user_data(self):
         """获取私人用户数据详情"""
         try:
-            # 按交易所整理
             user_data = {}
             for key, data in self.memory_store['user_data'].items():
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                await asyncio.sleep(0)
                 exchange = data.get('exchange')
                 if exchange:
                     user_data[exchange] = data.get('data', {})
@@ -368,16 +365,15 @@ class DataManager:
                 "data": user_data
             }
         except Exception as e:
-            logger.error(f"❌【智能大脑】 获取私人用户数据失败: {e}")
+            logger.error(f"❌【智能大脑】获取私人用户数据失败: {e}")
             return {"error": str(e)}
     
     async def get_okx_contracts_data(self):
         """获取OKX合约面值数据详情"""
         try:
-            # 查找OKX合约面值数据
             contract_data = None
             for key, data in self.memory_store['reference_data'].items():
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                await asyncio.sleep(0)
                 if 'okx' in key and 'contract' in key:
                     contract_data = data.get('data', {})
                     break
@@ -390,7 +386,7 @@ class DataManager:
                 "data": contract_data.get('contracts', []) if contract_data else []
             }
         except Exception as e:
-            logger.error(f"❌【智能大脑】 获取OKX合约面值数据失败: {e}")
+            logger.error(f"❌【智能大脑】获取OKX合约面值数据失败: {e}")
             return {"error": str(e)}
     
     async def get_api_credentials_status(self):
@@ -398,7 +394,7 @@ class DataManager:
         try:
             safe_apis = {}
             for exchange, creds in self.memory_store['env_apis'].items():
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环内让出CPU
+                await asyncio.sleep(0)
                 safe_apis[exchange] = {
                     "api_key_exists": bool(creds.get('api_key')),
                     "api_secret_exists": bool(creds.get('api_secret')),
@@ -412,7 +408,7 @@ class DataManager:
                 "warning": "敏感信息已隐藏，只显示存在性和预览"
             }
         except Exception as e:
-            logger.error(f"❌【智能大脑】 获取API凭证状态失败: {e}")
+            logger.error(f"❌【智能大脑】获取API凭证状态失败: {e}")
             return {"error": str(e)}
     
     async def get_system_status(self):
@@ -434,7 +430,6 @@ class DataManager:
             "timestamp": datetime.now().isoformat()
         }
         
-        # 添加前端连接状态（如果有）
         if self.brain.frontend_relay:
             frontend_stats = self.brain.frontend_relay.get_stats_summary()
             status["frontend_connection"] = {
@@ -460,33 +455,28 @@ class DataManager:
             }
             
             if data_type == 'market':
-                # 只清空市场数据
                 self.memory_store['market_data'].clear()
                 self.last_market_time = None
                 self.last_market_count = 0
                 message = f"清空市场数据，共{before_stats['market_data_count']}条"
                 
             elif data_type == 'user':
-                # 只清空用户数据
                 self.memory_store['user_data'].clear()
                 self.last_account_time = None
                 self.last_trade_time = None
                 message = f"清空用户数据，共{before_stats['user_data_count']}条"
                 
             elif data_type == 'reference':
-                # 只清空参考数据
                 self.memory_store['reference_data'].clear()
                 self.last_reference_time = None
                 message = f"清空参考数据，共{before_stats['reference_data_count']}条"
                 
             elif data_type == 'tokens':
-                # 只清空令牌数据
                 token_count = before_stats['exchange_tokens_count']
                 self.memory_store['exchange_tokens'].clear()
                 message = f"清空令牌数据，共{token_count}条"
                 
             elif data_type is None:
-                # 清空所有数据
                 self.memory_store['market_data'].clear()
                 self.memory_store['user_data'].clear()
                 self.memory_store['reference_data'].clear()
@@ -528,16 +518,16 @@ class DataManager:
                 "error": str(e)
             }
     
-    # ==================== 原有接口（保持兼容）====================
+    # ==================== 原有接口 ====================
     
     async def get_listen_key(self, exchange: str):
         """供连接池只读查询当前令牌"""
         token_info = self.memory_store['exchange_tokens'].get(exchange)
         if token_info:
-            logger.debug(f"📤【智能大脑】 【读取】{exchange} listenKey被读取")
+            logger.debug(f"📤【智能大脑】【读取】{exchange} listenKey被读取")
             return token_info.get('key')
         else:
-            logger.warning(f"⚠️【智能大脑】 【读取】{exchange} listenKey不存在")
+            logger.warning(f"⚠️【智能大脑】【读取】{exchange} listenKey不存在")
             return None
     
     async def get_api_credentials(self, exchange: str):
@@ -558,7 +548,6 @@ class DataManager:
             }
         }
         
-        # 验证凭证是否存在
         for exchange, creds in apis.items():
             if not creds['api_key'] or not creds['api_secret']:
                 logger.warning(f"⚠️【智能大脑】环境变量中{exchange}的API凭证不完整")
@@ -589,7 +578,7 @@ class DataManager:
     async def _log_data_status(self):
         """定期记录数据状态"""
         while self.brain.running:
-            await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU
+            await asyncio.sleep(0)
             try:
                 await asyncio.sleep(60)
                 
@@ -600,7 +589,6 @@ class DataManager:
                 ref_count = len(self.memory_store['reference_data'])
                 ref_time = self._format_time_diff(self.last_reference_time)
                 
-                # 前端连接状态
                 if self.brain.frontend_relay:
                     frontend_stats = self.brain.frontend_relay.get_stats_summary()
                     frontend_clients = frontend_stats.get('clients_connected', 0)
