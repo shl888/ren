@@ -309,9 +309,10 @@ async def main():
                 brain_instance=brain,
                 port=10001
             )
-            await frontend_relay.start()
-            brain.frontend_relay = frontend_relay
-            logger.info("✅ 前端中继启动完成！")
+            start_result = await frontend_relay.start()
+            if start_result:
+                brain.frontend_relay = frontend_relay
+            # 日志已经在 qd_server.py 里输出，这里不再重复打印
         except ImportError:
             logger.warning("⚠️ 前端中继模块未找到")
         except Exception as e:
