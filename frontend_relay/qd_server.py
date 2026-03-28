@@ -8,6 +8,7 @@ import asyncio
 import time
 import logging
 import json
+import os
 from typing import List, Dict, Any, Optional
 from aiohttp import web
 
@@ -28,10 +29,16 @@ class FrontendRelayServer:
         self.brain = brain_instance
         self.port = port
         
-        # WebSocket客户端管理（极简，只有列表）
-        self.ws_clients: List[web.WebSocketResponse] = []
+        # 从环境变量读取密钥
+        self.valid_token = os.getenv('FRONTEND_TOKEN', '')
+        if not self.valid_token:
+            logger.warning(f"⚠️【客户端】 FRONTEND_TOKEN未设置，使用默认密钥（不安全）")
+            self.valid_token = 'default_token_change_me'
         
-        # 基础统计（不需要复杂监控）
+        # WebSocket客户端管理（存储认证状态）
+        self.ws_clients: List[Dict] = []  # 每个元素: {'ws': ws, 'authenticated': bool, 'client_id': str}
+        
+        # 基础统计
         self.stats = {
             "server_start": time.time(),
             "total_connections": 0,
@@ -48,10 +55,11 @@ class FrontendRelayServer:
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
         
-        logger.info(f"🔄【智能大脑】 前端中继初始化完成，端口: {self.port}")
+        logger.info(f"🔄【客户端】 前端中继初始化完成，端口: {self.port}")
+        logger.info(f"🔐【客户端】 密钥验证已启用（连接后发送auth消息）")
     
     def _setup_routes(self):
-        """设置路由（极简版）"""
+        """设置路由"""
         # WebSocket端点 - 前端数据流
         self.app.router.add_get('/ws', self._handle_websocket)
         
@@ -61,7 +69,7 @@ class FrontendRelayServer:
         # 状态查询
         self.app.router.add_get('/status', self._handle_status)
         
-        # 健康检查（用于负载均衡）
+        # 健康检查
         self.app.router.add_get('/health', self._handle_health)
     
     # ==================== WebSocket处理 ====================
@@ -69,62 +77,111 @@ class FrontendRelayServer:
     async def _handle_websocket(self, request):
         """
         处理WebSocket连接
-        原则：不心跳、不保活、不断就保持
+        先建立连接，等客户端发送auth消息验证
         """
-        # 1. 基础验证（可选）
-        token = request.query.get('token', '')
-        if not self._validate_token_simple(token):
-            logger.warning(f"📛【智能大脑】 前端WebSocket连接被拒绝，token无效")
-            return web.HTTPUnauthorized()
-        
-        # 2. 建立连接
+        # 1. 建立连接（不验证token）
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         
-        # 3. 记录客户端（极简）
+        # 2. 记录临时连接（未认证）
         client_ip = request.remote
         client_id = f"qd_{client_ip}_{int(time.time())}"
-        self.ws_clients.append(ws)
-        
-        # 4. 更新统计
+        client_info = {
+            'ws': ws,
+            'authenticated': False,
+            'client_id': client_id,
+            'ip': client_ip
+        }
+        self.ws_clients.append(client_info)
         self.stats["total_connections"] += 1
         self.stats["current_connections"] = len(self.ws_clients)
         
-        logger.info(f"✅ 【智能大脑】前端连接建立: {client_id} (当前: {len(self.ws_clients)}个)")
+        logger.info(f"🔌【客户端】新连接建立，等待认证: {client_id} (当前: {len(self.ws_clients)}个)")
         
         try:
-            # 5. 发送连接确认（可选）
-            await ws.send_json({
-                "type": "connected",
-                "client_id": client_id,
-                "timestamp": time.time()
-            })
+            # 3. 等待客户端发送认证消息
+            auth_timeout = 10  # 10秒内必须认证
+            auth_received = False
             
-            # 6. 保持连接（不主动做任何事）
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
-                    # 前端可以发送ping，我们响应pong
                     try:
                         data = json.loads(msg.data)
-                        if data.get('type') == 'ping':
+                        
+                        # 处理认证消息
+                        if data.get('type') == 'auth':
+                            token = data.get('token', '')
+                            if self._validate_token(token):
+                                client_info['authenticated'] = True
+                                auth_received = True
+                                
+                                # 发送认证成功
+                                await ws.send_json({
+                                    "type": "auth_success",
+                                    "client_id": client_id,
+                                    "timestamp": time.time()
+                                })
+                                logger.info(f"✅【客户端】客户端认证成功: {client_id}")
+                                
+                                # 认证成功后进入正常消息循环
+                                async for msg2 in ws:
+                                    if msg2.type == web.WSMsgType.TEXT:
+                                        try:
+                                            data2 = json.loads(msg2.data)
+                                            if data2.get('type') == 'ping':
+                                                await ws.send_json({
+                                                    "type": "pong",
+                                                    "timestamp": time.time()
+                                                })
+                                        except:
+                                            pass
+                                    elif msg2.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
+                                        break
+                                break
+                            else:
+                                # 认证失败
+                                await ws.send_json({
+                                    "type": "auth_failed",
+                                    "error": "Invalid token",
+                                    "timestamp": time.time()
+                                })
+                                logger.warning(f"📛【客户端】客户端认证失败: {client_id}")
+                                break
+                        else:
+                            # 未认证前收到其他消息，要求先认证
                             await ws.send_json({
-                                "type": "pong",
+                                "type": "error",
+                                "error": "Please authenticate first. Send: {'type':'auth', 'token':'your_token'}",
                                 "timestamp": time.time()
                             })
-                    except:
-                        pass  # 忽略格式错误
+                            
+                    except json.JSONDecodeError:
+                        pass
+                        
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
-                    break  # 连接关闭或错误，退出循环
-        
+                    break
+            
+            # 认证超时处理
+            if not auth_received and client_info in self.ws_clients:
+                logger.warning(f"⏰【客户端】客户端认证超时: {client_id}")
+                try:
+                    await ws.send_json({
+                        "type": "auth_timeout",
+                        "error": "Authentication timeout",
+                        "timestamp": time.time()
+                    })
+                except:
+                    pass
+                
         except Exception as e:
             logger.debug(f"WebSocket异常 {client_id}: {e}")
         
         finally:
-            # 7. 清理连接（静默）
-            if ws in self.ws_clients:
-                self.ws_clients.remove(ws)
+            # 4. 清理连接
+            if client_info in self.ws_clients:
+                self.ws_clients.remove(client_info)
                 self.stats["current_connections"] = len(self.ws_clients)
-                logger.info(f"❌ 【智能大脑】前端连接断开: {client_id} (剩余: {len(self.ws_clients)}个)")
+                logger.info(f"❌【客户端】连接断开: {client_id} (剩余: {len(self.ws_clients)}个)")
         
         return ws
     
@@ -133,21 +190,21 @@ class FrontendRelayServer:
     async def _handle_command(self, request):
         """处理前端HTTP指令"""
         try:
-            # 1. 解析请求
+            # 1. 验证token（HTTP指令需要验证）
+            token = self._get_token_from_request(request)
+            if not self._validate_token(token):
+                return web.json_response({
+                    "success": False,
+                    "error": "认证失败"
+                }, status=401)
+            
+            # 2. 解析请求
             data = await request.json()
             command = data.get('command', '')
             params = data.get('params', {})
             client_id = data.get('client_id', 'unknown')
             
-            logger.info(f"📨 【智能大脑】收到前端指令: {command} from {client_id}")
-            
-            # 2. 基础验证
-            token = self._get_token_from_request(request)
-            if not self._validate_token_simple(token):
-                return web.json_response({
-                    "success": False,
-                    "error": "认证失败"
-                }, status=401)
+            logger.info(f"📨 【客户端】收到前端指令: {command} from {client_id}")
             
             # 3. 调用大脑处理指令
             if not self.brain:
@@ -179,7 +236,7 @@ class FrontendRelayServer:
                 "error": "无效的JSON格式"
             }, status=400)
         except Exception as e:
-            logger.error(f"【智能大脑】处理前端指令失败: {e}")
+            logger.error(f"【客户端】处理前端指令失败: {e}")
             return web.json_response({
                 "success": False,
                 "error": str(e)
@@ -189,6 +246,10 @@ class FrontendRelayServer:
         """状态查询接口"""
         uptime = time.time() - self.stats["server_start"]
         
+        # 统计已认证和未认证的客户端
+        authenticated = len([c for c in self.ws_clients if c.get('authenticated', False)])
+        unauthenticated = len(self.ws_clients) - authenticated
+        
         return web.json_response({
             "service": "frontend_relay",
             "status": "running",
@@ -196,6 +257,12 @@ class FrontendRelayServer:
             "uptime_seconds": uptime,
             "uptime_human": f"{int(uptime // 3600)}小时{int((uptime % 3600) // 60)}分钟",
             "stats": self.stats,
+            "clients": {
+                "total": len(self.ws_clients),
+                "authenticated": authenticated,
+                "unauthenticated": unauthenticated
+            },
+            "auth_enabled": True,
             "timestamp": time.time()
         })
     
@@ -210,11 +277,11 @@ class FrontendRelayServer:
     # ==================== 数据广播 ====================
     
     async def broadcast_market_data(self, market_data):
-        """
-        广播市场数据到所有前端
-        原则：有数据就推，推失败就静默清理
-        """
+        """广播市场数据到所有前端"""
+        logger.info(f"📤【客户端】【市场数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
         if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【市场数据推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -227,7 +294,10 @@ class FrontendRelayServer:
     
     async def broadcast_private_data(self, private_data):
         """广播私人数据到所有前端"""
+        logger.info(f"📤【客户端】【私人数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
         if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【私人数据推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -238,9 +308,28 @@ class FrontendRelayServer:
         
         await self._safe_broadcast(message)
     
+    async def broadcast_reference_data(self, reference_data):
+        """广播面值数据到所有前端"""
+        logger.info(f"📤【客户端】【面值数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
+        if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【面值数据推送】没有客户端连接，跳过推送")
+            return
+        
+        message = {
+            "type": "reference_data",
+            "data": reference_data,
+            "timestamp": time.time()
+        }
+        
+        await self._safe_broadcast(message)
+    
     async def broadcast_system_status(self, status_data):
         """广播系统状态到所有前端"""
+        logger.info(f"📤【客户端】【系统状态推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
         if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【系统状态推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -253,40 +342,51 @@ class FrontendRelayServer:
     
     async def _safe_broadcast(self, message):
         """
-        安全广播 - 推送到所有客户端，失败则静默清理
+        安全广播 - 只推送给已认证的客户端，带详细日志
         """
+        # 过滤出已认证的客户端
+        authenticated_clients = [c for c in self.ws_clients if c.get('authenticated', False)]
+        
+        if not authenticated_clients:
+            logger.debug(f"⚠️【客户端】【广播】没有已认证的客户端，跳过")
+            return
+        
+        message_type = message.get('type', 'unknown')
+        logger.info(f"🔥【客户端】【广播开始】类型: {message_type}, 已认证客户端数: {len(authenticated_clients)}")
+        
         dead_clients = []
         message_json = json.dumps(message, default=str)
         
-        for ws in self.ws_clients:
+        for client in authenticated_clients:
+            ws = client['ws']
+            client_id = client.get('client_id', 'unknown')
             try:
                 await ws.send_str(message_json)
-                self.stats["messages_broadcast"] += 1
-            except (ConnectionError, RuntimeError):
-                # 连接已断开，标记为待清理
-                dead_clients.append(ws)
+                logger.debug(f"✅【客户端】【广播成功】类型: {message_type}, 客户端: {client_id}")
             except Exception as e:
-                logger.debug(f"【智能大脑】向前端广播消息失败: {e}")
-                dead_clients.append(ws)
+                logger.error(f"❌【客户端】【广播失败】类型: {message_type}, 客户端: {client_id}, 错误: {e}")
+                dead_clients.append(client)
         
-        # 静默清理死连接
+        # 清理死连接
         if dead_clients:
-            for ws in dead_clients:
-                if ws in self.ws_clients:
-                    self.ws_clients.remove(ws)
+            logger.info(f"🧹【客户端】【清理连接】清理 {len(dead_clients)} 个死连接")
+            for client in dead_clients:
+                if client in self.ws_clients:
+                    self.ws_clients.remove(client)
             self.stats["current_connections"] = len(self.ws_clients)
+        
+        self.stats["messages_broadcast"] += len(authenticated_clients) - len(dead_clients)
+        logger.info(f"✅【客户端】【广播完成】类型: {message_type}, 成功发送到 {len(authenticated_clients) - len(dead_clients)} 个客户端")
     
     # ==================== 辅助方法 ====================
     
-    def _validate_token_simple(self, token: str) -> bool:
-        """
-        简化版token验证
-        TODO: 实现实际验证逻辑
-        目前返回True允许所有连接（测试用）
-        """
-        # 实际应该验证token有效性
-        # 现在先允许所有连接
-        return True
+    def _validate_token(self, token: str) -> bool:
+        """验证token"""
+        if not token:
+            return False
+        
+        # 从环境变量读取的密钥
+        return token == self.valid_token
     
     def _get_token_from_request(self, request) -> str:
         """从HTTP请求获取token"""
@@ -300,15 +400,6 @@ class FrontendRelayServer:
         if token:
             return token
         
-        # 3. 检查JSON body
-        try:
-            if request.has_body:
-                # 注意：这里不能直接读取body，会消耗它
-                # 实际应该在_handle_command中处理
-                pass
-        except:
-            pass
-        
         return ''
     
     # ==================== 服务器控制 ====================
@@ -316,7 +407,7 @@ class FrontendRelayServer:
     async def start(self):
         """启动前端中继服务器"""
         try:
-            logger.info(f"🚀【智能大脑】 启动前端中继服务器，端口: {self.port}")
+            logger.info(f"🚀【客户端】【智能大脑】 启动前端中继服务器，端口: {self.port}")
             
             # 创建运行器
             self.runner = web.AppRunner(self.app)
@@ -326,26 +417,27 @@ class FrontendRelayServer:
             self.site = web.TCPSite(self.runner, '0.0.0.0', self.port)
             await self.site.start()
             
-            logger.info(f"✅【智能大脑】 前端中继服务器启动成功")
-            logger.info(f"📡【智能大脑】 WebSocket: ws://0.0.0.0:{self.port}/ws")
-            logger.info(f"📨【智能大脑】 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
-            logger.info(f"📊【智能大脑】状态查询: http://0.0.0.0:{self.port}/status")
-            logger.info(f"❤️【智能大脑】健康检查: http://0.0.0.0:{self.port}/health")
+            logger.info(f"✅【客户端】【智能大脑】 前端中继服务器启动成功")
+            logger.info(f"📡【客户端】【智能大脑】 WebSocket: ws://0.0.0.0:{self.port}/ws")
+            logger.info(f"📨【客户端】【智能大脑】 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
+            logger.info(f"📊【客户端】【智能大脑】状态查询: http://0.0.0.0:{self.port}/status")
+            logger.info(f"❤️【客户端】【智能大脑】健康检查: http://0.0.0.0:{self.port}/health")
+            logger.info(f"🔐【客户端】【智能大脑】认证方式: 连接WebSocket后发送 {{'type':'auth', 'token':'YOUR_TOKEN'}}")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌【智能大脑】 启动前端中继服务器失败: {e}")
+            logger.error(f"❌【客户端】【智能大脑】 启动前端中继服务器失败: {e}")
             return False
     
     async def stop(self):
         """停止前端中继服务器"""
-        logger.info("🛑 【智能大脑】停止前端中继服务器...")
+        logger.info("🛑【客户端】 【智能大脑】停止前端中继服务器...")
         
         # 关闭所有WebSocket连接
-        for ws in self.ws_clients:
+        for client in self.ws_clients:
             try:
-                await ws.close()
+                await client['ws'].close()
             except:
                 pass
         self.ws_clients.clear()
@@ -356,18 +448,22 @@ class FrontendRelayServer:
             self.runner = None
             self.site = None
         
-        logger.info("✅ 【智能大脑】前端中继服务器已停止")
+        logger.info("✅【客户端】 【智能大脑】前端中继服务器已停止")
     
     def get_stats_summary(self) -> Dict[str, Any]:
         """获取统计摘要"""
         uptime = time.time() - self.stats["server_start"]
         
+        authenticated = len([c for c in self.ws_clients if c.get('authenticated', False)])
+        
         return {
             "running": self.runner is not None,
             "port": self.port,
             "clients_connected": len(self.ws_clients),
+            "authenticated_clients": authenticated,
             "total_connections": self.stats["total_connections"],
             "messages_broadcast": self.stats["messages_broadcast"],
             "commands_processed": self.stats["commands_processed"],
-            "uptime_seconds": uptime
+            "uptime_seconds": uptime,
+            "auth_enabled": True
         }
