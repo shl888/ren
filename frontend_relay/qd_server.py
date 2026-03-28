@@ -278,7 +278,7 @@ class FrontendRelayServer:
     
     async def broadcast_market_data(self, market_data):
         """广播市场数据到所有前端"""
-        logger.info(f"📤【客户端】【市场数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        logger.debug(f"📤【客户端】【市场数据推送】开始推送，客户端数: {len(self.ws_clients)}")
         
         if not self.ws_clients:
             logger.debug(f"⚠️【客户端】【市场数据推送】没有客户端连接，跳过推送")
@@ -294,7 +294,7 @@ class FrontendRelayServer:
     
     async def broadcast_private_data(self, private_data):
         """广播私人数据到所有前端"""
-        logger.info(f"📤【客户端】【私人数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        logger.debug(f"📤【客户端】【私人数据推送】开始推送，客户端数: {len(self.ws_clients)}")
         
         if not self.ws_clients:
             logger.debug(f"⚠️【客户端】【私人数据推送】没有客户端连接，跳过推送")
@@ -310,7 +310,7 @@ class FrontendRelayServer:
     
     async def broadcast_reference_data(self, reference_data):
         """广播面值数据到所有前端"""
-        logger.info(f"📤【客户端】【面值数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        logger.debug(f"📤【客户端】【面值数据推送】开始推送，客户端数: {len(self.ws_clients)}")
         
         if not self.ws_clients:
             logger.debug(f"⚠️【客户端】【面值数据推送】没有客户端连接，跳过推送")
@@ -326,7 +326,7 @@ class FrontendRelayServer:
     
     async def broadcast_system_status(self, status_data):
         """广播系统状态到所有前端"""
-        logger.info(f"📤【客户端】【系统状态推送】开始推送，客户端数: {len(self.ws_clients)}")
+        logger.debug(f"📤【客户端】【系统状态推送】开始推送，客户端数: {len(self.ws_clients)}")
         
         if not self.ws_clients:
             logger.debug(f"⚠️【客户端】【系统状态推送】没有客户端连接，跳过推送")
