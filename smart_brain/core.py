@@ -107,7 +107,7 @@ class SmartBrain:
         """接收私人数据（委托给data_manager）"""
         return await self.data_manager.receive_private_data(private_data)
     
-    # ==================== 前端指令处理（新增）====================
+    # ==================== 前端指令处理 ====================
     
     async def handle_frontend_command(self, command_data):
         """
@@ -118,14 +118,10 @@ class SmartBrain:
         params = command_data.get('params', {})
         client_id = command_data.get('client_id', 'unknown')
         
-        logger.info(f"📨【智能大脑】收到前端指令")
-        logger.info(f"   【智能大脑】收到前端指令: {command}")
-        logger.info(f"   【智能大脑】收到前端指令参数: {params}")
-        logger.info(f"   【智能大脑】收到前端指令客户端: {client_id}")
-        
         # ========== 交易指令：直接执行（暂未实现具体逻辑）==========
         if command == 'place_order':
-            logger.info(f"💰【智能大脑】处理开仓指令（暂未实现具体逻辑）")
+            logger.info(f"💰【智能大脑】收到开仓指令")
+            logger.info(f"   【智能大脑】收到开仓指令参数: {params}")
             return {
                 "success": True,
                 "received": True,
@@ -135,7 +131,8 @@ class SmartBrain:
             }
         
         elif command == 'close_position':
-            logger.info(f"🔚【智能大脑】处理平仓指令（暂未实现具体逻辑）")
+            logger.info(f"🔚【智能大脑】收到平仓指令")
+            logger.info(f"   【智能大脑】收到平仓指令参数: {params}")
             return {
                 "success": True,
                 "received": True,
@@ -145,7 +142,8 @@ class SmartBrain:
             }
         
         elif command == 'set_sl_tp':
-            logger.info(f"⚙️【智能大脑】处理止损止盈指令（暂未实现具体逻辑）")
+            logger.info(f"⚙️【智能大脑】收到止损止盈指令")
+            logger.info(f"   【智能大脑】收到止损止盈指令参数: {params}")
             return {
                 "success": True,
                 "received": True,
@@ -154,21 +152,22 @@ class SmartBrain:
                 "params": params
             }
         
-        # ========== 控制指令：保存（以后实现）==========
+        # ========== 控制指令：保存 ==========
         elif command == 'save_config':
             self.config_data = params.get('config_data', '')
-            logger.info(f"💾【智能大脑】配置已保存（暂未使用）")
+            logger.info(f"💾【智能大脑】收到配置指令")
             return {
                 "success": True,
                 "received": True,
                 "command": command,
-                "message": f"配置已保存",
+                "message": f"【智能大脑】收到配置指令配置已保存",
                 "config_length": len(self.config_data)
             }
         
         elif command == 'set_trade_mode':
             self.trade_mode = params.get('mode', 'half')
-            logger.info(f"🎮【智能大脑】交易模式已切换: {self.trade_mode}")
+            logger.info(f"🎮【智能大脑】收到交易模式指令")
+            logger.info(f"   【智能大脑】收到交易模式指令模式: {self.trade_mode}")
             return {
                 "success": True,
                 "received": True,
@@ -178,7 +177,7 @@ class SmartBrain:
             }
         
         else:
-            logger.warning(f"⚠️【智能大脑】未知指令: {command}")
+            logger.warning(f"⚠️【智能大脑】收到未知指令: {command}")
             return {
                 "success": False,
                 "received": True,
@@ -193,7 +192,7 @@ class SmartBrain:
             
             # 主循环
             while self.running:
-                await asyncio.sleep(0)  # ✅ [蚂蚁基因修复] 循环开始让出CPU，避免长时间占用
+                await asyncio.sleep(0)
                 await asyncio.sleep(1)
         
         except KeyboardInterrupt:
