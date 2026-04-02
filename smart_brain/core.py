@@ -119,9 +119,9 @@ class SmartBrain:
         client_id = command_data.get('client_id', 'unknown')
         
         logger.info(f"📨【智能大脑】收到前端指令")
-        logger.info(f"   指令: {command}")
-        logger.info(f"   参数: {params}")
-        logger.info(f"   客户端: {client_id}")
+        logger.info(f"   【智能大脑】收到前端指令: {command}")
+        logger.info(f"   【智能大脑】收到前端指令参数: {params}")
+        logger.info(f"   【智能大脑】收到前端指令客户端: {client_id}")
         
         # ========== 交易指令：直接执行（暂未实现具体逻辑）==========
         if command == 'place_order':
