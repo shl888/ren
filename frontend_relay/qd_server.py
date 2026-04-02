@@ -63,7 +63,7 @@ class FrontendRelayServer:
         # WebSocket端点 - 前端数据流
         self.app.router.add_get('/ws', self._handle_websocket)
         
-        # HTTP API端点 - 前端指令
+        # HTTP API端点 - 前端指令（备用）
         self.app.router.add_post('/api/cmd', self._handle_command)
         
         # 状态查询
@@ -78,6 +78,7 @@ class FrontendRelayServer:
         """
         处理WebSocket连接
         先建立连接，等客户端发送auth消息验证
+        认证后可以接收指令和心跳
         """
         # 1. 建立连接（不验证token）
         ws = web.WebSocketResponse()
@@ -128,13 +129,100 @@ class FrontendRelayServer:
                                     if msg2.type == web.WSMsgType.TEXT:
                                         try:
                                             data2 = json.loads(msg2.data)
-                                            if data2.get('type') == 'ping':
+                                            msg_type = data2.get('type')
+                                            
+                                            # ========== 处理心跳 ==========
+                                            if msg_type == 'ping':
                                                 await ws.send_json({
                                                     "type": "pong",
                                                     "timestamp": time.time()
                                                 })
-                                        except:
+                                            
+                                            # ========== 处理前端指令 ==========
+                                            elif msg_type == 'order':
+                                                # 开仓指令
+                                                self.stats["commands_processed"] += 1
+                                                result = await self.brain.handle_frontend_command({
+                                                    "command": "place_order",
+                                                    "params": data2.get('data', {}),
+                                                    "client_id": client_id
+                                                })
+                                                await ws.send_json({
+                                                    "type": "order_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                logger.info(f"📨【客户端】处理开仓指令，结果: {result.get('success')}")
+                                            
+                                            elif msg_type == 'set_sl_tp':
+                                                # 止损止盈指令
+                                                self.stats["commands_processed"] += 1
+                                                result = await self.brain.handle_frontend_command({
+                                                    "command": "set_sl_tp",
+                                                    "params": data2.get('data', {}),
+                                                    "client_id": client_id
+                                                })
+                                                await ws.send_json({
+                                                    "type": "sl_tp_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                logger.info(f"📨【客户端】处理止损止盈指令，结果: {result.get('success')}")
+                                            
+                                            elif msg_type == 'close_position':
+                                                # 平仓指令
+                                                self.stats["commands_processed"] += 1
+                                                result = await self.brain.handle_frontend_command({
+                                                    "command": "close_position",
+                                                    "params": data2.get('data', {}),
+                                                    "client_id": client_id
+                                                })
+                                                await ws.send_json({
+                                                    "type": "close_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                logger.info(f"📨【客户端】处理平仓指令，结果: {result.get('success')}")
+                                            
+                                            elif msg_type == 'config':
+                                                # 配置指令
+                                                self.stats["commands_processed"] += 1
+                                                result = await self.brain.handle_frontend_command({
+                                                    "command": "save_config",
+                                                    "params": {"config_data": data2.get('data', '')},
+                                                    "client_id": client_id
+                                                })
+                                                await ws.send_json({
+                                                    "type": "config_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                logger.info(f"📨【客户端】处理配置指令")
+                                            
+                                            elif msg_type == 'set_trade_mode':
+                                                # 交易模式指令
+                                                self.stats["commands_processed"] += 1
+                                                result = await self.brain.handle_frontend_command({
+                                                    "command": "set_trade_mode",
+                                                    "params": {"mode": data2.get('mode', 'half')},
+                                                    "client_id": client_id
+                                                })
+                                                await ws.send_json({
+                                                    "type": "mode_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                logger.info(f"📨【客户端】处理交易模式指令: {data2.get('mode')}")
+                                            
+                                            else:
+                                                # 未知消息类型
+                                                logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
+                                                
+                                        except json.JSONDecodeError:
                                             pass
+                                        except Exception as e:
+                                            logger.error(f"❌【客户端】处理消息异常: {e}")
+                                            
                                     elif msg2.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                                         break
                                 break
@@ -185,12 +273,12 @@ class FrontendRelayServer:
         
         return ws
     
-    # ==================== HTTP指令处理 ====================
+    # ==================== HTTP指令处理（备用）====================
     
     async def _handle_command(self, request):
-        """处理前端HTTP指令"""
+        """处理前端HTTP指令（备用方式）"""
         try:
-            # 1. 验证token（HTTP指令需要验证）
+            # 1. 验证token
             token = self._get_token_from_request(request)
             if not self._validate_token(token):
                 return web.json_response({
@@ -204,7 +292,7 @@ class FrontendRelayServer:
             params = data.get('params', {})
             client_id = data.get('client_id', 'unknown')
             
-            logger.info(f"📨 【客户端】收到前端指令: {command} from {client_id}")
+            logger.info(f"📨【客户端】收到前端HTTP指令: {command} from {client_id}")
             
             # 3. 调用大脑处理指令
             if not self.brain:
@@ -278,10 +366,7 @@ class FrontendRelayServer:
     
     async def broadcast_market_data(self, market_data):
         """广播市场数据到所有前端"""
-        logger.debug(f"📤【客户端】【市场数据推送】开始推送，客户端数: {len(self.ws_clients)}")
-        
         if not self.ws_clients:
-            logger.debug(f"⚠️【客户端】【市场数据推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -294,10 +379,7 @@ class FrontendRelayServer:
     
     async def broadcast_private_data(self, private_data):
         """广播私人数据到所有前端"""
-        logger.debug(f"📤【客户端】【私人数据推送】开始推送，客户端数: {len(self.ws_clients)}")
-        
         if not self.ws_clients:
-            logger.debug(f"⚠️【客户端】【私人数据推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -310,10 +392,7 @@ class FrontendRelayServer:
     
     async def broadcast_reference_data(self, reference_data):
         """广播面值数据到所有前端"""
-        logger.debug(f"📤【客户端】【面值数据推送】开始推送，客户端数: {len(self.ws_clients)}")
-        
         if not self.ws_clients:
-            logger.debug(f"⚠️【客户端】【面值数据推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -326,10 +405,7 @@ class FrontendRelayServer:
     
     async def broadcast_system_status(self, status_data):
         """广播系统状态到所有前端"""
-        logger.debug(f"📤【客户端】【系统状态推送】开始推送，客户端数: {len(self.ws_clients)}")
-        
         if not self.ws_clients:
-            logger.debug(f"⚠️【客户端】【系统状态推送】没有客户端连接，跳过推送")
             return
         
         message = {
@@ -342,17 +418,12 @@ class FrontendRelayServer:
     
     async def _safe_broadcast(self, message):
         """
-        安全广播 - 只推送给已认证的客户端，带详细日志
+        安全广播 - 只推送给已认证的客户端
         """
-        # 过滤出已认证的客户端
         authenticated_clients = [c for c in self.ws_clients if c.get('authenticated', False)]
         
         if not authenticated_clients:
-            logger.debug(f"⚠️【客户端】【广播】没有已认证的客户端，跳过")
             return
-        
-        message_type = message.get('type', 'unknown')
-        logger.info(f"🔥【客户端】【广播开始】类型: {message_type}, 已认证客户端数: {len(authenticated_clients)}")
         
         dead_clients = []
         message_json = json.dumps(message, default=str)
@@ -362,21 +433,18 @@ class FrontendRelayServer:
             client_id = client.get('client_id', 'unknown')
             try:
                 await ws.send_str(message_json)
-                logger.debug(f"✅【客户端】【广播成功】类型: {message_type}, 客户端: {client_id}")
             except Exception as e:
-                logger.error(f"❌【客户端】【广播失败】类型: {message_type}, 客户端: {client_id}, 错误: {e}")
+                logger.debug(f"❌【客户端】广播失败 {client_id}: {e}")
                 dead_clients.append(client)
         
         # 清理死连接
         if dead_clients:
-            logger.info(f"🧹【客户端】【清理连接】清理 {len(dead_clients)} 个死连接")
             for client in dead_clients:
                 if client in self.ws_clients:
                     self.ws_clients.remove(client)
             self.stats["current_connections"] = len(self.ws_clients)
         
         self.stats["messages_broadcast"] += len(authenticated_clients) - len(dead_clients)
-        logger.info(f"✅【客户端】【广播完成】类型: {message_type}, 成功发送到 {len(authenticated_clients) - len(dead_clients)} 个客户端")
     
     # ==================== 辅助方法 ====================
     
@@ -384,18 +452,14 @@ class FrontendRelayServer:
         """验证token"""
         if not token:
             return False
-        
-        # 从环境变量读取的密钥
         return token == self.valid_token
     
     def _get_token_from_request(self, request) -> str:
         """从HTTP请求获取token"""
-        # 1. 检查Authorization头
         auth_header = request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             return auth_header[7:]
         
-        # 2. 检查查询参数
         token = request.query.get('token', '')
         if token:
             return token
@@ -407,34 +471,30 @@ class FrontendRelayServer:
     async def start(self):
         """启动前端中继服务器"""
         try:
-            logger.info(f"🚀【客户端】【智能大脑】 启动前端中继服务器，端口: {self.port}")
+            logger.info(f"🚀【客户端】启动前端中继服务器，端口: {self.port}")
             
-            # 创建运行器
             self.runner = web.AppRunner(self.app)
             await self.runner.setup()
             
-            # 启动TCP站点
             self.site = web.TCPSite(self.runner, '0.0.0.0', self.port)
             await self.site.start()
             
-            logger.info(f"✅【客户端】【智能大脑】 前端中继服务器启动成功")
-            logger.info(f"📡【客户端】【智能大脑】 WebSocket: ws://0.0.0.0:{self.port}/ws")
-            logger.info(f"📨【客户端】【智能大脑】 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
-            logger.info(f"📊【客户端】【智能大脑】状态查询: http://0.0.0.0:{self.port}/status")
-            logger.info(f"❤️【客户端】【智能大脑】健康检查: http://0.0.0.0:{self.port}/health")
-            logger.info(f"🔐【客户端】【智能大脑】认证方式: 连接WebSocket后发送 {{'type':'auth', 'token':'YOUR_TOKEN'}}")
+            logger.info(f"✅【客户端】前端中继服务器启动成功")
+            logger.info(f"📡 WebSocket: ws://0.0.0.0:{self.port}/ws")
+            logger.info(f"📨 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
+            logger.info(f"📊 状态查询: http://0.0.0.0:{self.port}/status")
+            logger.info(f"❤️ 健康检查: http://0.0.0.0:{self.port}/health")
             
             return True
             
         except Exception as e:
-            logger.error(f"❌【客户端】【智能大脑】 启动前端中继服务器失败: {e}")
+            logger.error(f"❌【客户端】启动失败: {e}")
             return False
     
     async def stop(self):
         """停止前端中继服务器"""
-        logger.info("🛑【客户端】 【智能大脑】停止前端中继服务器...")
+        logger.info("🛑【客户端】停止前端中继服务器...")
         
-        # 关闭所有WebSocket连接
         for client in self.ws_clients:
             try:
                 await client['ws'].close()
@@ -442,13 +502,12 @@ class FrontendRelayServer:
                 pass
         self.ws_clients.clear()
         
-        # 停止HTTP服务器
         if self.runner:
             await self.runner.cleanup()
             self.runner = None
             self.site = None
         
-        logger.info("✅【客户端】 【智能大脑】前端中继服务器已停止")
+        logger.info("✅【客户端】前端中继服务器已停止")
     
     def get_stats_summary(self) -> Dict[str, Any]:
         """获取统计摘要"""
