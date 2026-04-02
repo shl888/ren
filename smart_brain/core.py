@@ -84,7 +84,7 @@ class SmartBrain:
         params = command_data.get('params', {})
         client_id = command_data.get('client_id', 'unknown')
         
-        logger.info(f"🧠【大脑】收到前端指令: {command} from {client_id}")
+        logger.info(f"🧠【智能大脑】收到前端指令: {command} from {client_id}")
         
         # ========== 交易指令：直接执行 ==========
         if command == 'place_order':
@@ -99,12 +99,12 @@ class SmartBrain:
         # ========== 控制指令：保存（以后再说）==========
         elif command == 'save_config':
             self.config_data = params.get('config_data', '')
-            logger.info(f"💾【大脑】配置已保存")
+            logger.info(f"💾【智能大脑】配置已保存")
             return {"success": True, "message": "配置已保存"}
         
         elif command == 'set_trade_mode':
             self.trade_mode = params.get('mode', 'half')
-            logger.info(f"🔄【大脑】交易模式已切换为: {self.trade_mode}")
+            logger.info(f"🔄【智能大脑】交易模式已切换为: {self.trade_mode}")
             return {"success": True, "message": f"交易模式已切换为 {self.trade_mode}"}
         
         else:
@@ -126,7 +126,7 @@ class SmartBrain:
             return result
             
         except Exception as e:
-            logger.error(f"❌【大脑】开仓失败: {e}")
+            logger.error(f"❌【智能大脑】开仓失败: {e}")
             return {"success": False, "error": str(e)}
     
     async def _execute_close(self, params):
@@ -143,7 +143,7 @@ class SmartBrain:
             return result
             
         except Exception as e:
-            logger.error(f"❌【大脑】平仓失败: {e}")
+            logger.error(f"❌【智能大脑】平仓失败: {e}")
             return {"success": False, "error": str(e)}
     
     async def _execute_set_sl_tp(self, params):
@@ -160,7 +160,7 @@ class SmartBrain:
             return result
             
         except Exception as e:
-            logger.error(f"❌【大脑】设置止损止盈失败: {e}")
+            logger.error(f"❌【智能大脑】设置止损止盈失败: {e}")
             return {"success": False, "error": str(e)}
     
     # ==================== 全自动交易 ====================
@@ -182,37 +182,39 @@ class SmartBrain:
     
     async def initialize(self):
         """初始化大脑核心"""
-        logger.info("🧠【大脑】初始化中...")
+        logger.info("🧠【智能大脑】初始化中...")
         
         try:
             # 初始化逻辑中枢
             if hasattr(self.trading, 'initialize'):
                 await self.trading.initialize()
+            # ✅ 加在这里！启动状态日志任务
+            self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
             self.running = True
-            logger.info("✅【大脑】初始化完成")
+            logger.info("✅【智能大脑】初始化完成")
             return True
             
         except Exception as e:
-            logger.error(f"❌【大脑】初始化失败: {e}")
+            logger.error(f"❌【智能大脑】初始化失败: {e}")
             return False
     
     async def run(self):
         """运行大脑核心"""
-        logger.info("🧠【大脑】运行中...")
+        logger.info("🧠【智能大脑】运行中...")
         
         while self.running:
             await asyncio.sleep(1)
     
     def handle_signal(self, signum, frame):
         """处理系统信号"""
-        logger.info(f"☑️【大脑】收到信号 {signum}，正在关闭...")
+        logger.info(f"☑️【智能大脑】收到信号 {signum}，正在关闭...")
         self.running = False
     
     async def shutdown(self):
         """关闭大脑核心"""
         self.running = False
-        logger.info("☑️【大脑】正在关闭...")
+        logger.info("☑️【智能大脑】正在关闭...")
         
         if self.status_log_task:
             self.status_log_task.cancel()
@@ -228,4 +230,4 @@ class SmartBrain:
             except asyncio.CancelledError:
                 pass
         
-        logger.info("✅【大脑】已关闭")
+        logger.info("✅【智能大脑】已关闭")
