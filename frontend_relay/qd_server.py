@@ -139,9 +139,9 @@ class FrontendRelayServer:
                                             elif msg_type == 'command':
                                                 # ========== 处理前端交易指令 ==========
                                                 logger.info(f"🔥【客户端】收到前端指令，准备转发给大脑")
-                                                logger.info(f"   指令: {data2.get('command')}")
-                                                logger.info(f"   参数: {data2.get('params', {})}")
-                                                logger.info(f"   客户端: {client_id}")
+                                                logger.info(f"   🔥【客户端】收到前端指令: {data2.get('command')}")
+                                                logger.info(f"   🔥【客户端】收到前端指令参数: {data2.get('params', {})}")
+                                                logger.info(f"   🔥【客户端】收到前端指令客户端: {client_id}")
                                                 
                                                 # 转发给大脑处理
                                                 result = await self.brain.handle_frontend_command({
