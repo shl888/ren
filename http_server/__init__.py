@@ -3,14 +3,16 @@
 HTTP服务器模块
 """
 from .server import HTTPServer
-#from .listen_key_manager import ListenKeyManager
+# from .listen_key_manager import ListenKeyManager
 from .routes.brain import BrainRoutes
 from .service import HTTPModuleService
+from .trader import Trader   # 新增：导出下单工人
 
 __version__ = '2.0.0'
 __all__ = [
     'HTTPServer',
-#    'ListenKeyManager', 
+    # 'ListenKeyManager', 
     'BrainRoutes',
-    'HTTPModuleService'
+    'HTTPModuleService',
+    'Trader',   # 新增
 ]
