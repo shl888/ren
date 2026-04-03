@@ -375,7 +375,26 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动OKX合约面值系统失败: {e}")
         
-        # ==================== 14. 启动币安资产获取任务 ====================
+        # ==================== 14. 启动币安合约精度系统 ====================
+        logger.info("【📐】启动币安合约精度系统...")
+        try:
+            from public_http_fetcher.binance_contract_info.fetcher import BinanceContractFetcher
+            from public_http_fetcher.binance_contract_info.cleaner import BinanceContractCleaner
+            
+            binance_fetcher = BinanceContractFetcher()
+            raw_data = await binance_fetcher.startup_fetch()
+            
+            if raw_data:
+                binance_cleaner = BinanceContractCleaner()
+                await binance_cleaner.clean_and_push(raw_data)
+                brain.binance_cleaner = binance_cleaner
+            
+            brain.binance_fetcher = binance_fetcher
+            logger.info("✅ 币安合约精度系统启动完成")
+        except Exception as e:
+            logger.error(f"❌ 启动币安合约精度系统失败: {e}")
+        
+        # ==================== 15. 启动币安资产获取任务 ====================
         logger.info("【💰】启动币安资产获取任务...")
         try:
             from private_http_fetcher.binance_account.fetcher import PrivateHTTPFetcher
@@ -386,7 +405,7 @@ async def main():
         except Exception as e:
             logger.error(f"❌ 启动币安资产获取任务失败: {e}")
         
-        # ==================== 15. 启动数据完成部门模块 ====================
+        # ==================== 16. 启动数据完成部门模块 ====================
         logger.info("【启动文件】========== 开始启动【数据完成部门】模块 ==========")
         try:
             from data_completion_department import (
@@ -447,7 +466,7 @@ async def main():
         logger.info("🎉 所有模块初始化完成！")
         logger.info("=" * 60)
         
-        # ==================== 16. 根据模式选择运行方式 ====================
+        # ==================== 17. 根据模式选择运行方式 ====================
         if MULTI_THREAD_MODE:
             # ===== 多线程模式 =====
             logger.info("🚀 进入多模块并行运行模式...")
