@@ -354,49 +354,20 @@ class Trader:
     async def _okx_create_order(self, api_key: str, api_secret: str, passphrase: str, params: Dict) -> Dict:
         base_url = self._okx_get_base_url()
         
-        # 大脑输出的 params.params（嵌套的）
+        # 大脑输出的 params.params（嵌套的）- 直接使用，不做字段转换
         inner_params = params.get("params", {})
         
         # 判断是否是止盈止损订单
         if "attachAlgoOrds" in inner_params:
             # 止盈止损单
             endpoint = "/api/v5/trade/order-algo"
-            attach_algos = inner_params["attachAlgoOrds"]
-            body_params = {
-                "instId": params["symbol"],
-                "tdMode": inner_params.get("tdMode", "cross"),
-                "side": params["side"],
-                "sz": str(params["amount"]),
-            }
-            if "posSide" in inner_params:
-                body_params["posSide"] = inner_params["posSide"]
-            
-            # 合并所有止盈止损参数
-            for algo in attach_algos:
-                if "tpTriggerPx" in algo:
-                    body_params["tpTriggerPx"] = algo["tpTriggerPx"]
-                    body_params["tpOrdPx"] = algo.get("tpOrdPx", "-1")
-                    body_params["tpTriggerPxType"] = algo.get("tpTriggerPxType", "last")
-                if "slTriggerPx" in algo:
-                    body_params["slTriggerPx"] = algo["slTriggerPx"]
-                    body_params["slOrdPx"] = algo.get("slOrdPx", "-1")
-                    body_params["slTriggerPxType"] = algo.get("slTriggerPxType", "last")
+            # 直接复制 inner_params，不做字段转换
+            body_params = dict(inner_params)
         else:
             # 普通订单（开仓/平仓）
             endpoint = "/api/v5/trade/order"
-            body_params = {
-                "instId": params["symbol"],
-                "tdMode": inner_params.get("tdMode", "cross"),
-                "side": params["side"],
-                "ordType": params["type"],
-                "sz": str(params["amount"]),
-            }
-            if "posSide" in inner_params:
-                body_params["posSide"] = inner_params["posSide"]
-            if "reduceOnly" in inner_params:
-                body_params["reduceOnly"] = inner_params["reduceOnly"]
-            if "closePosition" in inner_params:
-                body_params["closePosition"] = inner_params["closePosition"]
+            # 直接复制 inner_params，不做字段转换
+            body_params = dict(inner_params)
         
         return await self._okx_http_request(api_key, api_secret, passphrase, "POST", base_url, endpoint, body_params)
     
