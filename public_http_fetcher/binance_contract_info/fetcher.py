@@ -127,6 +127,7 @@ class BinanceContractFetcher:
                         lambda: [
                             s for s in symbols 
                             if s.get('contractType') == 'PERPETUAL'
+                            and s.get('symbol', '').endswith('USDT')   # ← 只加这一行
                         ]
                     )
                     
