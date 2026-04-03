@@ -357,6 +357,16 @@ class Trader:
         # 大脑输出的 params.params（嵌套的）- 直接使用，不做字段转换
         inner_params = params.get("params", {})
         
+        # 把 sz 转成字符串
+        if "sz" in inner_params and inner_params["sz"] is not None:
+            inner_params["sz"] = str(inner_params["sz"])
+        
+        # 把止盈止损单里的 sz 也转成字符串
+        if "attachAlgoOrds" in inner_params:
+            for algo in inner_params["attachAlgoOrds"]:
+                if "sz" in algo and algo["sz"] is not None:
+                    algo["sz"] = str(algo["sz"])
+        
         # 判断是否是止盈止损订单
         if "attachAlgoOrds" in inner_params:
             # 止盈止损单
