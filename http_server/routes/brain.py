@@ -25,13 +25,14 @@ class BrainRoutes:
                 "/api/brain/data/public_market": "查看公开市场数据详情（239个币种）",
                 "/api/brain/data/private_user": "查看私人用户数据详情（币安+欧易）",
                 "/api/brain/data/okx_contracts": "查看OKX合约面值数据详情（262个合约）",
+                "/api/brain/data/binance_contracts": "查看币安合约精度数据详情",
                 "/api/brain/apis": "查看API凭证状态",
                 "/api/brain/status": "查看系统状态",
                 "/api/brain/data/clear": "清空所有数据（谨慎使用）",
                 "/api/brain/data/clear/{data_type}": "清空特定类型数据"
             },
             "current_time": datetime.now().isoformat(),
-            "note": "数据按来源分类：public_market（公开市场）、private_user（私人用户）、okx_contracts（参考数据）"
+            "note": "数据按来源分类：public_market（公开市场）、private_user（私人用户）、okx_contracts/binance_contracts（参考数据）"
         }
         return web.json_response(api_docs)
     
@@ -99,6 +100,18 @@ class BrainRoutes:
             return web.json_response(data)
         except Exception as e:
             logger.error(f"获取OKX合约面值数据失败: {e}")
+            return web.json_response({
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }, status=500)
+    
+    async def get_binance_contracts_data(self, request):
+        """获取币安合约精度数据详情"""
+        try:
+            data = await self.brain.data_manager.get_binance_contracts_data()
+            return web.json_response(data)
+        except Exception as e:
+            logger.error(f"获取币安合约精度数据失败: {e}")
             return web.json_response({
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
