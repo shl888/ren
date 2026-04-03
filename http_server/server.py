@@ -82,13 +82,16 @@ class HTTPServer:
             # 3. 参考数据（欧易面值）
             self.app.router.add_get('/api/brain/data/okx_contracts', brain_routes.get_okx_contracts_data)
             
+            # 4. 参考数据（币安精度）
+            self.app.router.add_get('/api/brain/data/binance_contracts', brain_routes.get_binance_contracts_data)
+
             # ===== 系统管理路由 =====
             self.app.router.add_get('/api/brain/apis', brain_routes.get_apis)
             self.app.router.add_get('/api/brain/status', brain_routes.get_status)
             self.app.router.add_delete('/api/brain/data/clear', brain_routes.clear_data)
             self.app.router.add_delete('/api/brain/data/clear/{data_type}', brain_routes.clear_data_type)
             
-            logger.info(f"✅ 已注册大脑数据API路由（3个来源：public_market/private_user/okx_contracts）")
+            logger.info(f"✅ 已注册大脑数据API路由（4个来源：public_market/private_user/okx_contracts/binance_contracts）")
             
         except ImportError as e:
             logger.warning(f"无法导入大脑路由: {e}")
