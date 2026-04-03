@@ -243,12 +243,13 @@ class Trader:
         endpoint = "/fapi/v1/leverage"
         base_url = self._binance_get_base_url()
         
-        req_params = {
-            "symbol": params["symbol"],
-            "leverage": params["leverage"],
-            "timestamp": self._binance_get_timestamp(),
-            "recvWindow": 5000
-        }
+        # 扁平化：合并外层和内层
+        outer_params = {k: v for k, v in params.items() if k != "params"}
+        inner_params = params.get("params", {})
+        req_params = {**outer_params, **inner_params}
+        
+        req_params["timestamp"] = self._binance_get_timestamp()
+        req_params["recvWindow"] = 5000
         
         return await self._binance_http_request(api_key, api_secret, "POST", base_url, endpoint, req_params)
     
@@ -256,38 +257,18 @@ class Trader:
         endpoint = "/fapi/v1/order"
         base_url = self._binance_get_base_url()
         
-        # 构建请求参数
-        req_params = {
-            "symbol": params["symbol"],
-            "side": params["side"],
-            "type": params["type"],
-            "timestamp": self._binance_get_timestamp(),
-            "recvWindow": 5000
-        }
-        
-        # 添加数量（如果有）
-        if "quantity" in params:
-            req_params["quantity"] = params["quantity"]
-        
-        # 添加持仓方向
-        if "positionSide" in params:
-            req_params["positionSide"] = params["positionSide"]
-        
-        # 添加止盈止损价格（用于拆单后的STOP_MARKET和TAKE_PROFIT_MARKET）
-        if "stopPrice" in params:
-            req_params["stopPrice"] = params["stopPrice"]
-        if "stopPriceType" in params:
-            req_params["stopPriceType"] = params["stopPriceType"]
-        
-        # 添加平仓参数（从嵌套 params 里取）
+        # 扁平化：合并外层和内层
+        outer_params = {k: v for k, v in params.items() if k != "params"}
         inner_params = params.get("params", {})
-        if inner_params.get("reduceOnly"):
-            req_params["reduceOnly"] = "true"
-        if inner_params.get("closePosition"):
-            req_params["closePosition"] = "true"
-            # 平全仓时不能有数量
-            if "quantity" in req_params:
-                del req_params["quantity"]
+        req_params = {**outer_params, **inner_params}
+        
+        # 添加系统参数
+        req_params["timestamp"] = self._binance_get_timestamp()
+        req_params["recvWindow"] = 5000
+        
+        # 平全仓时不能有数量
+        if req_params.get("closePosition"):
+            req_params.pop("quantity", None)
         
         return await self._binance_http_request(api_key, api_secret, "POST", base_url, endpoint, req_params)
     
@@ -343,41 +324,40 @@ class Trader:
         endpoint = "/api/v5/account/set-leverage"
         base_url = self._okx_get_base_url()
         
-        body_params = {
-            "instId": params["instId"],
-            "lever": str(params["lever"]),
-            "mgnMode": params["mgnMode"]
-        }
+        # 扁平化：合并外层和内层
+        outer_params = {k: v for k, v in params.items() if k != "params"}
+        inner_params = params.get("params", {})
+        body_params = {**outer_params, **inner_params}
+        
+        # lever 转字符串
+        if "lever" in body_params:
+            body_params["lever"] = str(body_params["lever"])
         
         return await self._okx_http_request(api_key, api_secret, passphrase, "POST", base_url, endpoint, body_params)
     
     async def _okx_create_order(self, api_key: str, api_secret: str, passphrase: str, params: Dict) -> Dict:
         base_url = self._okx_get_base_url()
         
-        # 大脑输出的 params.params（嵌套的）- 直接使用，不做字段转换
+        # 扁平化：合并外层和内层
+        outer_params = {k: v for k, v in params.items() if k != "params"}
         inner_params = params.get("params", {})
+        body_params = {**outer_params, **inner_params}
         
-        # 把 sz 转成字符串
-        if "sz" in inner_params and inner_params["sz"] is not None:
-            inner_params["sz"] = str(inner_params["sz"])
+        # sz 转字符串
+        if "sz" in body_params and body_params["sz"] is not None:
+            body_params["sz"] = str(body_params["sz"])
         
-        # 把止盈止损单里的 sz 也转成字符串
-        if "attachAlgoOrds" in inner_params:
-            for algo in inner_params["attachAlgoOrds"]:
+        # attachAlgoOrds 里的 sz 也要转
+        if "attachAlgoOrds" in body_params:
+            for algo in body_params["attachAlgoOrds"]:
                 if "sz" in algo and algo["sz"] is not None:
                     algo["sz"] = str(algo["sz"])
         
-        # 判断是否是止盈止损订单
-        if "attachAlgoOrds" in inner_params:
-            # 止盈止损单
+        # 判断是普通单还是止盈止损单
+        if "attachAlgoOrds" in body_params:
             endpoint = "/api/v5/trade/order-algo"
-            # 直接复制 inner_params，不做字段转换
-            body_params = dict(inner_params)
         else:
-            # 普通订单（开仓/平仓）
             endpoint = "/api/v5/trade/order"
-            # 直接复制 inner_params，不做字段转换
-            body_params = dict(inner_params)
         
         return await self._okx_http_request(api_key, api_secret, passphrase, "POST", base_url, endpoint, body_params)
     
