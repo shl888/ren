@@ -306,22 +306,21 @@ class DataManager:
                     "last_update": self._format_time_iso(self.last_account_time)
                 })
             
-            # 3. 参考数据（欧易面值）
+            # 3. 参考数据（动态扫描所有合约数据）
             if self.memory_store['reference_data']:
-                contract_count = 0
                 for key, data in self.memory_store['reference_data'].items():
-                    if 'okx' in key and 'contract' in key:
+                    if 'contract_info' in key:
+                        exchange = data.get('exchange', 'unknown')
                         contract_data = data.get('data', {})
                         contract_count = len(contract_data.get('contracts', []))
-                        break
-                
-                sources.append({
-                    "name": "okx_contracts",
-                    "description": "OKX合约面值数据",
-                    "contract_count": contract_count,
-                    "endpoint": "/api/brain/data/okx_contracts",
-                    "last_update": self._format_time_iso(self.last_reference_time)
-                })
+                        
+                        sources.append({
+                            "name": f"{exchange}_contracts",
+                            "description": f"{exchange.upper()}合约{'面值' if exchange == 'okx' else '精度'}数据",
+                            "contract_count": contract_count,
+                            "endpoint": f"/api/brain/data/{exchange}_contracts",
+                            "last_update": data.get('timestamp')
+                        })
             
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -387,6 +386,27 @@ class DataManager:
             }
         except Exception as e:
             logger.error(f"❌【智能大脑】获取OKX合约面值数据失败: {e}")
+            return {"error": str(e)}
+    
+    async def get_binance_contracts_data(self):
+        """获取币安合约精度数据详情"""
+        try:
+            contract_data = None
+            for key, data in self.memory_store['reference_data'].items():
+                await asyncio.sleep(0)
+                if 'binance' in key and 'contract_info' in key:
+                    contract_data = data.get('data', {})
+                    break
+            
+            return {
+                "source": "binance_contracts",
+                "description": "币安合约精度数据",
+                "timestamp": self._format_time_iso(self.last_reference_time) or datetime.now().isoformat(),
+                "count": len(contract_data.get('contracts', [])) if contract_data else 0,
+                "data": contract_data.get('contracts', []) if contract_data else []
+            }
+        except Exception as e:
+            logger.error(f"❌【智能大脑】获取币安合约精度数据失败: {e}")
             return {"error": str(e)}
     
     async def get_api_credentials_status(self):
