@@ -33,6 +33,9 @@ class Trader:
         self._binance_last_sync = 0
         self._binance_sync_interval = 600  # 10分钟
     
+        # ✅ 加这条日志
+        logger.info(f"👷【下单工人】初始化完成 | 模式: {'模拟交易' if use_sandbox else '真实交易'} | 等待订单...")
+        
     async def execute(self, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         批量执行订单，所有订单并发发送
