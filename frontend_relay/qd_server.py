@@ -141,88 +141,57 @@ class FrontendRelayServer:
                                                 logger.info(f"   参数: {data2.get('data', {})}")
                                                 logger.info(f"   客户端: {client_id}")
                                                 
-                                                result = await self.brain.handle_frontend_command({
+                                                await self.brain.handle_frontend_command({
                                                     "command": "place_order",
                                                     "params": data2.get('data', {}),
                                                     "client_id": client_id
                                                 })
                                                 
-                                                logger.info(f"✅【客户端】大脑返回: {result.get('message', result)}")
                                                 self.stats["commands_processed"] += 1
-                                                
-                                                await ws.send_json({
-                                                    "type": "order_result",
-                                                    "data": result,
-                                                    "timestamp": time.time()
-                                                })
                                             
                                             elif msg_type == 'set_sl_tp':
                                                 logger.info(f"⚙️【客户端】收到止损止盈指令，准备转发给大脑")
                                                 logger.info(f"   参数: {data2.get('data', {})}")
                                                 logger.info(f"   客户端: {client_id}")
                                                 
-                                                result = await self.brain.handle_frontend_command({
+                                                await self.brain.handle_frontend_command({
                                                     "command": "set_sl_tp",
                                                     "params": data2.get('data', {}),
                                                     "client_id": client_id
                                                 })
                                                 
-                                                logger.info(f"✅【客户端】大脑返回: {result.get('message', result)}")
                                                 self.stats["commands_processed"] += 1
-                                                
-                                                await ws.send_json({
-                                                    "type": "sl_tp_result",
-                                                    "data": result,
-                                                    "timestamp": time.time()
-                                                })
                                             
                                             elif msg_type == 'close_position':
                                                 logger.info(f"🔚【客户端】收到平仓指令，准备转发给大脑")
                                                 logger.info(f"   参数: {data2.get('data', {})}")
                                                 logger.info(f"   客户端: {client_id}")
                                                 
-                                                result = await self.brain.handle_frontend_command({
+                                                await self.brain.handle_frontend_command({
                                                     "command": "close_position",
                                                     "params": data2.get('data', {}),
                                                     "client_id": client_id
                                                 })
                                                 
-                                                logger.info(f"✅【客户端】大脑返回: {result.get('message', result)}")
                                                 self.stats["commands_processed"] += 1
-                                                
-                                                await ws.send_json({
-                                                    "type": "close_result",
-                                                    "data": result,
-                                                    "timestamp": time.time()
-                                                })
                                             
                                             elif msg_type == 'config':
                                                 logger.info(f"💾【客户端】收到配置指令，转发给大脑")
                                                 
-                                                result = await self.brain.handle_frontend_command({
+                                                await self.brain.handle_frontend_command({
                                                     "command": "save_config",
                                                     "params": {"config_data": data2.get('data', '')},
                                                     "client_id": client_id
-                                                })
-                                                
-                                                await ws.send_json({
-                                                    "type": "config_result",
-                                                    "data": result
                                                 })
                                             
                                             elif msg_type == 'set_trade_mode':
                                                 logger.info(f"🎮【客户端】收到交易模式指令，转发给大脑")
                                                 logger.info(f"   模式: {data2.get('mode')}")
                                                 
-                                                result = await self.brain.handle_frontend_command({
+                                                await self.brain.handle_frontend_command({
                                                     "command": "set_trade_mode",
                                                     "params": {"mode": data2.get('mode', '')},
                                                     "client_id": client_id
-                                                })
-                                                
-                                                await ws.send_json({
-                                                    "type": "mode_result",
-                                                    "data": result
                                                 })
                                             
                                             else:
@@ -309,7 +278,7 @@ class FrontendRelayServer:
                     "error": "大脑实例未连接"
                 }, status=503)
             
-            result = await self.brain.handle_frontend_command({
+            await self.brain.handle_frontend_command({
                 "command": command,
                 "params": params,
                 "client_id": client_id
@@ -322,7 +291,6 @@ class FrontendRelayServer:
             return web.json_response({
                 "success": True,
                 "command": command,
-                "result": result,
                 "timestamp": time.time()
             })
             
@@ -431,6 +399,22 @@ class FrontendRelayServer:
         message = {
             "type": "system_status",
             "data": status_data,
+            "timestamp": time.time()
+        }
+        
+        await self._safe_broadcast(message)
+    
+    async def broadcast_execution_results(self, results):
+        """广播订单执行结果到前端"""
+        logger.info(f"📤【客户端】【执行结果推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
+        if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【执行结果推送】没有客户端连接，跳过推送")
+            return
+        
+        message = {
+            "type": "execution_results",
+            "data": results,
             "timestamp": time.time()
         }
         
