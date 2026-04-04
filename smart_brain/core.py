@@ -37,9 +37,6 @@ class SmartBrain:
         # ✅ HTTP模块服务（用于执行交易）
         self.http_module = None
         
-        # ✅ 下单工人（直接持有，用于发单）
-        self.trader = None
-        
         # ✅ 逻辑中枢（空模块，以后放规则）
         from .trading import TradingLogic
         self.trading = TradingLogic(self)
@@ -54,12 +51,133 @@ class SmartBrain:
         # ========== 交易模式：默认禁止交易 ==========
         self.trade_mode = "forbidden"  # forbidden / half / full
         
+        # ========== 下单工人 ==========
+        self.trader = None
+        
         # 信号处理
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
     
+    def send_to_worker(self, orders):
+        """发数据给下单工人"""
+        if self.trader:
+            self.trader.send_orders(orders)
+    
+    async def on_trader_results(self, results):
+        """接收下单工人发来的数据"""
+        logger.info(f"📥【智能大脑】收到下单工人发来的执行结果，共 {len(results)} 条")
+        
+        parsed_results = []
+        
+        for idx, result in enumerate(results):
+            if not result.get("success"):
+                # 下单工人层面失败（发请求前就失败了）
+                error_msg = result.get("error", "未知错误")
+                logger.error(f"   ❌ 订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
+                parsed_results.append({
+                    "original": result,
+                    "parsed_status": "failed",
+                    "parsed_error": error_msg,
+                    "error_code": None
+                })
+                continue
+            
+            # 下单工人发送成功，解析交易所返回的真实结果
+            exchange = result.get("exchange")
+            order_type = result.get("type")
+            data = result.get("data", {})
+            
+            if exchange == "binance":
+                # 币安：判断 status 字段
+                status = data.get("status")
+                
+                if status == "FILLED":
+                    logger.info(f"   ✅ 订单{idx+1}: 币安成交 | 订单ID: {data.get('orderId')} | 成交均价: {data.get('avgPrice')} | 成交量: {data.get('executedQty')}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "filled",
+                        "parsed_error": None,
+                        "error_code": None,
+                        "order_id": data.get("orderId"),
+                        "avg_price": data.get("avgPrice"),
+                        "executed_qty": data.get("executedQty")
+                    })
+                elif status == "PARTIALLY_FILLED":
+                    logger.info(f"   ⏳ 订单{idx+1}: 币安部分成交 | 订单ID: {data.get('orderId')} | 已成交量: {data.get('executedQty')}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "partially_filled",
+                        "parsed_error": None,
+                        "error_code": None,
+                        "order_id": data.get("orderId"),
+                        "executed_qty": data.get("executedQty")
+                    })
+                elif status == "NEW":
+                    logger.info(f"   ⏳ 订单{idx+1}: 币安已接收待处理 | 订单ID: {data.get('orderId')}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "pending",
+                        "parsed_error": None,
+                        "error_code": None,
+                        "order_id": data.get("orderId")
+                    })
+                elif status in ["REJECTED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED"]:
+                    error_msg = data.get("msg", f"状态: {status}")
+                    logger.error(f"   ❌ 订单{idx+1}: 币安失败 | {error_msg}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "failed",
+                        "parsed_error": error_msg,
+                        "error_code": status
+                    })
+                else:
+                    logger.warning(f"   ⚠️ 订单{idx+1}: 币安未知状态 | status={status}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "unknown",
+                        "parsed_error": f"未知状态: {status}",
+                        "error_code": status
+                    })
+            
+            elif exchange == "okx":
+                # 欧易：code == "0" 成功，非0失败
+                code = str(data.get("code", ""))
+                msg = data.get("msg", "")
+                
+                if code == "0":
+                    ord_id = data.get("ordId")
+                    logger.info(f"   ✅ 订单{idx+1}: 欧易成功 | 订单ID: {ord_id}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "success",
+                        "parsed_error": None,
+                        "error_code": None,
+                        "order_id": ord_id
+                    })
+                else:
+                    logger.error(f"   ❌ 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
+                    parsed_results.append({
+                        "original": result,
+                        "parsed_status": "failed",
+                        "parsed_error": msg,
+                        "error_code": code
+                    })
+            
+            else:
+                logger.warning(f"   ⚠️ 订单{idx+1}: 未知交易所 {exchange}，无法解析")
+                parsed_results.append({
+                    "original": result,
+                    "parsed_status": "unknown",
+                    "parsed_error": f"未知交易所: {exchange}",
+                    "error_code": None
+                })
+        
+        # 推送到前端（推送解析后的结果）
+        if self.frontend_relay:
+            await self.frontend_relay.broadcast_execution_results(parsed_results)
+    
     async def initialize(self):
-        """初始化大脑核心"""
+        """初始化智能大脑核心"""
         logger.info("🧠【智能大脑】大脑核心初始化中...")
         logger.info(f"🔒【智能大脑】初始交易模式: {self.trade_mode}（禁止交易）")
         
@@ -80,22 +198,10 @@ class SmartBrain:
                 logger.error(f"❌【智能大脑】 HTTP模块服务初始化异常: {e}")
                 return False
             
-            # 2. ✅ 初始化下单工人
-            try:
-                from http_server.trader import Trader
-                self.trader = Trader(self)
-                logger.info("✅【智能大脑】 下单工人初始化成功")
-            except ImportError as e:
-                logger.error(f"❌【智能大脑】 无法导入下单工人: {e}")
-                return False
-            except Exception as e:
-                logger.error(f"❌【智能大脑】 下单工人初始化异常: {e}")
-                return False
-            
-            # 3. 启动状态日志任务
+            # 2. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 4. 完成初始化
+            # 3. 完成初始化
             self.running = True
             logger.info("✅【智能大脑】 大脑核心初始化完成")
             
@@ -103,6 +209,12 @@ class SmartBrain:
             if self.http_module:
                 http_status = self.http_module.get_status()
                 logger.info(f"📊【智能大脑】 HTTP模块状态: {http_status}")
+            
+            # 4. 创建并连接下单工人
+            from http_server.trader import Trader
+            self.trader = Trader(self, use_sandbox=True)
+            asyncio.create_task(self.trader.start())
+            logger.info("✅【智能大脑】下单工人已创建并启动")
             
             return True
             
@@ -130,7 +242,7 @@ class SmartBrain:
         params = command_data.get('params', {})
         client_id = command_data.get('client_id', 'unknown')
         
-        # ========== 交易模式指令：最高优先级，立即处理 ==========
+        # ========== 交易模式指令 ==========
         if command == 'set_trade_mode':
             new_mode = params.get('mode', 'forbidden')
             old_mode = self.trade_mode
@@ -157,285 +269,47 @@ class SmartBrain:
                 "config_length": len(self.config_data)
             }
         
-        # ========== 禁止交易模式：拒绝所有交易指令 ==========
-        if self.trade_mode == 'forbidden':
-            logger.warning(f"⚠️【智能大脑】禁止交易模式，拒绝指令: {command}")
-            return {
-                "success": False,
-                "received": True,
-                "error": f"当前为禁止交易模式，无法执行交易指令。请先通过前端设置交易模式（半自动/全自动）",
-                "command": command,
-                "current_mode": self.trade_mode
-            }
-        
-        # ========== 开仓指令 ==========
+        # ========== 开仓指令（只接收，暂不执行） ==========
         if command == 'place_order':
-            logger.info(f"💰【智能大脑】收到开仓指令（当前模式: {self.trade_mode}）")
+            logger.info(f"💰【智能大脑】收到开仓指令")
             logger.info(f"   参数: {params}")
-            
-            # 调用交易逻辑执行
-            result = await self._execute_order(params)
-            return result
-        
-        # ========== 平仓指令 ==========
-        elif command == 'close_position':
-            logger.info(f"🔚【智能大脑】收到平仓指令（当前模式: {self.trade_mode}）")
-            logger.info(f"   参数: {params}")
-            
-            # 调用交易逻辑执行
-            result = await self._execute_close(params)
-            return result
-        
-        # ========== 止损止盈指令 ==========
-        elif command == 'set_sl_tp':
-            logger.info(f"⚙️【智能大脑】收到止损止盈指令（当前模式: {self.trade_mode}）")
-            logger.info(f"   参数: {params}")
-            
-            # 调用交易逻辑执行
-            result = await self._execute_set_sl_tp(params)
-            return result
-        
-        else:
-            logger.warning(f"⚠️【智能大脑】收到未知指令: {command}")
             return {
-                "success": False,
+                "success": True,
                 "received": True,
-                "error": f"未知指令: {command}",
-                "command": command
+                "command": command,
+                "message": "指令已接收，暂不执行任何操作"
             }
-    
-    # ==================== 交易执行方法 ====================
-    
-    async def _execute_order(self, params: dict) -> dict:
-        """
-        执行开仓/平仓
         
-        大脑根据指令类型，组装好完整参数，交给工人执行
-        """
-        try:
-            # 从 params 中提取交易所信息
-            # 注意：前端传来的开仓指令可能同时包含两个交易所
-            # 这里需要根据 direction 分别处理
-            
-            direction = params.get('direction')
-            symbol = params.get('symbol')
-            margin = params.get('margin')
-            leverage = params.get('leverage')
-            
-            # 获取当前价格（从记忆中枢）
-            market_data = await self.data_manager.get_public_market_data()
-            current_price = None
-            if symbol in market_data.get('data', {}):
-                current_price = market_data['data'][symbol].get('binance_trade_price')
-            
-            if not current_price:
-                return {
-                    "success": False,
-                    "error": "无法获取当前价格",
-                    "command": "place_order"
-                }
-            
-            # 计算开仓数量
-            quantity = margin * leverage / current_price
-            
-            results = []
-            
-            # 根据方向分别处理币安和欧易
-            if direction == 'long_binance_short_okx':
-                # 币安开多
-                binance_params = {
-                    'symbol': symbol,
-                    'side': 'buy',
-                    'type': 'market',
-                    'amount': quantity,
-                }
-                binance_result = await self.trader.place_order('binance', binance_params)
-                results.append({'exchange': 'binance', 'result': binance_result})
-                
-                # 欧易开空
-                okx_params = {
-                    'symbol': symbol.replace('USDT', '/USDT:USDT'),  # 欧易格式
-                    'side': 'sell',
-                    'type': 'market',
-                    'amount': quantity,
-                }
-                okx_result = await self.trader.place_order('okx', okx_params)
-                results.append({'exchange': 'okx', 'result': okx_result})
-                
-            elif direction == 'long_okx_short_binance':
-                # 欧易开多
-                okx_params = {
-                    'symbol': symbol.replace('USDT', '/USDT:USDT'),
-                    'side': 'buy',
-                    'type': 'market',
-                    'amount': quantity,
-                }
-                okx_result = await self.trader.place_order('okx', okx_params)
-                results.append({'exchange': 'okx', 'result': okx_result})
-                
-                # 币安开空
-                binance_params = {
-                    'symbol': symbol,
-                    'side': 'sell',
-                    'type': 'market',
-                    'amount': quantity,
-                }
-                binance_result = await self.trader.place_order('binance', binance_params)
-                results.append({'exchange': 'binance', 'result': binance_result})
-            
+        # ========== 平仓指令（只接收，暂不执行） ==========
+        if command == 'close_position':
+            logger.info(f"🔚【智能大脑】收到平仓指令")
+            logger.info(f"   参数: {params}")
             return {
                 "success": True,
-                "command": "place_order",
-                "results": results
+                "received": True,
+                "command": command,
+                "message": "指令已接收，暂不执行任何操作"
             }
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】执行开仓失败: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "command": "place_order"
-            }
-    
-    async def _execute_close(self, params: dict) -> dict:
-        """
-        执行平仓
-        """
-        try:
-            exchange = params.get('exchange')
-            symbol = params.get('symbol')
-            
-            # 获取当前持仓（从记忆中枢）
-            user_data = await self.data_manager.get_private_user_data()
-            position = None
-            
-            # 查找持仓
-            for exchange_name, data in user_data.get('data', {}).items():
-                if exchange_name.lower() == exchange:
-                    positions = data.get('positions', [])
-                    for pos in positions:
-                        if pos.get('symbol') == symbol:
-                            position = pos
-                            break
-            
-            if not position:
-                return {
-                    "success": False,
-                    "error": f"未找到{exchange}的{symbol}持仓",
-                    "command": "close_position"
-                }
-            
-            # 获取持仓方向和数量
-            position_side = position.get('side')  # 'long' 或 'short'
-            quantity = abs(position.get('position_amt', 0))
-            
-            # 平仓方向与持仓相反
-            close_side = 'sell' if position_side == 'long' else 'buy'
-            
-            close_params = {
-                'symbol': symbol,
-                'side': close_side,
-                'type': 'market',
-                'amount': quantity,
-                'reduceOnly': True  # 只减仓
-            }
-            
-            # 调用工人执行
-            result = await self.trader.place_order(exchange, close_params)
-            
+        
+        # ========== 止损止盈指令（只接收，暂不执行） ==========
+        if command == 'set_sl_tp':
+            logger.info(f"⚙️【智能大脑】收到止损止盈指令")
+            logger.info(f"   参数: {params}")
             return {
                 "success": True,
-                "command": "close_position",
-                "exchange": exchange,
-                "symbol": symbol,
-                "result": result
+                "received": True,
+                "command": command,
+                "message": "指令已接收，暂不执行任何操作"
             }
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】执行平仓失败: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "command": "close_position"
-            }
-    
-    async def _execute_set_sl_tp(self, params: dict) -> dict:
-        """
-        执行设置止损止盈
-        """
-        try:
-            exchange = params.get('exchange')
-            symbol = params.get('symbol')
-            stop_loss_percent = params.get('stop_loss_percent')
-            take_profit_percent = params.get('take_profit_percent')
-            
-            # 获取当前持仓（从记忆中枢）
-            user_data = await self.data_manager.get_private_user_data()
-            position = None
-            
-            for exchange_name, data in user_data.get('data', {}).items():
-                if exchange_name.lower() == exchange:
-                    positions = data.get('positions', [])
-                    for pos in positions:
-                        if pos.get('symbol') == symbol:
-                            position = pos
-                            break
-            
-            if not position:
-                return {
-                    "success": False,
-                    "error": f"未找到{exchange}的{symbol}持仓",
-                    "command": "set_sl_tp"
-                }
-            
-            # 获取开仓价
-            entry_price = position.get('entry_price', 0)
-            position_side = position.get('side')
-            
-            # 计算止损止盈触发价
-            sl_params = {}
-            
-            if stop_loss_percent is not None:
-                if position_side == 'long':
-                    stop_loss_price = entry_price * (1 + stop_loss_percent / 100)
-                else:
-                    stop_loss_price = entry_price * (1 - abs(stop_loss_percent) / 100)
-                sl_params['stopLossPrice'] = stop_loss_price
-            
-            if take_profit_percent is not None:
-                if position_side == 'long':
-                    take_profit_price = entry_price * (1 + take_profit_percent / 100)
-                else:
-                    take_profit_price = entry_price * (1 - take_profit_percent / 100)
-                sl_params['takeProfitPrice'] = take_profit_price
-            
-            if not sl_params:
-                return {
-                    "success": False,
-                    "error": "未提供止损或止盈参数",
-                    "command": "set_sl_tp"
-                }
-            
-            sl_params['symbol'] = symbol
-            
-            # 调用工人执行
-            result = await self.trader.set_sl_tp(exchange, sl_params)
-            
-            return {
-                "success": True,
-                "command": "set_sl_tp",
-                "exchange": exchange,
-                "symbol": symbol,
-                "result": result
-            }
-            
-        except Exception as e:
-            logger.error(f"❌【智能大脑】执行止损止盈失败: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "command": "set_sl_tp"
-            }
+        
+        # ========== 未知指令 ==========
+        logger.warning(f"⚠️【智能大脑】收到未知指令: {command}")
+        return {
+            "success": False,
+            "received": True,
+            "error": f"未知指令: {command}",
+            "command": command
+        }
     
     async def run(self):
         """运行大脑核心"""
@@ -481,6 +355,10 @@ class SmartBrain:
             # 3. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
+            
+            # 4. 关闭下单工人
+            if self.trader:
+                await self.trader.stop()
             
             logger.info("✅【智能大脑】大脑核心已关闭")
         except Exception as e:
