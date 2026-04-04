@@ -1,12 +1,14 @@
 # http_server/trader.py
 """
-下单执行器（工人）- 直接HTTP版
-- 币安：本地时间 + 漂移量（每10分钟同步一次服务器时间）
-- 币安自动补 timestamp + recvWindow + signature
-- 欧易自动补签名
-- set_sl_tp 自动拆成止损+止盈两个单，并发发送
-- 多个交易所/订单并发执行
-- 支持真实交易/模拟交易
+下单执行器（工人）- 消息驱动模式
+
+运行方式：
+1. 工人启动后，一直循环等待消息
+2. 收到消息（订单参数）后，异步处理
+3. 处理完成后，把结果消息发给大脑
+4. 空闲时：歇着 / 定时校准币安时间
+
+大脑 <---> 工人 之间通过消息传递，没有调用关系
 """
 
 import asyncio
@@ -24,143 +26,166 @@ logger = logging.getLogger(__name__)
 
 class Trader:
     def __init__(self, brain, use_sandbox: bool = True):
+        """
+        工人初始化
+        
+        参数:
+            brain: 大脑实例（用于发消息回大脑）
+            use_sandbox: 是否使用模拟交易
+        """
         self.brain = brain
         self.use_sandbox = use_sandbox
         self._executor = ThreadPoolExecutor(max_workers=10)
         
+        # 消息队列：大脑发来的订单放这里
+        self._order_queue = asyncio.Queue()
+        
         # 币安时间同步
-        self._binance_time_offset = 0  # 服务器时间 - 本地时间（毫秒）
+        self._binance_time_offset = 0
         self._binance_last_sync = 0
         self._binance_sync_interval = 600  # 10分钟
-    
-        # ✅ 加这条日志
-        logger.info(f"👷【下单工人】初始化完成 | 模式: {'模拟交易' if use_sandbox else '真实交易'} | 等待订单...")
         
-    async def execute(self, actions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # 控制工人运行状态
+        self._running = False
+        
+        logger.info(f"👷【下单工人】初始化完成 | 模式: {'模拟交易' if use_sandbox else '真实交易'}")
+    
+    # ========== 对外接口（给大脑用） ==========
+    
+    def send_orders(self, orders: List[Dict]) -> None:
         """
-        批量执行订单，所有订单并发发送
+        大脑发数据给工人（不等待，发完就走）
+        
+        大脑调用这个方法，把订单参数扔给工人，然后继续干自己的事。
         """
-        if not actions:
-            return []
-        
-        # 1. 如果需要币安操作，先同步时间
-        if any(a.get("exchange") == "binance" for a in actions):
-            await self._binance_sync_time_if_needed()
-        
-        # 2. 展开 set_sl_tp 为多个独立订单
-        expanded_actions = []
-        for action in actions:
-            if action.get("exchange") == "binance" and action.get("action") == "set_sl_tp":
-                sl_action, tp_action = self._expand_binance_sl_tp(action)
-                expanded_actions.append(sl_action)
-                expanded_actions.append(tp_action)
-            else:
-                expanded_actions.append(action)
-        
-        # 3. 获取所有需要的API凭证
-        creds_map = await self._fetch_all_credentials(expanded_actions)
-        
-        # 4. 所有订单并发发送
-        tasks = []
-        for action in expanded_actions:
-            exchange = action.get("exchange")
-            creds = creds_map.get(exchange)
-            if not creds:
-                tasks.append(self._error_result(action, f"无法获取{exchange}API凭证"))
-            else:
-                tasks.append(self._send_order(action, creds))
-        
-        results = await asyncio.gather(*tasks)
-        return results
+        # 把订单数据放入队列，工人会异步处理
+        self._order_queue.put_nowait(orders)
+        logger.info(f"📤【消息】大脑发来 {len(orders)} 个订单，已放入队列")
     
-    # ========== 币安时间同步 ==========
+    # ========== 工人主循环 ==========
     
-    async def _binance_sync_time_if_needed(self):
-        """如果需要，同步币安服务器时间"""
-        now = time.time()
-        if (self._binance_last_sync == 0 or 
-            now - self._binance_last_sync > self._binance_sync_interval):
-            await self._binance_sync_time()
+    async def start(self):
+        """启动工人（在后台一直运行）"""
+        self._running = True
+        logger.info("👷【下单工人】启动，等待接收订单...")
+        
+        # 启动币安时间同步任务（后台运行）
+        asyncio.create_task(self._binance_time_sync_loop())
+        
+        # 主循环：一直等着收数据
+        while self._running:
+            try:
+                # 等待大脑发来的订单（阻塞在这里，没有订单就歇着）
+                orders = await self._order_queue.get()
+                
+                # 收到订单，异步处理（不阻塞主循环）
+                asyncio.create_task(self._process_orders(orders))
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌【下单工人】主循环异常: {e}")
+        
+        logger.info("👷【下单工人】已停止")
     
-    async def _binance_sync_time(self):
-        """同步币安服务器时间，计算漂移量"""
+    async def stop(self):
+        """停止工人"""
+        self._running = False
+        # 清空队列
+        while not self._order_queue.empty():
+            try:
+                self._order_queue.get_nowait()
+            except:
+                break
+    
+    # ========== 处理订单 ==========
+    
+    async def _process_orders(self, orders: List[Dict]):
+        """
+        处理收到的订单（内部方法）
+        
+        1. 展开币安 OCO
+        2. 获取 API 凭证
+        3. 并发发送到交易所
+        4. 收集结果，发回给大脑
+        """
         try:
-            url = "https://fapi.binance.com/fapi/v1/time"
+            logger.info(f"🔧【下单工人】开始处理 {len(orders)} 个订单")
             
-            loop = asyncio.get_running_loop()
+            # 1. 展开币安 OCO（一个变两个）
+            expanded_orders = []
+            for order in orders:
+                exchange = order.get("exchange")
+                order_type = order.get("type")
+                
+                if exchange == "binance" and order_type == "oco":
+                    sl_order, tp_order = self._expand_binance_oco(order)
+                    expanded_orders.append(sl_order)
+                    expanded_orders.append(tp_order)
+                else:
+                    expanded_orders.append(order)
             
-            def _request():
-                import requests
-                return requests.get(url)
+            # 2. 获取所有需要的 API 凭证
+            creds_map = await self._fetch_all_credentials(expanded_orders)
             
-            response = await loop.run_in_executor(self._executor, _request)
-            data = response.json()
-            server_time = data["serverTime"]
-            local_time = int(time.time() * 1000)
-            self._binance_time_offset = server_time - local_time
-            self._binance_last_sync = time.time()
+            # 3. 所有订单并发发送
+            tasks = []
+            for order in expanded_orders:
+                exchange = order.get("exchange")
+                creds = creds_map.get(exchange)
+                if not creds:
+                    tasks.append(self._error_result(order, f"无法获取 {exchange} API凭证"))
+                else:
+                    tasks.append(self._send_order(order, creds))
             
-            logger.info(f"⏱️【币安时间同步】偏移量: {self._binance_time_offset}ms | "
-                       f"服务器: {server_time} | 本地: {local_time}")
+            results = await asyncio.gather(*tasks)
+            
+            # 4. 把结果发回给大脑
+            await self._send_results_to_brain(results)
+            
+            logger.info(f"✅【下单工人】处理完成，共 {len(results)} 个结果已发回大脑")
+            
         except Exception as e:
-            logger.error(f"❌【币安时间同步】失败: {e}，使用本地时间")
-            self._binance_time_offset = 0
+            logger.error(f"❌【下单工人】处理订单异常: {e}")
+            # 发生严重错误，也要通知大脑
+            await self._send_results_to_brain([{
+                "success": False,
+                "error": f"工人处理异常: {str(e)}"
+            }])
     
-    def _binance_get_timestamp(self) -> int:
-        """获取带漂移校正的时间戳"""
-        return int(time.time() * 1000) + self._binance_time_offset
+    async def _send_results_to_brain(self, results: List[Dict]):
+        """把结果消息发给大脑"""
+        if hasattr(self.brain, 'on_trader_results'):
+            await self.brain.on_trader_results(results)
+        else:
+            logger.error("❌ 大脑没有实现 on_trader_results 方法，无法接收结果")
     
-    # ========== 展开止盈止损 ==========
+    # ========== 币安 OCO 展开 ==========
     
-    def _expand_binance_sl_tp(self, action: Dict) -> tuple:
-        """展开币安止盈止损为两个独立订单"""
-        params = action.get("params", {})
+    def _expand_binance_oco(self, oco_order: Dict) -> tuple:
+        """展开币安 OCO 订单为两个独立订单"""
+        orders_list = oco_order.get("orders", [])
+        if len(orders_list) != 2:
+            logger.error(f"❌ 币安 OCO 需要 2 个订单，实际: {len(orders_list)}")
         
-        # 止损单
-        sl_params = {
-            "symbol": params["symbol"],
-            "side": params["side"],
-            "type": "STOP_MARKET",
-            "quantity": params["quantity"],
-            "positionSide": params["positionSide"],
-            "stopPrice": params["stopLossPrice"],
-            "stopPriceType": params.get("stopPriceType", "LAST_PRICE"),
-            "reduceOnly": "true"
-        }
-        sl_action = {
-            "exchange": "binance",
-            "action": "create_order",
-            "params": sl_params,
-            "_type": "stop_loss"
-        }
+        result_orders = []
+        for algo_order in orders_list:
+            new_order = {
+                "exchange": "binance",
+                "type": "algo_order",
+                "params": algo_order.copy()
+            }
+            result_orders.append(new_order)
         
-        # 止盈单
-        tp_params = {
-            "symbol": params["symbol"],
-            "side": params["side"],
-            "type": "TAKE_PROFIT_MARKET",
-            "quantity": params["quantity"],
-            "positionSide": params["positionSide"],
-            "stopPrice": params["takeProfitPrice"],
-            "stopPriceType": params.get("stopPriceType", "LAST_PRICE"),
-            "reduceOnly": "true"
-        }
-        tp_action = {
-            "exchange": "binance",
-            "action": "create_order",
-            "params": tp_params,
-            "_type": "take_profit"
-        }
-        
-        return sl_action, tp_action
+        return result_orders[0], result_orders[1]
     
-    # ========== 获取API凭证 ==========
+    # ========== 获取 API 凭证 ==========
     
-    async def _fetch_all_credentials(self, actions: List[Dict]) -> Dict[str, Dict]:
-        """并发获取所有需要的API凭证"""
+    async def _fetch_all_credentials(self, orders: List[Dict]) -> Dict[str, Dict]:
+        """并发获取所有需要的 API 凭证"""
         exchanges = set()
-        for action in actions:
-            exchanges.add(action.get("exchange"))
+        for order in orders:
+            exchanges.add(order.get("exchange"))
         
         tasks = {}
         for exchange in exchanges:
@@ -179,20 +204,19 @@ class Trader:
         
         return creds_map
     
-    # ========== 发送订单 ==========
+    # ========== 发送订单（路由） ==========
     
-    async def _send_order(self, action: Dict, creds: Dict) -> Dict:
+    async def _send_order(self, order: Dict, creds: Dict) -> Dict:
         """发送单个订单"""
-        exchange = action.get("exchange")
-        action_type = action.get("action")
-        params = action.get("params", {})
-        order_type = action.get("_type", action_type)
+        exchange = order.get("exchange")
+        order_type = order.get("type")
+        params = order.get("params", {})
         
         try:
             if exchange == "binance":
-                result = await self._binance_send(creds, action_type, params)
+                result = await self._binance_send(creds, order_type, params)
             elif exchange == "okx":
-                result = await self._okx_send(creds, action_type, params)
+                result = await self._okx_send(creds, order_type, params)
             else:
                 return {"success": False, "error": f"未知交易所: {exchange}"}
             
@@ -211,71 +235,95 @@ class Trader:
                 "error": str(e)
             }
     
-    async def _error_result(self, action: Dict, error: str) -> Dict:
+    async def _error_result(self, order: Dict, error: str) -> Dict:
         return {
             "success": False,
-            "exchange": action.get("exchange"),
-            "type": action.get("_type", action.get("action")),
+            "exchange": order.get("exchange"),
+            "type": order.get("type"),
             "error": error
         }
     
     # ========== 币安 ==========
     
     def _binance_get_base_url(self) -> str:
-        """获取币安base URL"""
         if self.use_sandbox:
             return "https://testnet.binancefuture.com"
-        else:
-            return "https://fapi.binance.com"
+        return "https://fapi.binance.com"
     
-    async def _binance_send(self, creds: Dict, action_type: str, params: Dict) -> Dict:
+    def _binance_get_timestamp(self) -> int:
+        return int(time.time() * 1000) + self._binance_time_offset
+    
+    async def _binance_time_sync_loop(self):
+        """后台定时同步币安时间"""
+        while self._running:
+            try:
+                await self._binance_sync_time()
+            except Exception as e:
+                logger.error(f"❌ 币安时间同步失败: {e}")
+            # 每10分钟同步一次
+            await asyncio.sleep(self._binance_sync_interval)
+    
+    async def _binance_sync_time(self):
+        """同步币安服务器时间"""
+        try:
+            url = "https://fapi.binance.com/fapi/v1/time"
+            loop = asyncio.get_running_loop()
+            
+            def _request():
+                import requests
+                return requests.get(url)
+            
+            response = await loop.run_in_executor(self._executor, _request)
+            data = response.json()
+            server_time = data["serverTime"]
+            local_time = int(time.time() * 1000)
+            self._binance_time_offset = server_time - local_time
+            self._binance_last_sync = time.time()
+            logger.info(f"⏱️【币安时间同步】偏移量: {self._binance_time_offset}ms")
+        except Exception as e:
+            logger.error(f"❌【币安时间同步】失败: {e}，偏移量保持 {self._binance_time_offset}")
+    
+    async def _binance_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
+        """币安路由"""
         api_key = creds.get("api_key")
         api_secret = creds.get("api_secret")
         
-        if action_type == "set_leverage":
-            return await self._binance_set_leverage(api_key, api_secret, params)
-        elif action_type == "create_order":
-            return await self._binance_create_order(api_key, api_secret, params)
+        if order_type == "set_leverage":
+            endpoint = "/fapi/v1/leverage"
+            req_params = params.copy()
+            req_params["timestamp"] = self._binance_get_timestamp()
+            req_params["recvWindow"] = 5000
+            return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
+        
+        elif order_type == "open_market":
+            endpoint = "/fapi/v1/order"
+            req_params = params.copy()
+            req_params["timestamp"] = self._binance_get_timestamp()
+            req_params["recvWindow"] = 5000
+            return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
+        
+        elif order_type == "algo_order":
+            endpoint = "/fapi/v1/algoOrder"
+            req_params = params.copy()
+            req_params["timestamp"] = self._binance_get_timestamp()
+            req_params["recvWindow"] = 5000
+            return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
+        
+        elif order_type == "close_position":
+            endpoint = "/fapi/v1/closePosition"
+            req_params = params.copy()
+            req_params["timestamp"] = self._binance_get_timestamp()
+            req_params["recvWindow"] = 5000
+            return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
+        
         else:
-            raise Exception(f"未知动作: {action_type}")
+            raise Exception(f"币安未知 order_type: {order_type}")
     
-    async def _binance_set_leverage(self, api_key: str, api_secret: str, params: Dict) -> Dict:
-        endpoint = "/fapi/v1/leverage"
+    async def _binance_http_request(self, api_key: str, api_secret: str,
+                                     method: str, endpoint: str, params: Dict) -> Dict:
+        """执行币安 HTTP 请求"""
         base_url = self._binance_get_base_url()
         
-        # 扁平化：合并外层和内层
-        outer_params = {k: v for k, v in params.items() if k != "params"}
-        inner_params = params.get("params", {})
-        req_params = {**outer_params, **inner_params}
-        
-        req_params["timestamp"] = self._binance_get_timestamp()
-        req_params["recvWindow"] = 5000
-        
-        return await self._binance_http_request(api_key, api_secret, "POST", base_url, endpoint, req_params)
-    
-    async def _binance_create_order(self, api_key: str, api_secret: str, params: Dict) -> Dict:
-        endpoint = "/fapi/v1/order"
-        base_url = self._binance_get_base_url()
-        
-        # 扁平化：合并外层和内层
-        outer_params = {k: v for k, v in params.items() if k != "params"}
-        inner_params = params.get("params", {})
-        req_params = {**outer_params, **inner_params}
-        
-        # 添加系统参数
-        req_params["timestamp"] = self._binance_get_timestamp()
-        req_params["recvWindow"] = 5000
-        
-        # 平全仓时不能有数量
-        if req_params.get("closePosition"):
-            req_params.pop("quantity", None)
-        
-        return await self._binance_http_request(api_key, api_secret, "POST", base_url, endpoint, req_params)
-    
-    async def _binance_http_request(self, api_key: str, api_secret: str, method: str,
-                                     base_url: str, endpoint: str, params: Dict) -> Dict:
-        """执行币安HTTP请求"""
-        # 生成签名
         query_string = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
         signature = hmac.new(api_secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
         params["signature"] = signature
@@ -302,68 +350,44 @@ class Trader:
     # ========== 欧易 ==========
     
     def _okx_get_base_url(self) -> str:
-        """获取欧易base URL"""
         if self.use_sandbox:
             return "https://aws.okx.com"
-        else:
-            return "https://www.okx.com"
+        return "https://www.okx.com"
     
-    async def _okx_send(self, creds: Dict, action_type: str, params: Dict) -> Dict:
+    async def _okx_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
+        """欧易路由"""
         api_key = creds.get("api_key")
         api_secret = creds.get("api_secret")
         passphrase = creds.get("passphrase", "")
         
-        if action_type == "set_leverage":
-            return await self._okx_set_leverage(api_key, api_secret, passphrase, params)
-        elif action_type == "create_order":
-            return await self._okx_create_order(api_key, api_secret, passphrase, params)
-        else:
-            raise Exception(f"未知动作: {action_type}")
-    
-    async def _okx_set_leverage(self, api_key: str, api_secret: str, passphrase: str, params: Dict) -> Dict:
-        endpoint = "/api/v5/account/set-leverage"
-        base_url = self._okx_get_base_url()
+        if order_type == "set_leverage":
+            endpoint = "/api/v5/account/set-leverage"
+            body_params = params.copy()
+            return await self._okx_http_request(api_key, api_secret, passphrase, "POST", endpoint, body_params)
         
-        # 扁平化：合并外层和内层
-        outer_params = {k: v for k, v in params.items() if k != "params"}
-        inner_params = params.get("params", {})
-        body_params = {**outer_params, **inner_params}
-        
-        # lever 转字符串
-        if "lever" in body_params:
-            body_params["lever"] = str(body_params["lever"])
-        
-        return await self._okx_http_request(api_key, api_secret, passphrase, "POST", base_url, endpoint, body_params)
-    
-    async def _okx_create_order(self, api_key: str, api_secret: str, passphrase: str, params: Dict) -> Dict:
-        base_url = self._okx_get_base_url()
-        
-        # 扁平化：合并外层和内层
-        outer_params = {k: v for k, v in params.items() if k != "params"}
-        inner_params = params.get("params", {})
-        body_params = {**outer_params, **inner_params}
-        
-        # sz 转字符串
-        if "sz" in body_params and body_params["sz"] is not None:
-            body_params["sz"] = str(body_params["sz"])
-        
-        # attachAlgoOrds 里的 sz 也要转
-        if "attachAlgoOrds" in body_params:
-            for algo in body_params["attachAlgoOrds"]:
-                if "sz" in algo and algo["sz"] is not None:
-                    algo["sz"] = str(algo["sz"])
-        
-        # 判断是普通单还是止盈止损单
-        if "attachAlgoOrds" in body_params:
-            endpoint = "/api/v5/trade/order-algo"
-        else:
+        elif order_type == "open_market":
             endpoint = "/api/v5/trade/order"
+            body_params = params.copy()
+            return await self._okx_http_request(api_key, api_secret, passphrase, "POST", endpoint, body_params)
         
-        return await self._okx_http_request(api_key, api_secret, passphrase, "POST", base_url, endpoint, body_params)
+        elif order_type == "oco":
+            endpoint = "/api/v5/trade/order-algo"
+            body_params = params.copy()
+            return await self._okx_http_request(api_key, api_secret, passphrase, "POST", endpoint, body_params)
+        
+        elif order_type == "close_position":
+            endpoint = "/api/v5/trade/close-position"
+            body_params = params.copy()
+            return await self._okx_http_request(api_key, api_secret, passphrase, "POST", endpoint, body_params)
+        
+        else:
+            raise Exception(f"欧易未知 order_type: {order_type}")
     
     async def _okx_http_request(self, api_key: str, api_secret: str, passphrase: str,
-                                method: str, base_url: str, endpoint: str, params: Dict) -> Dict:
-        """执行欧易HTTP请求"""
+                                 method: str, endpoint: str, params: Dict) -> Dict:
+        """执行欧易 HTTP 请求"""
+        base_url = self._okx_get_base_url()
+        
         timestamp = str(time.time())
         body = json.dumps(params)
         sign_str = timestamp + method + endpoint + body
