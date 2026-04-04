@@ -269,10 +269,18 @@ class SmartBrain:
                 "config_length": len(self.config_data)
             }
         
-        # ========== 开仓指令（只接收，暂不执行） ==========
+        # ========== 开仓指令 ==========
         if command == 'place_order':
-            logger.info(f"💰【智能大脑】收到开仓指令")
-            logger.info(f"   参数: {params}")
+            logger.info(f"💰【智能大脑】收到开仓指令: {params}")
+            
+            # 读取参数
+            symbol = params.get('symbol', '')
+            margin = params.get('margin', 0)
+            leverage = params.get('leverage', 20)
+            direction = params.get('direction', '')
+            
+            logger.info(f"   📊 读取结果: symbol={symbol}, margin={margin}, leverage={leverage}, direction={direction}")
+            
             return {
                 "success": True,
                 "received": True,
@@ -280,21 +288,37 @@ class SmartBrain:
                 "message": "指令已接收，暂不执行任何操作"
             }
         
-        # ========== 平仓指令（只接收，暂不执行） ==========
-        if command == 'close_position':
-            logger.info(f"🔚【智能大脑】收到平仓指令")
-            logger.info(f"   参数: {params}")
-            return {
-                "success": True,
-                "received": True,
-                "command": command,
-                "message": "指令已接收，暂不执行任何操作"
-            }
-        
-        # ========== 止损止盈指令（只接收，暂不执行） ==========
+        # ========== 止损止盈指令 ==========
         if command == 'set_sl_tp':
-            logger.info(f"⚙️【智能大脑】收到止损止盈指令")
-            logger.info(f"   参数: {params}")
+            logger.info(f"⚙️【智能大脑】收到止损止盈指令: {params}")
+            
+            # 读取参数
+            okx_symbol = params.get('okx', {}).get('symbol', '') if 'okx' in params else ''
+            binance_symbol = params.get('binance', {}).get('symbol', '') if 'binance' in params else ''
+            stop_loss = params.get('stop_loss_percent', 0)
+            take_profit = params.get('take_profit_percent', 0)
+            calc_type = params.get('type', 'price_percent')
+            
+            logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 止损={stop_loss}%, 止盈={take_profit}%, 类型={calc_type}")
+            
+            return {
+                "success": True,
+                "received": True,
+                "command": command,
+                "message": "指令已接收，暂不执行任何操作"
+            }
+        
+        # ========== 平仓指令 ==========
+        if command == 'close_position':
+            logger.info(f"🔚【智能大脑】收到平仓指令: {params}")
+            
+            # 读取参数
+            okx_symbol = params.get('okx', {}).get('symbol', '') if 'okx' in params else ''
+            binance_symbol = params.get('binance', {}).get('symbol', '') if 'binance' in params else ''
+            order_type = params.get('order_type', 'market')
+            
+            logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 订单类型={order_type}")
+            
             return {
                 "success": True,
                 "received": True,
