@@ -271,9 +271,19 @@ class SmartBrain:
         
         # ========== 开仓指令 ==========
         if command == 'place_order':
+            # 检查是否是禁止交易模式
+            if self.trade_mode == "forbidden":
+                logger.warning(f"🚫 当前为禁止交易模式，开仓指令被拒绝")
+                return {
+                    "success": False,
+                    "received": True,
+                    "command": command,
+                    "error": "当前为禁止交易模式，无法执行开仓"
+                }
+            
             logger.info(f"💰【智能大脑】收到开仓指令: {params}")
             
-            # 读取参数
+            # 大脑读取指令内容
             symbol = params.get('symbol', '')
             margin = params.get('margin', 0)
             leverage = params.get('leverage', 20)
@@ -281,15 +291,23 @@ class SmartBrain:
             
             logger.info(f"   📊 读取结果: symbol={symbol}, margin={margin}, leverage={leverage}, direction={direction}")
             
-            return {
-                "success": True,
-                "received": True,
-                "command": command,
-                "message": "指令已接收，暂不执行任何操作"
-            }
+            # 触发：大脑进入开仓流程房间，按照步骤执行
+            result = await self.trading.enter_room(command, params)
+            
+            return result
         
         # ========== 止损止盈指令 ==========
         if command == 'set_sl_tp':
+            # 检查是否是禁止交易模式
+            if self.trade_mode == "forbidden":
+                logger.warning(f"🚫 当前为禁止交易模式，止损止盈指令被拒绝")
+                return {
+                    "success": False,
+                    "received": True,
+                    "command": command,
+                    "error": "当前为禁止交易模式，无法执行止损止盈"
+                }
+            
             logger.info(f"⚙️【智能大脑】收到止损止盈指令: {params}")
             
             # 读取参数
@@ -301,6 +319,7 @@ class SmartBrain:
             
             logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 止损={stop_loss}%, 止盈={take_profit}%, 类型={calc_type}")
             
+            # TODO: 触发大脑进入止损止盈流程房间（待实现）
             return {
                 "success": True,
                 "received": True,
@@ -310,6 +329,16 @@ class SmartBrain:
         
         # ========== 平仓指令 ==========
         if command == 'close_position':
+            # 检查是否是禁止交易模式
+            if self.trade_mode == "forbidden":
+                logger.warning(f"🚫 当前为禁止交易模式，平仓指令被拒绝")
+                return {
+                    "success": False,
+                    "received": True,
+                    "command": command,
+                    "error": "当前为禁止交易模式，无法执行平仓"
+                }
+            
             logger.info(f"🔚【智能大脑】收到平仓指令: {params}")
             
             # 读取参数
@@ -319,6 +348,7 @@ class SmartBrain:
             
             logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 订单类型={order_type}")
             
+            # TODO: 触发大脑进入平仓流程房间（待实现）
             return {
                 "success": True,
                 "received": True,
