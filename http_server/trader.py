@@ -350,9 +350,12 @@ class Trader:
     # ========== 欧易 ==========
     
     def _okx_get_base_url(self) -> str:
-        if self.use_sandbox:
-            return "https://aws.okx.com"
+        # 欧易实盘和模拟盘都用同一个域名，通过请求头 x-simulated-trading 区分
         return "https://www.okx.com"
+    
+    def _okx_get_simulated_header(self) -> str:
+        """根据 use_sandbox 返回模拟盘标识：1=模拟盘，0=实盘"""
+        return "1" if self.use_sandbox else "0"
     
     async def _okx_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
         """欧易路由"""
@@ -401,7 +404,8 @@ class Trader:
             "OK-ACCESS-SIGN": signature,
             "OK-ACCESS-TIMESTAMP": timestamp,
             "OK-ACCESS-PASSPHRASE": passphrase,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "x-simulated-trading": self._okx_get_simulated_header()   # 根据 use_sandbox 自动设置
         }
         
         loop = asyncio.get_running_loop()
