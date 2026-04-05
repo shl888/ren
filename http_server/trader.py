@@ -315,11 +315,11 @@ class Trader:
         1. 构建原始参数字符串（key=value&key=value...）
         2. 对整个原始字符串做百分号编码
         3. 对编码后的字符串计算 HMAC-SHA256 签名
-        4. 发送时参数值也需要编码
+        4. 发送时也用这个编码后的字符串
         """
         base_url = self._binance_get_base_url()
         
-        # 强制确保 timestamp 和 recvWindow 存在（不管大脑有没有传）
+        # 强制确保 timestamp 和 recvWindow 存在
         params['timestamp'] = self._binance_get_timestamp()
         params['recvWindow'] = 5000
         
@@ -334,18 +334,8 @@ class Trader:
         # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 步骤4：把签名加到参数里
-        params["signature"] = signature
-        
-        # 步骤5：构建最终请求参数（参数值编码，数字保持数字）
-        final_params = {}
-        for k, v in params.items():
-            if isinstance(v, (int, float)):
-                final_params[k] = v
-            else:
-                final_params[k] = urllib.parse.quote(str(v), safe='')
-        
-        final_query_string = "&".join([f"{k}={final_params[k]}" for k in sorted(final_params.keys())])
+        # 步骤4：最终请求体 = 编码后的payload + "&signature=" + 签名
+        final_query_string = encoded_payload + "&signature=" + signature
         
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 最终请求体: {final_query_string[:200]}...")
         
@@ -359,7 +349,7 @@ class Trader:
             if method == "POST":
                 return requests.post(url, data=final_query_string, headers=headers)
             else:
-                return requests.get(url, params=final_params, headers=headers)
+                return requests.get(url, params=params, headers=headers)
         
         response = await loop.run_in_executor(self._executor, _request)
         
