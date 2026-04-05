@@ -337,35 +337,24 @@ class Trader:
         1. 构建原始参数字符串（key=value&key=value...）
         2. 对整个原始字符串做百分号编码
         3. 对编码后的字符串计算 HMAC-SHA256 签名
-        4. 发送时参数值也需要单独编码
+        4. 发送时直接用编码后的字符串 + &signature=xxx
         """
         base_url = self._binance_get_base_url()
         
-        # 步骤1：构建原始参数字符串（按字母顺序排序）
-        # 注意：signature 字段不参与签名，先移除
+        # 步骤1：构建原始参数字符串（按字母顺序排序，排除 signature）
         sign_params = {k: v for k, v in params.items() if k != 'signature'}
         sorted_params = sorted(sign_params.items())
         raw_query_string = "&".join([f"{k}={v}" for k, v in sorted_params])
         
-        # 步骤2：对整个原始字符串做百分号编码（币安新规关键）
-        # safe='' 表示编码所有特殊字符，包括字母数字保留原样
+        # 步骤2：对整个原始字符串做百分号编码
         encoded_payload = urllib.parse.quote(raw_query_string, safe='')
         
         # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 步骤4：把签名加到参数里
-        params["signature"] = signature
-        
-        # 步骤5：构建最终请求参数（参数值也需要单独编码，用于发送）
-        final_params = {}
-        for k, v in params.items():
-            if isinstance(v, (int, float)):
-                final_params[k] = str(v)
-            else:
-                final_params[k] = urllib.parse.quote(str(v), safe='')
-        
-        final_query_string = "&".join([f"{k}={final_params[k]}" for k in sorted(final_params.keys())])
+        # 步骤4：最终请求体 = 编码后的payload + "&signature=" + 签名
+        # 注意：这里的 "&signature=" 是直接写死的，不需要编码
+        final_query_string = encoded_payload + "&signature=" + signature
         
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 原始参数: {params}")
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 编码后签名原文: {encoded_payload[:200]}...")
@@ -381,7 +370,7 @@ class Trader:
             if method == "POST":
                 return requests.post(url, data=final_query_string, headers=headers)
             else:
-                return requests.get(url, params=final_params, headers=headers)
+                return requests.get(url, params=params, headers=headers)
         
         response = await loop.run_in_executor(self._executor, _request)
         
