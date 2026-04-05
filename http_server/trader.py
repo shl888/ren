@@ -18,6 +18,7 @@ import hmac
 import hashlib
 import base64
 import json
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor
 
@@ -45,6 +46,10 @@ class Trader:
         self._binance_last_sync = 0
         self._binance_sync_interval = 600  # 10分钟
         
+        # 欧易时间同步
+        self._okx_time_offset = 0
+        self._okx_last_sync = 0
+        
         # 控制工人运行状态
         self._running = False
         
@@ -60,7 +65,7 @@ class Trader:
         """
         # 把订单数据放入队列，工人会异步处理
         self._order_queue.put_nowait(orders)
-        logger.info(f"📤【消息】大脑发来 {len(orders)} 个订单，已放入队列")
+        logger.info(f"📤【下单工人】大脑发来 {len(orders)} 个订单，已放入队列")
     
     # ========== 工人主循环 ==========
     
@@ -69,8 +74,9 @@ class Trader:
         self._running = True
         logger.info("👷【下单工人】启动，等待接收订单...")
         
-        # 启动币安时间同步任务（后台运行）
+        # 启动时间同步任务（后台运行）
         asyncio.create_task(self._binance_time_sync_loop())
+        asyncio.create_task(self._okx_time_sync_loop())
         
         # 主循环：一直等着收数据
         while self._running:
@@ -158,7 +164,7 @@ class Trader:
         if hasattr(self.brain, 'on_trader_results'):
             await self.brain.on_trader_results(results)
         else:
-            logger.error("❌ 大脑没有实现 on_trader_results 方法，无法接收结果")
+            logger.error("❌【下单工人】大脑没有实现 on_trader_results 方法，无法接收结果")
     
     # ========== 币安 OCO 展开 ==========
     
@@ -166,7 +172,7 @@ class Trader:
         """展开币安 OCO 订单为两个独立订单"""
         orders_list = oco_order.get("orders", [])
         if len(orders_list) != 2:
-            logger.error(f"❌ 币安 OCO 需要 2 个订单，实际: {len(orders_list)}")
+            logger.error(f"❌【下单工人】币安 OCO 需要 2 个订单，实际: {len(orders_list)}")
         
         result_orders = []
         for algo_order in orders_list:
@@ -197,7 +203,7 @@ class Trader:
         for i, exchange in enumerate(tasks.keys()):
             creds = results[i]
             if isinstance(creds, Exception) or not creds:
-                logger.error(f"❌ 无法获取 {exchange} API凭证: {creds}")
+                logger.error(f"❌【下单工人】无法获取 {exchange} API凭证: {creds}")
                 creds_map[exchange] = None
             else:
                 creds_map[exchange] = creds
@@ -227,7 +233,7 @@ class Trader:
                 "data": result
             }
         except Exception as e:
-            logger.error(f"❌ 发送失败 [{exchange}/{order_type}]: {e}")
+            logger.error(f"❌【下单工人】发送失败 [{exchange}/{order_type}]: {e}")
             return {
                 "success": False,
                 "exchange": exchange,
@@ -259,8 +265,7 @@ class Trader:
             try:
                 await self._binance_sync_time()
             except Exception as e:
-                logger.error(f"❌ 币安时间同步失败: {e}")
-            # 每10分钟同步一次
+                logger.error(f"❌【下单工人】币安时间同步失败: {e}")
             await asyncio.sleep(self._binance_sync_interval)
     
     async def _binance_sync_time(self):
@@ -279,9 +284,9 @@ class Trader:
             local_time = int(time.time() * 1000)
             self._binance_time_offset = server_time - local_time
             self._binance_last_sync = time.time()
-            logger.info(f"⏱️【币安时间同步】偏移量: {self._binance_time_offset}ms")
+            logger.info(f"⏱️【下单工人】币安时间同步 | 偏移量: {self._binance_time_offset}ms")
         except Exception as e:
-            logger.error(f"❌【币安时间同步】失败: {e}，偏移量保持 {self._binance_time_offset}")
+            logger.error(f"❌【下单工人】币安时间同步失败: {e}，偏移量保持 {self._binance_time_offset}")
     
     async def _binance_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
         """币安路由"""
@@ -343,9 +348,14 @@ class Trader:
         response = await loop.run_in_executor(self._executor, _request)
         
         try:
-            return response.json()
+            result = response.json()
+            # 打印币安原始响应
+            logger.info(f"📡【下单工人】币安响应 [{endpoint}] -> {result}")
+            return result
         except:
-            return {"raw_response": response.text}
+            raw_text = response.text
+            logger.warning(f"⚠️【下单工人】币安响应非JSON格式 [{endpoint}] -> {raw_text[:500]}")
+            return {"raw_response": raw_text}
     
     # ========== 欧易 ==========
     
@@ -356,6 +366,42 @@ class Trader:
     def _okx_get_simulated_header(self) -> str:
         """根据 use_sandbox 返回模拟盘标识：1=模拟盘，0=实盘"""
         return "1" if self.use_sandbox else "0"
+    
+    def _okx_get_timestamp(self) -> str:
+        """获取欧易要求的ISO格式时间戳"""
+        return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    
+    async def _okx_time_sync_loop(self):
+        """后台定时同步欧易时间"""
+        while self._running:
+            try:
+                await self._okx_sync_time()
+            except Exception as e:
+                logger.error(f"❌【下单工人】欧易时间同步失败: {e}")
+            await asyncio.sleep(600)  # 每10分钟同步一次
+    
+    async def _okx_sync_time(self):
+        """同步欧易服务器时间"""
+        try:
+            import requests
+            url = "https://www.okx.com/api/v5/public/time"
+            loop = asyncio.get_running_loop()
+            
+            def _request():
+                return requests.get(url, timeout=5)
+            
+            response = await loop.run_in_executor(self._executor, _request)
+            data = response.json()
+            if data.get("code") == "0":
+                server_time = int(data["data"][0]["ts"])
+                local_time = int(time.time() * 1000)
+                self._okx_time_offset = server_time - local_time
+                self._okx_last_sync = time.time()
+                logger.info(f"⏱️【下单工人】欧易时间同步 | 偏移量: {self._okx_time_offset}ms")
+            else:
+                logger.warning(f"⏱️【下单工人】欧易时间同步返回异常: {data}")
+        except Exception as e:
+            logger.error(f"❌【下单工人】欧易时间同步失败: {e}")
     
     async def _okx_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
         """欧易路由"""
@@ -391,7 +437,9 @@ class Trader:
         """执行欧易 HTTP 请求"""
         base_url = self._okx_get_base_url()
         
-        timestamp = str(time.time())
+        # 欧易要求 ISO 8601 格式的时间戳
+        timestamp = self._okx_get_timestamp()
+        
         body = json.dumps(params)
         sign_str = timestamp + method + endpoint + body
         signature = base64.b64encode(
@@ -405,7 +453,7 @@ class Trader:
             "OK-ACCESS-TIMESTAMP": timestamp,
             "OK-ACCESS-PASSPHRASE": passphrase,
             "Content-Type": "application/json",
-            "x-simulated-trading": self._okx_get_simulated_header()   # 根据 use_sandbox 自动设置
+            "x-simulated-trading": self._okx_get_simulated_header()
         }
         
         loop = asyncio.get_running_loop()
@@ -420,6 +468,10 @@ class Trader:
         response = await loop.run_in_executor(self._executor, _request)
         
         try:
-            return response.json()
+            result = response.json()
+            logger.info(f"📡【下单工人】欧易响应 [{endpoint}] -> {result}")
+            return result
         except:
-            return {"raw_response": response.text}
+            raw_text = response.text
+            logger.warning(f"⚠️【下单工人】欧易响应非JSON格式 [{endpoint}] -> {raw_text[:500]}")
+            return {"raw_response": raw_text}
