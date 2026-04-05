@@ -272,7 +272,7 @@ class OpenPositionFlow:
             if self.binance_trade_price <= 0:
                 return False, f"币安最新成交价异常: {self.binance_trade_price}"
             
-            logger.info(f"   📊 行情数据: 欧易={self.okx_trade_price}, 币安={self.binance_trade_price}")
+            logger.info(f"   📊 【半自动开仓】读取到行情数据: 欧易={self.okx_trade_price}, 币安={self.binance_trade_price}")
             return True, ""
             
         except Exception as e:
@@ -317,7 +317,7 @@ class OpenPositionFlow:
             if self.minSz <= 0:
                 return False, f"欧易最小下单量异常: {self.minSz}"
             
-            logger.info(f"   📊 欧易面值: ctVal={self.ctVal}, lotSz={self.lotSz}, minSz={self.minSz}")
+            logger.info(f"   📊 【半自动开仓】读取到欧易面值: ctVal={self.ctVal}, lotSz={self.lotSz}, minSz={self.minSz}")
             return True, ""
             
         except Exception as e:
@@ -358,7 +358,7 @@ class OpenPositionFlow:
             if self.minQty <= 0:
                 return False, f"币安最小下单量异常: {self.minQty}"
             
-            logger.info(f"   📊 币安精度: stepSize={self.stepSize}, minQty={self.minQty}")
+            logger.info(f"   📊 【半自动开仓】读取到币安精度: stepSize={self.stepSize}, minQty={self.minQty}")
             return True, ""
             
         except Exception as e:
@@ -399,7 +399,7 @@ class OpenPositionFlow:
             # 第5步：乘以步长得到最终张数
             self.sz = floor_sz * self.lotSz
             
-            logger.info(f"   📊 欧易计算: 分子={numerator}, 分母={denominator}, 原始={raw_sz}, floor={floor_sz}, 最终sz={self.sz}")
+            logger.info(f"   📊【半自动开仓】 欧易张数计算: 分子={numerator}, 分母={denominator}, 原始={raw_sz}, floor={floor_sz}, 最终sz={self.sz}")
             
             # 校验最小下单量
             if self.sz < self.minSz:
@@ -449,7 +449,7 @@ class OpenPositionFlow:
             # 第6步：乘以步长得到最终币数
             self.quantity = outer_floor * self.stepSize
             
-            logger.info(f"   📊 币安计算: 内层floor={inner_floor}, 欧易价值={okx_value}, 原始={raw_quantity}, 最终={self.quantity}")
+            logger.info(f"   📊【半自动开仓】 币安币数计算: 内层floor={inner_floor}, 欧易价值={okx_value}, 原始={raw_quantity}, 最终={self.quantity}")
             
             # 校验最小下单量
             if self.quantity < self.minQty:
@@ -469,7 +469,7 @@ class OpenPositionFlow:
         self.binance_leverage_cache = copy.deepcopy(SET_LEVERAGE_BINANCE)
         self.okx_order_cache = copy.deepcopy(OPEN_MARKET_OKX)
         self.binance_order_cache = copy.deepcopy(OPEN_MARKET_BINANCE)
-        logger.info("   📦 缓存已初始化，4个模板已拷贝")
+        logger.info("   📦【半自动开仓】 缓存已初始化，4个参数模板已拷贝")
     
     def _fill_leverage_params(self):
         """
@@ -490,7 +490,7 @@ class OpenPositionFlow:
         self.binance_leverage_cache["params"]["symbol"] = self.binance_symbol
         self.binance_leverage_cache["params"]["leverage"] = self.leverage  # 数字
         
-        logger.info(f"   📝 杠杆参数已填充: 欧易={self.okx_symbol} x{self.leverage}, 币安={self.binance_symbol} x{self.leverage}")
+        logger.info(f"   📝 【半自动开仓】杠杆参数已填充: 欧易={self.okx_symbol} x{self.leverage}, 币安={self.binance_symbol} x{self.leverage}")
     
     def _fill_order_params_by_direction(self):
         """
@@ -508,7 +508,7 @@ class OpenPositionFlow:
             self.okx_order_cache["params"]["posSide"] = "short"
             self.binance_order_cache["params"]["side"] = "BUY"
             self.binance_order_cache["params"]["positionSide"] = "LONG"
-            logger.info(f"   📝 方向: 欧易做空, 币安做多")
+            logger.info(f"   📝【半自动开仓】 开仓方向: 欧易做空, 币安做多")
             
         elif self.direction == "long_okx_short_binance":
             # 做多欧易，做空币安
@@ -516,7 +516,7 @@ class OpenPositionFlow:
             self.okx_order_cache["params"]["posSide"] = "long"
             self.binance_order_cache["params"]["side"] = "SELL"
             self.binance_order_cache["params"]["positionSide"] = "SHORT"
-            logger.info(f"   📝 方向: 欧易做多, 币安做空")
+            logger.info(f"   📝 【半自动开仓】开仓方向: 欧易做多, 币安做空")
             
         else:
             logger.error(f"❌ 未知方向: {self.direction}")
@@ -542,7 +542,7 @@ class OpenPositionFlow:
         # 根据方向填充side和positionSide
         self._fill_order_params_by_direction()
         
-        logger.info(f"   📝 开仓参数已填充: 欧易张数={self.sz}, 币安币数={self.quantity}")
+        logger.info(f"   📝 【半自动开仓】开仓参数已填充: 欧易张数={self.sz}, 币安币数={self.quantity}")
     
     # ==================== 与工人交互 ====================
     
@@ -558,7 +558,7 @@ class OpenPositionFlow:
         """
         # 大脑把参数发给工人
         self.brain.send_to_worker([params])
-        logger.info(f"   📤 交给工人: {params.get('type')} - {params.get('exchange')}")
+        logger.info(f"   📤 【半自动开仓】交给工人: {params.get('type')} - {params.get('exchange')}")
     
     async def _wait_for_result(self, exchange: str, timeout: float = 30.0) -> Dict[str, Any]:
         """
@@ -576,7 +576,7 @@ class OpenPositionFlow:
         """
         # TODO: 大脑挂起等待的具体实现
         # 需要根据 exchange 匹配工人返回的结果
-        logger.info(f"   ⏳ 等待 {exchange} 结果")
+        logger.info(f"   ⏳ 【半自动开仓】等待 {exchange} 结果")
         await asyncio.sleep(0.1)  # 占位
         return {"success": True, "exchange": exchange}
     
@@ -592,12 +592,12 @@ class OpenPositionFlow:
         Returns:
             {"success": True/False, "error": error_msg}
         """
-        logger.info("⚙️ step3：设置杠杆")
+        logger.info("⚙️【半自动开仓】 step3：设置杠杆")
         
         # 填充杠杆参数
         self._fill_leverage_params()
         
-        logger.info(f"   📤 并发交给工人: 欧易杠杆, 币安杠杆")
+        logger.info(f"   📤 【半自动开仓】并发交给工人: 欧易杠杆, 币安杠杆")
         
         # 命令大脑：把参数交给工人（不等待）
         self._send_to_worker_no_wait(self.okx_leverage_cache)
@@ -620,7 +620,7 @@ class OpenPositionFlow:
             logger.error(f"   ❌ {error_msg}")
             return {"success": False, "error": error_msg}
         
-        logger.info(f"   ✅ 杠杆设置成功")
+        logger.info(f"   ✅ 【半自动开仓】杠杆设置成功")
         return {"success": True, "error": ""}
     
     # ==================== step6：开仓 ====================
@@ -636,19 +636,19 @@ class OpenPositionFlow:
             {"success": True/False, "error": error_msg}
             - 只表示“交给工人”是否成功，不代表开仓成功
         """
-        logger.info("📝 step6：开仓")
+        logger.info("📝【半自动开仓】 step6：开始执行开仓参数")
         
         # 填充开仓参数
         self._fill_order_params()
         
-        logger.info(f"   📤 把开仓参数交给工人: 欧易, 币安")
+        logger.info(f"   📤【半自动开仓】 把开仓参数交给工人: 欧易, 币安")
         
         try:
             # 命令大脑：把参数交给工人
             self._send_to_worker_no_wait(self.okx_order_cache)
             self._send_to_worker_no_wait(self.binance_order_cache)
             
-            logger.info(f"   ✅ 开仓参数已交给工人")
+            logger.info(f"   ✅【半自动开仓】 开仓参数已交给工人")
             return {"success": True, "error": ""}
             
         except Exception as e:
@@ -665,12 +665,12 @@ class OpenPositionFlow:
         无论流程成功还是失败，从哪一步跳过来，都必须执行这一步。
         大脑清空缓存区，释放内存。
         """
-        logger.info("🧹 step7：清理缓存（最后一步）")
+        logger.info("🧹【半自动开仓】开始执行 step7：清理缓存（最后一步）")
         self.okx_leverage_cache = None
         self.binance_leverage_cache = None
         self.okx_order_cache = None
         self.binance_order_cache = None
-        logger.info("   ✅ 缓存已清理")
+        logger.info("   ✅【半自动开仓】 缓存已清理")
     
     # ==================== 主流程 ====================
     
@@ -689,7 +689,7 @@ class OpenPositionFlow:
             执行结果字典
         """
         logger.info("=" * 60)
-        logger.info("🚀 大脑开始执行开仓流程")
+        logger.info("🚀 【半自动开仓】大脑开始执行开仓流程")
         
         # ==================== 初始化 ====================
         
@@ -703,26 +703,26 @@ class OpenPositionFlow:
         self.okx_symbol = self._convert_okx_symbol(self.raw_symbol)
         self.binance_symbol = self.raw_symbol
         
-        logger.info(f"   📋 指令参数: symbol={self.raw_symbol}, margin={self.margin}, leverage={self.leverage}, direction={self.direction}")
-        logger.info(f"   📋 转换后: okx_symbol={self.okx_symbol}, binance_symbol={self.binance_symbol}")
+        logger.info(f"   📋【半自动开仓】 指令参数: symbol={self.raw_symbol}, margin={self.margin}, leverage={self.leverage}, direction={self.direction}")
+        logger.info(f"   📋 【半自动开仓】开仓合约名转换后: okx_symbol={self.okx_symbol}, binance_symbol={self.binance_symbol}")
         
         # 创建缓存
-        logger.info("📦 创建缓存（拷贝4个参数模板）")
+        logger.info("📦【半自动开仓】 创建缓存（拷贝4个参数模板）")
         self._init_cache()
         
         # ==================== step1：检测空仓 ====================
-        logger.info("🔍 step1：检测是否空仓")
+        logger.info("🔍 【半自动开仓】step1：检测是否空仓")
         is_empty, error_msg = await self._check_empty_position()
         
         if not is_empty:
-            logger.warning(f"   ⚠️ 有持仓，禁止开仓: {error_msg}")
+            logger.warning(f"   ⚠️【半自动开仓】 有持仓，禁止开仓: {error_msg}")
             await self.step7_clear_cache()
             return {"success": False, "error": error_msg}
         
-        logger.info("   ✅ 空仓检查通过")
+        logger.info("   ✅ 【半自动开仓】空仓检查通过")
         
         # ==================== step2：检测保证金 ====================
-        logger.info("💰 step2：检测保证金是否够用（≤账户资产70%）")
+        logger.info("💰【半自动开仓】 step2：检测保证金是否够用（≤账户资产70%）")
         margin_enough, error_msg = await self._check_margin_enough()
         
         if not margin_enough:
@@ -730,7 +730,7 @@ class OpenPositionFlow:
             await self.step7_clear_cache()
             return {"success": False, "error": error_msg}
         
-        logger.info(f"   ✅ 保证金检查通过: {self.margin} USDT")
+        logger.info(f"   ✅ 【半自动开仓】保证金检查通过: {self.margin} USDT")
         
         # ==================== step3：设置杠杆 ====================
         result = await self.step3_set_leverage()
@@ -739,10 +739,10 @@ class OpenPositionFlow:
             return {"success": False, "error": result["error"]}
         
         # ==================== step4：读取精度数据 ====================
-        logger.info("📊 step4：读取精度数据")
+        logger.info("📊 step4：【半自动开仓】开始读取精度数据")
         
         # 4a. 读取行情数据
-        logger.info("   📊 4a. 读取行情数据")
+        logger.info("   📊 【半自动开仓】4a. 读取行情数据")
         success, error_msg = await self._load_market_data()
         if not success:
             logger.warning(f"   ⚠️ {error_msg}")
@@ -750,7 +750,7 @@ class OpenPositionFlow:
             return {"success": False, "error": error_msg}
         
         # 4b. 读取欧易面值数据
-        logger.info("   📊 4b. 读取欧易面值数据")
+        logger.info("   📊 【半自动开仓】4b. 读取欧易面值数据")
         success, error_msg = await self._load_okx_contract_info()
         if not success:
             logger.warning(f"   ⚠️ {error_msg}")
@@ -758,7 +758,7 @@ class OpenPositionFlow:
             return {"success": False, "error": error_msg}
         
         # 4c. 读取币安精度数据
-        logger.info("   📊 4c. 读取币安精度数据")
+        logger.info("   📊【半自动开仓】 4c. 读取币安精度数据")
         success, error_msg = await self._load_binance_precision()
         if not success:
             logger.warning(f"   ⚠️ {error_msg}")
@@ -766,26 +766,26 @@ class OpenPositionFlow:
             return {"success": False, "error": error_msg}
         
         # ==================== step5：计算下单参数 ====================
-        logger.info("🧮 step5：计算下单参数")
+        logger.info("🧮【半自动开仓】 step5：开始计算下单参数")
         
         # 5a. 计算欧易张数
-        logger.info("   🧮 5a. 计算欧易张数")
+        logger.info("   🧮【半自动开仓】 5a. 计算欧易张数")
         success, error_msg = self._calculate_okx_sz()
         if not success:
-            logger.warning(f"   ⚠️ {error_msg}")
+            logger.warning(f"   ⚠️【半自动开仓】 {error_msg}")
             await self.step7_clear_cache()
             return {"success": False, "error": error_msg}
         
         # 5b. 计算币安币数
-        logger.info("   🧮 5b. 计算币安币数")
+        logger.info("   🧮【半自动开仓】 5b. 计算币安币数")
         success, error_msg = self._calculate_binance_quantity()
         if not success:
-            logger.warning(f"   ⚠️ {error_msg}")
+            logger.warning(f"   ⚠️【半自动开仓】 {error_msg}")
             await self.step7_clear_cache()
             return {"success": False, "error": error_msg}
         
         # 校验最小下单量（已在计算中完成）
-        logger.info("✅ 校验最小下单量（已通过）")
+        logger.info("✅【半自动开仓】 校验币安最小下单量（已通过）")
         
         # ==================== step6：开仓 ====================
         result = await self.step6_send_order()
@@ -798,7 +798,7 @@ class OpenPositionFlow:
         
         # ==================== 成功返回 ====================
         success_msg = f"开仓参数已交给工人！合约={self.raw_symbol}, 保证金={self.margin}USDT, 杠杆={self.leverage}x, 方向={self.direction}"
-        logger.info(f"✅ {success_msg}")
+        logger.info(f"✅ 【半自动开仓】{success_msg}")
         logger.info("=" * 60)
         
         return {
