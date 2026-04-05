@@ -333,6 +333,9 @@ class Trader:
         signature = hmac.new(api_secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
         params["signature"] = signature
         
+        # 打印币安请求参数
+        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 参数: {params}")
+        
         url = base_url + endpoint
         headers = {"X-MBX-APIKEY": api_key}
         
@@ -349,7 +352,6 @@ class Trader:
         
         try:
             result = response.json()
-            # 打印币安原始响应
             logger.info(f"📡【下单工人】币安响应 [{endpoint}] -> {result}")
             return result
         except:
@@ -455,6 +457,10 @@ class Trader:
             "Content-Type": "application/json",
             "x-simulated-trading": self._okx_get_simulated_header()
         }
+        
+        # 打印欧易请求参数
+        logger.info(f"📤【下单工人】欧易请求 [{endpoint}] Headers: {headers}")
+        logger.info(f"📤【下单工人】欧易请求 [{endpoint}] Body: {body}")
         
         loop = asyncio.get_running_loop()
         
