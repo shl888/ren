@@ -276,31 +276,21 @@ class Trader:
         if order_type == "set_leverage":
             endpoint = "/fapi/v1/leverage"
             req_params = params.copy()
-            req_params["timestamp"] = self._binance_get_timestamp()
-            req_params["recvWindow"] = 5000
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         elif order_type == "open_market":
             endpoint = "/fapi/v1/order"
             req_params = params.copy()
-            req_params["timestamp"] = self._binance_get_timestamp()
-            req_params["recvWindow"] = 5000
-            if 'quantity' in req_params:
-                req_params['quantity'] = round(float(req_params['quantity']), 8)
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         elif order_type == "algo_order":
             endpoint = "/fapi/v1/algoOrder"
             req_params = params.copy()
-            req_params["timestamp"] = self._binance_get_timestamp()
-            req_params["recvWindow"] = 5000
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         elif order_type == "close_position":
             endpoint = "/fapi/v1/closePosition"
             req_params = params.copy()
-            req_params["timestamp"] = self._binance_get_timestamp()
-            req_params["recvWindow"] = 5000
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         else:
@@ -312,14 +302,17 @@ class Trader:
         执行币安 HTTP 请求（新版签名规则）
         
         根据币安 2026-01-15 生效的新规：
-        1. 构建原始参数字符串（key=value&key=value...）
-        2. 对整个原始字符串做百分号编码
+        1. 构建原始参数字符串（key=value&key=value...），按字母顺序排序
+        2. 对整个原始字符串做百分比编码（保留 = 和 & 不编码）
         3. 对编码后的字符串计算 HMAC-SHA256 签名
-        4. 发送时用原始的未编码字符串 + &signature=xxx
+        4. 发送时使用编码后的字符串 + &signature=签名
         """
         base_url = self._binance_get_base_url()
         
-        # 强制确保 timestamp 和 recvWindow 存在
+        # 复制参数，避免修改原字典
+        params = params.copy()
+        
+        # 添加必要参数
         params['timestamp'] = self._binance_get_timestamp()
         params['recvWindow'] = 5000
         
@@ -328,19 +321,22 @@ class Trader:
         sorted_params = sorted(sign_params.items())
         raw_query_string = "&".join([f"{k}={v}" for k, v in sorted_params])
         
-        # 步骤2：对整个原始字符串做百分号编码（用于签名）
-        encoded_payload = urllib.parse.quote(raw_query_string, safe='')
+        # 步骤2：对整个原始字符串做百分比编码（保留 = 和 & 不编码）
+        encoded_payload = urllib.parse.quote(raw_query_string, safe='=&')
         
         # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 步骤4：最终请求体 = 原始的未编码字符串 + "&signature=" + 签名
-        final_query_string = raw_query_string + "&signature=" + signature
+        # 步骤4：最终请求体 = 编码后的字符串 + "&signature=" + 签名
+        final_query_string = encoded_payload + "&signature=" + signature
         
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 最终请求体: {final_query_string[:200]}...")
         
         url = base_url + endpoint
-        headers = {"X-MBX-APIKEY": api_key}
+        headers = {
+            "X-MBX-APIKEY": api_key,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
         
         loop = asyncio.get_running_loop()
         
@@ -349,18 +345,25 @@ class Trader:
             if method == "POST":
                 return requests.post(url, data=final_query_string, headers=headers)
             else:
-                return requests.get(url, params=params, headers=headers)
+                # GET 请求：把 final_query_string 拼到 URL
+                full_url = f"{url}?{final_query_string}"
+                return requests.get(full_url, headers=headers)
         
         response = await loop.run_in_executor(self._executor, _request)
+        
+        # 检查 HTTP 状态码
+        if response.status_code >= 400:
+            logger.error(f"❌【下单工人】币安 HTTP 错误 [{endpoint}]: {response.status_code} - {response.text[:200]}")
+            return {"error": f"HTTP {response.status_code}", "raw_response": response.text[:500]}
         
         try:
             result = response.json()
             logger.info(f"📡【下单工人】币安响应 [{endpoint}] -> {result}")
             return result
-        except:
+        except Exception as e:
             raw_text = response.text
-            logger.warning(f"⚠️【下单工人】币安响应非JSON格式 [{endpoint}] -> {raw_text[:500]}")
-            return {"raw_response": raw_text}
+            logger.warning(f"⚠️【下单工人】币安响应解析失败 [{endpoint}] -> {raw_text[:500]}")
+            return {"raw_response": raw_text, "error": str(e)}
     
     # ========== 欧易 ==========
     
