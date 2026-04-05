@@ -64,30 +64,23 @@ class Trader:
         
         大脑调用这个方法，把订单参数扔给工人，然后继续干自己的事。
         """
-        # 把订单数据放入队列，工人会异步处理
         self._order_queue.put_nowait(orders)
         logger.info(f"📤【下单工人】大脑发来 {len(orders)} 个订单，已放入队列")
     
     # ========== 工人主循环 ==========
     
     async def start(self):
-        """启动工人（在后台一直运行）"""
+        """启动工人"""
         self._running = True
         logger.info("👷【下单工人】启动，等待接收订单...")
         
-        # 启动时间同步任务（后台运行）
         asyncio.create_task(self._binance_time_sync_loop())
         asyncio.create_task(self._okx_time_sync_loop())
         
-        # 主循环：一直等着收数据
         while self._running:
             try:
-                # 等待大脑发来的订单（阻塞在这里，没有订单就歇着）
                 orders = await self._order_queue.get()
-                
-                # 收到订单，异步处理（不阻塞主循环）
                 asyncio.create_task(self._process_orders(orders))
-                
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -98,7 +91,6 @@ class Trader:
     async def stop(self):
         """停止工人"""
         self._running = False
-        # 清空队列
         while not self._order_queue.empty():
             try:
                 self._order_queue.get_nowait()
@@ -108,18 +100,10 @@ class Trader:
     # ========== 处理订单 ==========
     
     async def _process_orders(self, orders: List[Dict]):
-        """
-        处理收到的订单（内部方法）
-        
-        1. 展开币安 OCO
-        2. 获取 API 凭证
-        3. 并发发送到交易所
-        4. 收集结果，发回给大脑
-        """
+        """处理收到的订单"""
         try:
             logger.info(f"🔧【下单工人】开始处理 {len(orders)} 个订单")
             
-            # 1. 展开币安 OCO（一个变两个）
             expanded_orders = []
             for order in orders:
                 exchange = order.get("exchange")
@@ -132,10 +116,8 @@ class Trader:
                 else:
                     expanded_orders.append(order)
             
-            # 2. 获取所有需要的 API 凭证
             creds_map = await self._fetch_all_credentials(expanded_orders)
             
-            # 3. 所有订单并发发送
             tasks = []
             for order in expanded_orders:
                 exchange = order.get("exchange")
@@ -146,15 +128,12 @@ class Trader:
                     tasks.append(self._send_order(order, creds))
             
             results = await asyncio.gather(*tasks)
-            
-            # 4. 把结果发回给大脑
             await self._send_results_to_brain(results)
             
             logger.info(f"✅【下单工人】处理完成，共 {len(results)} 个结果已发回大脑")
             
         except Exception as e:
             logger.error(f"❌【下单工人】处理订单异常: {e}")
-            # 发生严重错误，也要通知大脑
             await self._send_results_to_brain([{
                 "success": False,
                 "error": f"工人处理异常: {str(e)}"
@@ -165,7 +144,7 @@ class Trader:
         if hasattr(self.brain, 'on_trader_results'):
             await self.brain.on_trader_results(results)
         else:
-            logger.error("❌【下单工人】大脑没有实现 on_trader_results 方法，无法接收结果")
+            logger.error("❌【下单工人】大脑没有实现 on_trader_results 方法")
     
     # ========== 币安 OCO 展开 ==========
     
@@ -287,7 +266,7 @@ class Trader:
             self._binance_last_sync = time.time()
             logger.info(f"⏱️【下单工人】币安时间同步 | 偏移量: {self._binance_time_offset}ms")
         except Exception as e:
-            logger.error(f"❌【下单工人】币安时间同步失败: {e}，偏移量保持 {self._binance_time_offset}")
+            logger.error(f"❌【下单工人】币安时间同步失败: {e}")
     
     async def _binance_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
         """币安路由"""
@@ -306,7 +285,6 @@ class Trader:
             req_params = params.copy()
             req_params["timestamp"] = self._binance_get_timestamp()
             req_params["recvWindow"] = 5000
-            # 修复浮点数精度问题
             if 'quantity' in req_params:
                 req_params['quantity'] = round(float(req_params['quantity']), 8)
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
@@ -337,9 +315,13 @@ class Trader:
         1. 构建原始参数字符串（key=value&key=value...）
         2. 对整个原始字符串做百分号编码
         3. 对编码后的字符串计算 HMAC-SHA256 签名
-        4. 发送时直接用编码后的字符串 + &signature=xxx
+        4. 发送时参数值也需要编码
         """
         base_url = self._binance_get_base_url()
+        
+        # 强制确保 timestamp 和 recvWindow 存在（不管大脑有没有传）
+        params['timestamp'] = self._binance_get_timestamp()
+        params['recvWindow'] = 5000
         
         # 步骤1：构建原始参数字符串（按字母顺序排序，排除 signature）
         sign_params = {k: v for k, v in params.items() if k != 'signature'}
@@ -352,12 +334,19 @@ class Trader:
         # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 步骤4：最终请求体 = 编码后的payload + "&signature=" + 签名
-        # 注意：这里的 "&signature=" 是直接写死的，不需要编码
-        final_query_string = encoded_payload + "&signature=" + signature
+        # 步骤4：把签名加到参数里
+        params["signature"] = signature
         
-        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 原始参数: {params}")
-        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 编码后签名原文: {encoded_payload[:200]}...")
+        # 步骤5：构建最终请求参数（参数值编码，数字保持数字）
+        final_params = {}
+        for k, v in params.items():
+            if isinstance(v, (int, float)):
+                final_params[k] = v
+            else:
+                final_params[k] = urllib.parse.quote(str(v), safe='')
+        
+        final_query_string = "&".join([f"{k}={final_params[k]}" for k in sorted(final_params.keys())])
+        
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 最终请求体: {final_query_string[:200]}...")
         
         url = base_url + endpoint
@@ -370,7 +359,7 @@ class Trader:
             if method == "POST":
                 return requests.post(url, data=final_query_string, headers=headers)
             else:
-                return requests.get(url, params=params, headers=headers)
+                return requests.get(url, params=final_params, headers=headers)
         
         response = await loop.run_in_executor(self._executor, _request)
         
@@ -386,28 +375,23 @@ class Trader:
     # ========== 欧易 ==========
     
     def _okx_get_base_url(self) -> str:
-        # 欧易实盘和模拟盘都用同一个域名，通过请求头 x-simulated-trading 区分
         return "https://www.okx.com"
     
     def _okx_get_simulated_header(self) -> str:
-        """根据 use_sandbox 返回模拟盘标识：1=模拟盘，0=实盘"""
         return "1" if self.use_sandbox else "0"
     
     def _okx_get_timestamp(self) -> str:
-        """获取欧易要求的ISO格式时间戳"""
         return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
     
     async def _okx_time_sync_loop(self):
-        """后台定时同步欧易时间"""
         while self._running:
             try:
                 await self._okx_sync_time()
             except Exception as e:
                 logger.error(f"❌【下单工人】欧易时间同步失败: {e}")
-            await asyncio.sleep(600)  # 每10分钟同步一次
+            await asyncio.sleep(600)
     
     async def _okx_sync_time(self):
-        """同步欧易服务器时间"""
         try:
             import requests
             url = "https://www.okx.com/api/v5/public/time"
@@ -430,7 +414,6 @@ class Trader:
             logger.error(f"❌【下单工人】欧易时间同步失败: {e}")
     
     async def _okx_send(self, creds: Dict, order_type: str, params: Dict) -> Dict:
-        """欧易路由"""
         api_key = creds.get("api_key")
         api_secret = creds.get("api_secret")
         passphrase = creds.get("passphrase", "")
@@ -443,6 +426,8 @@ class Trader:
         elif order_type == "open_market":
             endpoint = "/api/v5/trade/order"
             body_params = params.copy()
+            if 'sz' in body_params:
+                body_params['sz'] = round(float(body_params['sz']), 8)
             return await self._okx_http_request(api_key, api_secret, passphrase, "POST", endpoint, body_params)
         
         elif order_type == "oco":
@@ -460,12 +445,9 @@ class Trader:
     
     async def _okx_http_request(self, api_key: str, api_secret: str, passphrase: str,
                                  method: str, endpoint: str, params: Dict) -> Dict:
-        """执行欧易 HTTP 请求"""
         base_url = self._okx_get_base_url()
         
-        # 欧易要求 ISO 8601 格式的时间戳
         timestamp = self._okx_get_timestamp()
-        
         body = json.dumps(params)
         sign_str = timestamp + method + endpoint + body
         signature = base64.b64encode(
@@ -482,8 +464,6 @@ class Trader:
             "x-simulated-trading": self._okx_get_simulated_header()
         }
         
-        # 打印欧易请求参数
-        logger.info(f"📤【下单工人】欧易请求 [{endpoint}] Headers: {headers}")
         logger.info(f"📤【下单工人】欧易请求 [{endpoint}] Body: {body}")
         
         loop = asyncio.get_running_loop()
