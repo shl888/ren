@@ -315,7 +315,7 @@ class Trader:
         1. 构建原始参数字符串（key=value&key=value...）
         2. 对整个原始字符串做百分号编码
         3. 对编码后的字符串计算 HMAC-SHA256 签名
-        4. 发送时也用这个编码后的字符串
+        4. 发送时用原始的未编码字符串 + &signature=xxx
         """
         base_url = self._binance_get_base_url()
         
@@ -328,14 +328,14 @@ class Trader:
         sorted_params = sorted(sign_params.items())
         raw_query_string = "&".join([f"{k}={v}" for k, v in sorted_params])
         
-        # 步骤2：对整个原始字符串做百分号编码
+        # 步骤2：对整个原始字符串做百分号编码（用于签名）
         encoded_payload = urllib.parse.quote(raw_query_string, safe='')
         
         # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 步骤4：最终请求体 = 编码后的payload + "&signature=" + 签名
-        final_query_string = encoded_payload + "&signature=" + signature
+        # 步骤4：最终请求体 = 原始的未编码字符串 + "&signature=" + 签名
+        final_query_string = raw_query_string + "&signature=" + signature
         
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 最终请求体: {final_query_string[:200]}...")
         
