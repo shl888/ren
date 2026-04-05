@@ -327,36 +327,43 @@ class Trader:
     
     async def _binance_http_request(self, api_key: str, api_secret: str,
                                      method: str, endpoint: str, params: Dict) -> Dict:
-        """执行币安 HTTP 请求（新版签名：先百分号编码）"""
+        """
+        执行币安 HTTP 请求（新版签名规则）
+        
+        根据币安 2026-01-15 生效的新规：
+        1. 构建原始参数字符串（key=value&key=value...）
+        2. 对整个原始字符串做百分号编码
+        3. 对编码后的字符串计算 HMAC-SHA256 签名
+        4. 发送时参数值也需要单独编码
+        """
         base_url = self._binance_get_base_url()
         
-        # 1. 构建原始参数字符串（按字母顺序排序）
+        # 步骤1：构建原始参数字符串（按字母顺序排序）
         sorted_params = sorted(params.items())
         raw_query_string = "&".join([f"{k}={v}" for k, v in sorted_params])
         
-        # 2. 对整个原始字符串进行百分号编码（币安2026年新规）
+        # 步骤2：对整个原始字符串做百分号编码（币安新规关键）
         encoded_payload = urllib.parse.quote(raw_query_string, safe='')
         
-        # 3. 对编码后的字符串计算签名
+        # 步骤3：对编码后的字符串计算签名
         signature = hmac.new(api_secret.encode(), encoded_payload.encode(), hashlib.sha256).hexdigest()
         
-        # 4. 把签名加到参数里（注意：签名本身不需要再编码）
+        # 步骤4：把签名加到参数里
         params["signature"] = signature
         
-        # 5. 重新构建编码后的参数字符串用于发送
-        # 注意：参数值需要单独编码，因为参数里可能包含特殊字符
-        encoded_params = {}
+        # 步骤5：构建最终请求参数（参数值也需要单独编码）
+        final_params = {}
         for k, v in params.items():
             if isinstance(v, (int, float)):
-                encoded_params[k] = str(v)
+                final_params[k] = str(v)
             else:
-                encoded_params[k] = urllib.parse.quote(str(v), safe='')
+                final_params[k] = urllib.parse.quote(str(v), safe='')
         
-        encoded_query_string = "&".join([f"{k}={encoded_params[k]}" for k in sorted(encoded_params.keys())])
+        final_query_string = "&".join([f"{k}={final_params[k]}" for k in sorted(final_params.keys())])
         
-        # 打印币安请求参数
         logger.info(f"📤【下单工人】币安请求 [{endpoint}] 原始参数: {params}")
-        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 编码后参数: {encoded_query_string[:200]}...")
+        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 编码后签名原文: {encoded_payload[:200]}...")
+        logger.info(f"📤【下单工人】币安请求 [{endpoint}] 最终请求体: {final_query_string[:200]}...")
         
         url = base_url + endpoint
         headers = {"X-MBX-APIKEY": api_key}
@@ -366,9 +373,9 @@ class Trader:
         def _request():
             import requests
             if method == "POST":
-                return requests.post(url, data=encoded_query_string, headers=headers)
+                return requests.post(url, data=final_query_string, headers=headers)
             else:
-                return requests.get(url, params=encoded_params, headers=headers)
+                return requests.get(url, params=final_params, headers=headers)
         
         response = await loop.run_in_executor(self._executor, _request)
         
