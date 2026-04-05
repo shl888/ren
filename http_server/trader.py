@@ -306,6 +306,9 @@ class Trader:
             req_params = params.copy()
             req_params["timestamp"] = self._binance_get_timestamp()
             req_params["recvWindow"] = 5000
+            # 修复浮点数精度问题
+            if 'quantity' in req_params:
+                req_params['quantity'] = round(float(req_params['quantity']), 8)
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         elif order_type == "algo_order":
@@ -339,10 +342,13 @@ class Trader:
         base_url = self._binance_get_base_url()
         
         # 步骤1：构建原始参数字符串（按字母顺序排序）
-        sorted_params = sorted(params.items())
+        # 注意：signature 字段不参与签名，先移除
+        sign_params = {k: v for k, v in params.items() if k != 'signature'}
+        sorted_params = sorted(sign_params.items())
         raw_query_string = "&".join([f"{k}={v}" for k, v in sorted_params])
         
         # 步骤2：对整个原始字符串做百分号编码（币安新规关键）
+        # safe='' 表示编码所有特殊字符，包括字母数字保留原样
         encoded_payload = urllib.parse.quote(raw_query_string, safe='')
         
         # 步骤3：对编码后的字符串计算签名
@@ -351,7 +357,7 @@ class Trader:
         # 步骤4：把签名加到参数里
         params["signature"] = signature
         
-        # 步骤5：构建最终请求参数（参数值也需要单独编码）
+        # 步骤5：构建最终请求参数（参数值也需要单独编码，用于发送）
         final_params = {}
         for k, v in params.items():
             if isinstance(v, (int, float)):
