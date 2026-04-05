@@ -73,7 +73,7 @@ class SmartBrain:
             if not result.get("success"):
                 # 下单工人层面失败（发请求前就失败了）
                 error_msg = result.get("error", "未知错误")
-                logger.info(f"   ❌ 订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
+                logger.info(f"   ❌ 【智能大脑】订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
                 parsed_results.append({
                     "original": result,
                     "parsed_status": "failed",
@@ -92,7 +92,7 @@ class SmartBrain:
                 status = data.get("status")
                 
                 if status == "FILLED":
-                    logger.info(f"   ✅ 订单{idx+1}: 币安成交 | 订单ID: {data.get('orderId')} | 成交均价: {data.get('avgPrice')} | 成交量: {data.get('executedQty')}")
+                    logger.info(f"   ✅【智能大脑】 订单{idx+1}: 币安成交 | 订单ID: {data.get('orderId')} | 成交均价: {data.get('avgPrice')} | 成交量: {data.get('executedQty')}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "filled",
@@ -103,7 +103,7 @@ class SmartBrain:
                         "executed_qty": data.get("executedQty")
                     })
                 elif status == "PARTIALLY_FILLED":
-                    logger.info(f"   ⏳ 订单{idx+1}: 币安部分成交 | 订单ID: {data.get('orderId')} | 已成交量: {data.get('executedQty')}")
+                    logger.info(f"   ⏳【智能大脑】 订单{idx+1}: 币安部分成交 | 订单ID: {data.get('orderId')} | 已成交量: {data.get('executedQty')}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "partially_filled",
@@ -113,7 +113,7 @@ class SmartBrain:
                         "executed_qty": data.get("executedQty")
                     })
                 elif status == "NEW":
-                    logger.info(f"   ⏳ 订单{idx+1}: 币安已接收待处理 | 订单ID: {data.get('orderId')}")
+                    logger.info(f"   ⏳【智能大脑】 订单{idx+1}: 币安已接收待处理 | 订单ID: {data.get('orderId')}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "pending",
@@ -123,7 +123,7 @@ class SmartBrain:
                     })
                 elif status in ["REJECTED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED"]:
                     error_msg = data.get("msg", f"状态: {status}")
-                    logger.info(f"   ❌ 订单{idx+1}: 币安失败 | {error_msg}")
+                    logger.info(f"   ❌【智能大脑】 订单{idx+1}: 币安失败 | {error_msg}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "failed",
@@ -131,7 +131,7 @@ class SmartBrain:
                         "error_code": status
                     })
                 else:
-                    logger.info(f"   ⚠️ 订单{idx+1}: 币安未知状态 | status={status}")
+                    logger.info(f"   ⚠️【智能大脑】 订单{idx+1}: 币安未知状态 | status={status}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "unknown",
@@ -146,7 +146,7 @@ class SmartBrain:
                 
                 if code == "0":
                     ord_id = data.get("ordId")
-                    logger.info(f"   ✅ 订单{idx+1}: 欧易成功 | 订单ID: {ord_id}")
+                    logger.info(f"   ✅【智能大脑】 订单{idx+1}: 欧易成功 | 订单ID: {ord_id}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "success",
@@ -155,7 +155,7 @@ class SmartBrain:
                         "order_id": ord_id
                     })
                 else:
-                    logger.info(f"   ❌ 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
+                    logger.info(f"   ❌【智能大脑】 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "failed",
@@ -164,7 +164,7 @@ class SmartBrain:
                     })
             
             else:
-                logger.info(f"   ⚠️ 订单{idx+1}: 未知交易所 {exchange}，无法解析")
+                logger.info(f"   ⚠️ 【智能大脑】订单{idx+1}: 未知交易所 {exchange}，无法解析")
                 parsed_results.append({
                     "original": result,
                     "parsed_status": "unknown",
@@ -273,7 +273,7 @@ class SmartBrain:
         if command == 'place_order':
             # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫 当前为禁止交易模式，开仓指令被拒绝")
+                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，开仓指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -289,18 +289,18 @@ class SmartBrain:
             leverage = params.get('leverage', 20)
             direction = params.get('direction', '')
             
-            logger.info(f"   📊 读取结果: symbol={symbol}, margin={margin}, leverage={leverage}, direction={direction}")
+            logger.info(f"   📊 【智能大脑】开仓指令内容: symbol={symbol}, margin={margin}, leverage={leverage}, direction={direction}")
             
             # 触发：大脑进入开仓流程房间，按照步骤执行
             result = await self.trading.enter_room(command, params)
-            
+            logger.info(f"✅【智能大脑】进入半自动开仓流程")
             return result
         
         # ========== 止损止盈指令 ==========
         if command == 'set_sl_tp':
             # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫 当前为禁止交易模式，止损止盈指令被拒绝")
+                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，止损止盈指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -317,7 +317,7 @@ class SmartBrain:
             take_profit = params.get('take_profit_percent', 0)
             calc_type = params.get('type', 'price_percent')
             
-            logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 止损={stop_loss}%, 止盈={take_profit}%, 类型={calc_type}")
+            logger.info(f"   📊 【智能大脑】止损止盈指令内容: okx={okx_symbol}, binance={binance_symbol}, 止损={stop_loss}%, 止盈={take_profit}%, 类型={calc_type}")
             
             # TODO: 触发大脑进入止损止盈流程房间（待实现）
             return {
@@ -331,7 +331,7 @@ class SmartBrain:
         if command == 'close_position':
             # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫 当前为禁止交易模式，平仓指令被拒绝")
+                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，平仓指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -346,7 +346,7 @@ class SmartBrain:
             binance_symbol = params.get('binance', {}).get('symbol', '') if 'binance' in params else ''
             order_type = params.get('order_type', 'market')
             
-            logger.info(f"   📊 读取结果: okx={okx_symbol}, binance={binance_symbol}, 订单类型={order_type}")
+            logger.info(f"   📊【智能大脑】 平仓指令内容: okx={okx_symbol}, binance={binance_symbol}, 订单类型={order_type}")
             
             # TODO: 触发大脑进入平仓流程房间（待实现）
             return {
