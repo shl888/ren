@@ -350,7 +350,7 @@ class Trader:
             if isinstance(v, (int, float)):
                 encoded_params[k] = str(v)
             else:
-                encoded_params[k] urllib.parse.quote(str(v), safe='')
+                encoded_params[k] = urllib.parse.quote(str(v), safe='')
         
         encoded_query_string = "&".join([f"{k}={encoded_params[k]}" for k in sorted(encoded_params.keys())])
         
