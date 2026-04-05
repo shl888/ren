@@ -73,7 +73,7 @@ class SmartBrain:
             if not result.get("success"):
                 # 下单工人层面失败（发请求前就失败了）
                 error_msg = result.get("error", "未知错误")
-                logger.error(f"   ❌ 订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
+                logger.info(f"   ❌ 订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
                 parsed_results.append({
                     "original": result,
                     "parsed_status": "failed",
@@ -123,7 +123,7 @@ class SmartBrain:
                     })
                 elif status in ["REJECTED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED"]:
                     error_msg = data.get("msg", f"状态: {status}")
-                    logger.error(f"   ❌ 订单{idx+1}: 币安失败 | {error_msg}")
+                    logger.info(f"   ❌ 订单{idx+1}: 币安失败 | {error_msg}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "failed",
@@ -131,7 +131,7 @@ class SmartBrain:
                         "error_code": status
                     })
                 else:
-                    logger.warning(f"   ⚠️ 订单{idx+1}: 币安未知状态 | status={status}")
+                    logger.info(f"   ⚠️ 订单{idx+1}: 币安未知状态 | status={status}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "unknown",
@@ -155,7 +155,7 @@ class SmartBrain:
                         "order_id": ord_id
                     })
                 else:
-                    logger.error(f"   ❌ 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
+                    logger.info(f"   ❌ 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
                     parsed_results.append({
                         "original": result,
                         "parsed_status": "failed",
@@ -164,7 +164,7 @@ class SmartBrain:
                     })
             
             else:
-                logger.warning(f"   ⚠️ 订单{idx+1}: 未知交易所 {exchange}，无法解析")
+                logger.info(f"   ⚠️ 订单{idx+1}: 未知交易所 {exchange}，无法解析")
                 parsed_results.append({
                     "original": result,
                     "parsed_status": "unknown",
