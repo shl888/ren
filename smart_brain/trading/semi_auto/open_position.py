@@ -63,6 +63,7 @@ step7：清理缓存（最后一步，无论成功失败都要执行）
 import copy
 import asyncio
 import logging
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, Optional, Tuple
 
 from ..templates import (
@@ -369,37 +370,37 @@ class OpenPositionFlow:
     
     def _calculate_okx_sz(self) -> Tuple[bool, str]:
         """
-        计算欧易开仓张数
+        计算欧易开仓张数（使用 Decimal 避免浮点数精度问题）
         
         公式：sz = floor[(保证金 × 杠杆) / (okx_trade_price × ctVal × lotSz)] × lotSz
-        
-        公式拆解：
-        1. 分子 = 保证金 × 杠杆
-        2. 分母 = 欧易最新成交价 × 合约面值 × 步长
-        3. 原始张数 = 分子 / 分母
-        4. 向下取整 = floor(原始张数)
-        5. 最终张数 = 向下取整结果 × 步长
-        
-        Returns:
-            (是否成功, 错误信息)
         """
         try:
-            # 第1步：计算分子（保证金 × 杠杆）
-            numerator = self.margin * self.leverage
+            # 转换为 Decimal 进行计算
+            margin_dec = Decimal(str(self.margin))
+            leverage_dec = Decimal(str(self.leverage))
+            price_dec = Decimal(str(self.okx_trade_price))
+            ctval_dec = Decimal(str(self.ctVal))
+            lotsz_dec = Decimal(str(self.lotSz))
             
-            # 第2步：计算分母（价格 × 面值 × 步长）
-            denominator = self.okx_trade_price * self.ctVal * self.lotSz
+            # 分子 = 保证金 × 杠杆
+            numerator = margin_dec * leverage_dec
             
-            # 第3步：原始张数
+            # 分母 = 价格 × 面值 × 步长
+            denominator = price_dec * ctval_dec * lotsz_dec
+            
+            # 原始张数 = 分子 / 分母
             raw_sz = numerator / denominator
             
-            # 第4步：向下取整
+            # 向下取整到整数
             floor_sz = int(raw_sz)
             
-            # 第5步：乘以步长得到最终张数
-            self.sz = floor_sz * self.lotSz
+            # 最终张数 = floor × 步长
+            sz_dec = Decimal(str(floor_sz)) * lotsz_dec
             
-            logger.info(f"   📊【半自动开仓】 欧易张数计算: 分子={numerator}, 分母={denominator}, 原始={raw_sz}, floor={floor_sz}, 最终sz={self.sz}")
+            # 转换为 float（保持原有类型兼容）
+            self.sz = float(sz_dec)
+            
+            logger.info(f"   📊【半自动开仓】 欧易张数计算(Decimal): 分子={numerator}, 分母={denominator}, 原始={raw_sz}, floor={floor_sz}, 最终sz={self.sz}")
             
             # 校验最小下单量
             if self.sz < self.minSz:
@@ -413,43 +414,45 @@ class OpenPositionFlow:
     
     def _calculate_binance_quantity(self) -> Tuple[bool, str]:
         """
-        计算币安开仓币数
+        计算币安开仓币数（使用 Decimal 避免浮点数精度问题）
         
         公式：
-        quantity = floor｛｛floor[(保证金×杠杆）/ (okx_trade_price × ctVal × lotSz)] × lotSz × ctVal × okx_trade_price ｝ / binance_trade_price / stepSize ｝ × stepSize
-        
-        公式拆解：
-        1. 内层floor = floor[(保证金×杠杆) / (价格 × 面值 × 步长)]
-        2. 欧易价值 = 内层floor × 步长 × 面值 × 价格
-        3. 原始币数 = 欧易价值 / 币安价格
-        4. 除以步长 = 原始币数 / 步长
-        5. 外层floor = floor(除以步长的结果)
-        6. 最终币数 = 外层floor × 步长
-        
-        Returns:
-            (是否成功, 错误信息)
+        quantity = floor[ floor[(保证金×杠杆) / (价格×面值×步长)] × 步长 × 面值 × 价格 / 币安价格 / stepSize ] × stepSize
         """
         try:
-            # 第1步：内层floor
-            inner_value = (self.margin * self.leverage) / (self.okx_trade_price * self.ctVal * self.lotSz)
+            # 转换为 Decimal 进行计算
+            margin_dec = Decimal(str(self.margin))
+            leverage_dec = Decimal(str(self.leverage))
+            okx_price_dec = Decimal(str(self.okx_trade_price))
+            binance_price_dec = Decimal(str(self.binance_trade_price))
+            ctval_dec = Decimal(str(self.ctVal))
+            lotsz_dec = Decimal(str(self.lotSz))
+            stepsize_dec = Decimal(str(self.stepSize))
+            
+            # 内层 floor = floor[(保证金×杠杆) / (价格 × 面值 × 步长)]
+            inner_denominator = okx_price_dec * ctval_dec * lotsz_dec
+            inner_value = (margin_dec * leverage_dec) / inner_denominator
             inner_floor = int(inner_value)
             
-            # 第2步：计算欧易开仓价值
-            okx_value = inner_floor * self.lotSz * self.ctVal * self.okx_trade_price
+            # 欧易开仓价值 = 内层floor × 步长 × 面值 × 价格
+            okx_value = Decimal(str(inner_floor)) * lotsz_dec * ctval_dec * okx_price_dec
             
-            # 第3步：原始币数（欧易价值 / 币安价格）
-            raw_quantity = okx_value / self.binance_trade_price
+            # 原始币数 = 欧易价值 / 币安价格
+            raw_quantity = okx_value / binance_price_dec
             
-            # 第4步：除以步长
-            step_quantity = raw_quantity / self.stepSize
+            # 除以步长
+            step_quantity = raw_quantity / stepsize_dec
             
-            # 第5步：外层floor
+            # 外层floor
             outer_floor = int(step_quantity)
             
-            # 第6步：乘以步长得到最终币数
-            self.quantity = outer_floor * self.stepSize
+            # 最终币数 = 外层floor × 步长
+            quantity_dec = Decimal(str(outer_floor)) * stepsize_dec
             
-            logger.info(f"   📊【半自动开仓】 币安币数计算: 内层floor={inner_floor}, 欧易价值={okx_value}, 原始={raw_quantity}, 最终={self.quantity}")
+            # 转换为 float（保持原有类型兼容）
+            self.quantity = float(quantity_dec)
+            
+            logger.info(f"   📊【半自动开仓】 币安币数计算(Decimal): 内层floor={inner_floor}, 欧易价值={okx_value}, 原始={raw_quantity}, 最终={self.quantity}")
             
             # 校验最小下单量
             if self.quantity < self.minQty:
@@ -528,21 +531,25 @@ class OpenPositionFlow:
         大脑把计算结果（张数、币数）填入缓存中的开仓参数模板。
         然后根据方向填充side和positionSide。
         """
-        # 欧易开仓参数
+        # 欧易开仓参数 - 格式化 sz 去除浮点数精度问题
         self.okx_order_cache["params"]["instId"] = self.okx_symbol
-        self.okx_order_cache["params"]["sz"] = str(self.sz)
+        # 格式化 sz：保留8位小数，去掉末尾的0
+        sz_formatted = f"{self.sz:.8f}".rstrip('0').rstrip('.')
+        self.okx_order_cache["params"]["sz"] = sz_formatted
         # tdMode 固定为 "cross"，模板里已写
         # ordType 固定为 "market"，模板里已写
         
-        # 币安开仓参数
+        # 币安开仓参数 - 格式化 quantity 去除浮点数精度问题
         self.binance_order_cache["params"]["symbol"] = self.binance_symbol
-        self.binance_order_cache["params"]["quantity"] = str(self.quantity)
+        # 格式化 quantity：保留8位小数，去掉末尾的0
+        qty_formatted = f"{self.quantity:.8f}".rstrip('0').rstrip('.')
+        self.binance_order_cache["params"]["quantity"] = qty_formatted
         # type 固定为 "MARKET"，模板里已写
         
         # 根据方向填充side和positionSide
         self._fill_order_params_by_direction()
         
-        logger.info(f"   📝 【半自动开仓】开仓参数已填充: 欧易张数={self.sz}, 币安币数={self.quantity}")
+        logger.info(f"   📝 【半自动开仓】开仓参数已填充: 欧易张数={sz_formatted}, 币安币数={qty_formatted}")
     
     # ==================== 与工人交互 ====================
     
