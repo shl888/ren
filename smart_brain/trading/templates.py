@@ -138,9 +138,13 @@ CLOSE_POSITION_OKX = {
 
 CLOSE_POSITION_BINANCE = {
     "exchange": "binance",
-    "type": "close_position",
+    "type": "close_position",        # 和开仓同一个接口
     "params": {
-        "symbol": None,      # 合约名，如 "BTCUSDT"
-        "positionSide": None # 持仓方向，"LONG" 或 "SHORT"（大写）
+        "symbol": None,
+        "side": None,              # 开仓方向为"LONG" 时，"side":为 "SELL"，开仓方向为"SHORT"时，"side":为 "BUY" 
+        "positionSide": None,        # 持仓方向
+        "quantity": None,          # 从私人数据读取持仓币数
+        "type": "MARKET",   # 固定：市价
+        "reduceOnly": "true"       # 关键：只减仓不反向开仓
     }
 }
