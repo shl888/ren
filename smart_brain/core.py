@@ -1,5 +1,5 @@
 """
-大脑核心主控 - 精简重构版（删除私人连接管理器）
+大脑核心主控 - 调度版（只转发，不干活）
 """
 
 import asyncio
@@ -34,147 +34,62 @@ class SmartBrain:
         from .data_manager import DataManager
         self.data_manager = DataManager(self)
 
-        # ✅ HTTP模块服务（用于执行交易）
+        # HTTP模块服务（用于执行交易）
         self.http_module = None
         
-        # ✅ 逻辑中枢（空模块，以后放规则）
-        from .trading import TradingLogic
-        self.trading = TradingLogic(self)
+        # 下单工人（只负责执行，大脑不直接发数据给它）
+        self.trader = None
+        
+        # 半自动工人
+        self.leverage_worker = None
+        self.open_worker = None
         
         # 运行状态
         self.running = False
         self.status_log_task = None
         
-        # 控制指令存储（以后用）
+        # 控制指令存储
         self.config_data = None
         
-        # ========== 交易模式：默认禁止交易 ==========
+        # 交易模式：默认禁止交易
         self.trade_mode = "forbidden"  # forbidden / half / full
-        
-        # ========== 下单工人 ==========
-        self.trader = None
         
         # 信号处理
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
     
-    def send_to_worker(self, orders):
-        """发数据给下单工人"""
-        if self.trader:
-            self.trader.send_orders(orders)
+    # ========== 大脑不再有 send_to_worker 方法 ==========
     
-    async def on_trader_results(self, results):
-        """接收下单工人发来的数据"""
-        logger.info(f"📥【智能大脑】收到下单工人发来的执行结果，共 {len(results)} 条")
+    async def on_trader_results(self, data):
+        """
+        接收下单工人发来的数据（独立的一条数据）
         
-        parsed_results = []
-        
-        for idx, result in enumerate(results):
-            if not result.get("success"):
-                # 下单工人层面失败（发请求前就失败了）
-                error_msg = result.get("error", "未知错误")
-                logger.info(f"   ❌ 【智能大脑】订单{idx+1}: 下单工人发送失败 | 错误: {error_msg}")
-                parsed_results.append({
-                    "original": result,
-                    "parsed_status": "failed",
-                    "parsed_error": error_msg,
-                    "error_code": None
-                })
-                continue
+        判断规则：
+        - 如果数据里有 "info" 字段 → 这是信息标签，根据内容转发给对应工人
+        - 否则 → 这是原始数据，直接推送到前端
+        """
+        # 判断是否是信息标签
+        if "info" in data:
+            info_value = data["info"]
+            logger.info(f"🏷️【智能大脑】收到信息标签: {info_value}")
             
-            # 下单工人发送成功，解析交易所返回的真实结果
-            exchange = result.get("exchange")
-            order_type = result.get("type")
-            data = result.get("data", {})
-            
-            if exchange == "binance":
-                # 币安：判断 status 字段
-                status = data.get("status")
-                
-                if status == "FILLED":
-                    logger.info(f"   ✅【智能大脑】 订单{idx+1}: 币安成交 | 订单ID: {data.get('orderId')} | 成交均价: {data.get('avgPrice')} | 成交量: {data.get('executedQty')}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "filled",
-                        "parsed_error": None,
-                        "error_code": None,
-                        "order_id": data.get("orderId"),
-                        "avg_price": data.get("avgPrice"),
-                        "executed_qty": data.get("executedQty")
-                    })
-                elif status == "PARTIALLY_FILLED":
-                    logger.info(f"   ⏳【智能大脑】 订单{idx+1}: 币安部分成交 | 订单ID: {data.get('orderId')} | 已成交量: {data.get('executedQty')}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "partially_filled",
-                        "parsed_error": None,
-                        "error_code": None,
-                        "order_id": data.get("orderId"),
-                        "executed_qty": data.get("executedQty")
-                    })
-                elif status == "NEW":
-                    logger.info(f"   ⏳【智能大脑】 订单{idx+1}: 币安已接收待处理 | 订单ID: {data.get('orderId')}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "pending",
-                        "parsed_error": None,
-                        "error_code": None,
-                        "order_id": data.get("orderId")
-                    })
-                elif status in ["REJECTED", "EXPIRED", "EXPIRED_IN_MATCH", "CANCELED"]:
-                    error_msg = data.get("msg", f"状态: {status}")
-                    logger.info(f"   ❌【智能大脑】 订单{idx+1}: 币安失败 | {error_msg}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "failed",
-                        "parsed_error": error_msg,
-                        "error_code": status
-                    })
-                else:
-                    logger.info(f"   ⚠️【智能大脑】 订单{idx+1}: 币安未知状态 | status={status}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "unknown",
-                        "parsed_error": f"未知状态: {status}",
-                        "error_code": status
-                    })
-            
-            elif exchange == "okx":
-                # 欧易：code == "0" 成功，非0失败
-                code = str(data.get("code", ""))
-                msg = data.get("msg", "")
-                
-                if code == "0":
-                    ord_id = data.get("ordId")
-                    logger.info(f"   ✅【智能大脑】 订单{idx+1}: 欧易成功 | 订单ID: {ord_id}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "success",
-                        "parsed_error": None,
-                        "error_code": None,
-                        "order_id": ord_id
-                    })
-                else:
-                    logger.info(f"   ❌【智能大脑】 订单{idx+1}: 欧易失败 | 错误码: {code} | 错误信息: {msg}")
-                    parsed_results.append({
-                        "original": result,
-                        "parsed_status": "failed",
-                        "parsed_error": msg,
-                        "error_code": code
-                    })
-            
+            # 根据标签内容路由
+            if info_value in ["欧易杠杆设置成功", "币安杠杆设置成功"]:
+                if self.open_worker:
+                    self.open_worker.on_data(data)
+                    logger.info(f"📤【智能大脑】信息标签已转发给开仓工人: {info_value}")
+            elif info_value in ["欧易开仓成功", "币安开仓成功"]:
+                # TODO: 转发给全自动文件夹的止损止盈工人
+                logger.info(f"📌【智能大脑】开仓成功标签待转发: {info_value}")
             else:
-                logger.info(f"   ⚠️ 【智能大脑】订单{idx+1}: 未知交易所 {exchange}，无法解析")
-                parsed_results.append({
-                    "original": result,
-                    "parsed_status": "unknown",
-                    "parsed_error": f"未知交易所: {exchange}",
-                    "error_code": None
-                })
-        
-        # 推送到前端（推送解析后的结果）
-        if self.frontend_relay:
-            await self.frontend_relay.broadcast_execution_results(parsed_results)
+                logger.warning(f"⚠️【智能大脑】未知信息标签: {info_value}")
+        else:
+            # 原始数据，直接推送到前端
+            if self.frontend_relay:
+                await self.frontend_relay.broadcast_execution_results([data])
+                logger.info(f"📤【智能大脑】原始数据已推送到前端")
+            else:
+                logger.warning("⚠️【智能大脑】frontend_relay 未设置，无法推送")
     
     async def initialize(self):
         """初始化智能大脑核心"""
@@ -182,7 +97,7 @@ class SmartBrain:
         logger.info(f"🔒【智能大脑】初始交易模式: {self.trade_mode}（禁止交易）")
         
         try:
-            # 1. ✅ 初始化HTTP模块服务（用于执行交易）
+            # 1. 初始化HTTP模块服务
             try:
                 from http_server.service import HTTPModuleService
                 self.http_module = HTTPModuleService()
@@ -198,10 +113,24 @@ class SmartBrain:
                 logger.error(f"❌【智能大脑】 HTTP模块服务初始化异常: {e}")
                 return False
             
-            # 2. 启动状态日志任务
+            # 2. 创建下单工人
+            from http_server.trader import Trader
+            self.trader = Trader(self, use_sandbox=True)
+            asyncio.create_task(self.trader.start())
+            logger.info("✅【智能大脑】下单工人已创建并启动")
+            
+            # 3. 创建半自动工人
+            from .trading.semi_auto.leverage_worker import LeverageWorker
+            from .trading.semi_auto.open_position_worker import OpenPositionWorker
+            
+            self.leverage_worker = LeverageWorker(self)
+            self.open_worker = OpenPositionWorker(self)
+            logger.info("✅【智能大脑】杠杆工人和开仓工人已创建")
+            
+            # 4. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 3. 完成初始化
+            # 5. 完成初始化
             self.running = True
             logger.info("✅【智能大脑】 大脑核心初始化完成")
             
@@ -209,12 +138,6 @@ class SmartBrain:
             if self.http_module:
                 http_status = self.http_module.get_status()
                 logger.info(f"📊【智能大脑】 HTTP模块状态: {http_status}")
-            
-            # 4. 创建并连接下单工人
-            from http_server.trader import Trader
-            self.trader = Trader(self, use_sandbox=True)
-            asyncio.create_task(self.trader.start())
-            logger.info("✅【智能大脑】下单工人已创建并启动")
             
             return True
             
@@ -235,8 +158,9 @@ class SmartBrain:
     
     async def handle_frontend_command(self, command_data):
         """
-        接收前端指令（qd转发过来）
-        直接处理，不经过 command_router
+        接收前端指令
+        
+        大脑不再解析指令内容，直接转发给对应的工人
         """
         command = command_data.get('command')
         params = command_data.get('params', {})
@@ -281,24 +205,25 @@ class SmartBrain:
                     "error": "当前为禁止交易模式，无法执行开仓"
                 }
             
-            logger.info(f"💰【智能大脑】收到开仓指令: {params}")
+            logger.info(f"💰【智能大脑】收到开仓指令，直接转发给工人")
             
-            # 大脑读取指令内容
-            symbol = params.get('symbol', '')
-            margin = params.get('margin', 0)
-            leverage = params.get('leverage', 20)
-            direction = params.get('direction', '')
+            # 大脑不解析，直接转发给杠杆工人和开仓工人
+            if self.leverage_worker:
+                self.leverage_worker.on_data({"command": "place_order", "params": params})
+                logger.info(f"📤【智能大脑】开仓指令已转发给杠杆工人")
+            if self.open_worker:
+                self.open_worker.on_data({"command": "place_order", "params": params})
+                logger.info(f"📤【智能大脑】开仓指令已转发给开仓工人")
             
-            logger.info(f"   📊 【智能大脑】开仓指令内容: symbol={symbol}, margin={margin}, leverage={leverage}, direction={direction}")
-            
-            # 触发：大脑进入开仓流程房间，按照步骤执行
-            result = await self.trading.enter_room(command, params)
-            logger.info(f"✅【智能大脑】进入半自动开仓流程")
-            return result
+            return {
+                "success": True,
+                "received": True,
+                "command": command,
+                "message": "开仓指令已转发给工人"
+            }
         
-        # ========== 止损止盈指令 ==========
+        # ========== 止损止盈指令（暂留空） ==========
         if command == 'set_sl_tp':
-            # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
                 logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，止损止盈指令被拒绝")
                 return {
@@ -309,27 +234,16 @@ class SmartBrain:
                 }
             
             logger.info(f"⚙️【智能大脑】收到止损止盈指令: {params}")
-            
-            # 读取参数
-            okx_symbol = params.get('okx', {}).get('symbol', '') if 'okx' in params else ''
-            binance_symbol = params.get('binance', {}).get('symbol', '') if 'binance' in params else ''
-            stop_loss = params.get('stop_loss_percent', 0)
-            take_profit = params.get('take_profit_percent', 0)
-            calc_type = params.get('type', 'price_percent')
-            
-            logger.info(f"   📊 【智能大脑】止损止盈指令内容: okx={okx_symbol}, binance={binance_symbol}, 止损={stop_loss}%, 止盈={take_profit}%, 类型={calc_type}")
-            
-            # TODO: 触发大脑进入止损止盈流程房间（待实现）
+            # TODO: 转发给止损止盈工人（待实现）
             return {
                 "success": True,
                 "received": True,
                 "command": command,
-                "message": "指令已接收，暂不执行任何操作"
+                "message": "指令已接收，止损止盈工人待实现"
             }
         
-        # ========== 平仓指令 ==========
+        # ========== 平仓指令（暂留空） ==========
         if command == 'close_position':
-            # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
                 logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，平仓指令被拒绝")
                 return {
@@ -340,20 +254,12 @@ class SmartBrain:
                 }
             
             logger.info(f"🔚【智能大脑】收到平仓指令: {params}")
-            
-            # 读取参数
-            okx_symbol = params.get('okx', {}).get('symbol', '') if 'okx' in params else ''
-            binance_symbol = params.get('binance', {}).get('symbol', '') if 'binance' in params else ''
-            order_type = params.get('order_type', 'market')
-            
-            logger.info(f"   📊【智能大脑】 平仓指令内容: okx={okx_symbol}, binance={binance_symbol}, 订单类型={order_type}")
-            
-            # TODO: 触发大脑进入平仓流程房间（待实现）
+            # TODO: 转发给平仓工人（待实现）
             return {
                 "success": True,
                 "received": True,
                 "command": command,
-                "message": "指令已接收，暂不执行任何操作"
+                "message": "指令已接收，平仓工人待实现"
             }
         
         # ========== 未知指令 ==========
