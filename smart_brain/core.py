@@ -43,6 +43,8 @@ class SmartBrain:
         # 半自动工人
         self.leverage_worker = None
         self.open_worker = None
+        self.sl_tp_worker = None
+        self.close_worker = None
         
         # 运行状态
         self.running = False
@@ -122,10 +124,14 @@ class SmartBrain:
             # 3. 创建半自动工人
             from .trading.semi_auto.leverage_worker import LeverageWorker
             from .trading.semi_auto.open_position_worker import OpenPositionWorker
+            from .trading.semi_auto.sl_tp_worker import SlTpWorker
+            from .trading.semi_auto.close_position_worker import ClosePositionWorker
             
             self.leverage_worker = LeverageWorker(self)
             self.open_worker = OpenPositionWorker(self)
-            logger.info("✅【智能大脑】杠杆工人和开仓工人已创建")
+            self.sl_tp_worker = SlTpWorker(self)
+            self.close_worker = ClosePositionWorker(self)
+            logger.info("✅【智能大脑】杠杆工人、开仓工人、止损止盈工人、平仓工人已创建")
             
             # 4. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
@@ -222,7 +228,7 @@ class SmartBrain:
                 "message": "开仓指令已转发给工人"
             }
         
-        # ========== 止损止盈指令（暂留空） ==========
+        # ========== 止损止盈指令 ==========
         if command == 'set_sl_tp':
             if self.trade_mode == "forbidden":
                 logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，止损止盈指令被拒绝")
@@ -233,16 +239,20 @@ class SmartBrain:
                     "error": "当前为禁止交易模式，无法执行止损止盈"
                 }
             
-            logger.info(f"⚙️【智能大脑】收到止损止盈指令: {params}")
-            # TODO: 转发给止损止盈工人（待实现）
+            logger.info(f"⚙️【智能大脑】收到止损止盈指令，直接转发给工人")
+            
+            if self.sl_tp_worker:
+                self.sl_tp_worker.on_data({"type": "set_sl_tp", "data": params})
+                logger.info(f"📤【智能大脑】止损止盈指令已转发给止损止盈工人")
+            
             return {
                 "success": True,
                 "received": True,
                 "command": command,
-                "message": "指令已接收，止损止盈工人待实现"
+                "message": "止损止盈指令已转发给工人"
             }
         
-        # ========== 平仓指令（暂留空） ==========
+        # ========== 平仓指令 ==========
         if command == 'close_position':
             if self.trade_mode == "forbidden":
                 logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，平仓指令被拒绝")
@@ -253,13 +263,17 @@ class SmartBrain:
                     "error": "当前为禁止交易模式，无法执行平仓"
                 }
             
-            logger.info(f"🔚【智能大脑】收到平仓指令: {params}")
-            # TODO: 转发给平仓工人（待实现）
+            logger.info(f"🔚【智能大脑】收到平仓指令，直接转发给工人")
+            
+            if self.close_worker:
+                self.close_worker.on_data({"type": "close_position", "data": params})
+                logger.info(f"📤【智能大脑】平仓指令已转发给平仓工人")
+            
             return {
                 "success": True,
                 "received": True,
                 "command": command,
-                "message": "指令已接收，平仓工人待实现"
+                "message": "平仓指令已转发给工人"
             }
         
         # ========== 未知指令 ==========
