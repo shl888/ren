@@ -1,14 +1,16 @@
 # http_server/trader.py
 """
-下单执行器（工人）- 消息驱动模式
+下单执行器（下单工人）- 数据驱动模式
 
 运行方式：
-1. 工人启动后，一直循环等待消息
+1. 下单工人启动后，一直循环等待消息
 2. 收到消息（订单参数）后，异步处理
 3. 处理完成后，把结果消息发给大脑
 4. 空闲时：歇着 / 定时校准币安时间
 
-大脑 <---> 工人 之间通过消息传递，没有调用关系
+各个工人文件，单方向> 下单工人
+下单工人文件，单方向> 大脑。 
+之间通过数据传递，数据驱动工作，没有调用关系
 """
 
 import asyncio
@@ -140,11 +142,70 @@ class Trader:
             }])
     
     async def _send_results_to_brain(self, results: List[Dict]):
-        """把结果消息发给大脑"""
-        if hasattr(self.brain, 'on_trader_results'):
-            await self.brain.on_trader_results(results)
-        else:
+        """
+        把结果消息发给大脑（分两条独立发送）
+        
+        对于每个结果：
+        1. 发送原始数据（不包含标签）
+        2. 如果成功，发送独立的信息标签
+        """
+        if not hasattr(self.brain, 'on_trader_results'):
             logger.error("❌【下单工人】大脑没有实现 on_trader_results 方法")
+            return
+        
+        for result in results:
+            # 第一条：原始数据（原样发送，不添加任何字段）
+            original_data = {
+                "success": result.get("success"),
+                "exchange": result.get("exchange"),
+                "type": result.get("type"),
+                "data": result.get("data", {}),
+                "error": result.get("error")
+            }
+            await self.brain.on_trader_results(original_data)
+            
+            # 第二条：如果成功，生成并发送信息标签
+            if result.get("success"):
+                info_tag = self._generate_info_tag(result)
+                if info_tag:
+                    await self.brain.on_trader_results(info_tag)
+    
+    def _generate_info_tag(self, result: Dict) -> Dict:
+        """
+        根据结果生成信息标签
+        
+        返回格式：{"info": "xxx"}
+        如果不生成标签，返回 None
+        """
+        exchange = result.get("exchange")
+        order_type = result.get("type")
+        data = result.get("data", {})
+        
+        # 欧易：code == "0" 表示成功
+        if exchange == "okx":
+            code = str(data.get("code", ""))
+            if code != "0":
+                return None
+            
+            if order_type == "set_leverage":
+                return {"info": "欧易杠杆设置成功"}
+            elif order_type == "open_market":
+                return {"info": "欧易开仓成功"}
+        
+        # 币安：根据不同类型判断
+        elif exchange == "binance":
+            if order_type == "set_leverage":
+                # 币安杠杆：有 leverage 字段表示成功
+                if data.get("leverage") is not None:
+                    return {"info": "币安杠杆设置成功"}
+            
+            elif order_type == "open_market":
+                # 币安开仓：status 为 NEW/FILLED/PARTIALLY_FILLED 表示成功
+                status = data.get("status")
+                if status in ["NEW", "FILLED", "PARTIALLY_FILLED"]:
+                    return {"info": "币安开仓成功"}
+        
+        return None
     
     # ========== 币安 OCO 展开 ==========
     
