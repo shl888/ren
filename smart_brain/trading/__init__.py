@@ -2,18 +2,20 @@
 """
 交易逻辑
 
-大脑收到前端指令后，根据指令类型，进入对应的流程房间。
-流程房间里有详细的步骤，大脑按照步骤执行。
+现在采用工人模式：
+- 杠杆工人和开仓工人独立执行
+- TradingLogic 作为转发层，把指令转发给对应的工人
 """
 
-from .semi_auto.open_position import OpenPositionFlow
+from .semi_auto.leverage_worker import LeverageWorker
+from .semi_auto.open_position_worker import OpenPositionWorker
 
 
 class TradingLogic:
     """
-    交易逻辑 - 流程房间的入口
+    交易逻辑 - 指令转发层
     
-    大脑通过这个类，进入不同的流程房间。
+    大脑通过这个类，把指令转发给对应的工人。
     """
     
     def __init__(self, brain):
@@ -21,13 +23,15 @@ class TradingLogic:
         初始化交易逻辑
         
         Args:
-            brain: 大脑实例，进入房间后，大脑按照步骤干活
+            brain: 大脑实例
         """
         self.brain = brain
+        self.leverage_worker = LeverageWorker(brain)
+        self.open_worker = OpenPositionWorker(brain)
     
     async def enter_room(self, command: str, params: dict) -> dict:
         """
-        大脑根据指令类型，进入对应的流程房间
+        大脑根据指令类型，转发给对应的工人
         
         Args:
             command: 指令类型，如 "place_order", "set_sl_tp", "close_position"
@@ -37,17 +41,18 @@ class TradingLogic:
             执行结果
         """
         if command == "place_order":
-            # 大脑进入开仓流程房间
-            room = OpenPositionFlow(self.brain)
-            return await room.execute(params)
+            # 转发给杠杆工人和开仓工人
+            self.leverage_worker.on_data({"command": "place_order", "params": params})
+            self.open_worker.on_data({"command": "place_order", "params": params})
+            return {"success": True, "message": "开仓指令已转发给工人"}
         
         elif command == "set_sl_tp":
-            # TODO: 大脑进入止损止盈流程房间（待实现）
-            return {"success": False, "error": "止损止盈流程房间未实现"}
+            # TODO: 转发给止损止盈工人（待实现）
+            return {"success": False, "error": "止损止盈流程未实现"}
         
         elif command == "close_position":
-            # TODO: 大脑进入平仓流程房间（待实现）
-            return {"success": False, "error": "平仓流程房间未实现"}
+            # TODO: 转发给平仓工人（待实现）
+            return {"success": False, "error": "平仓流程未实现"}
         
         else:
             return {"success": False, "error": f"未知指令: {command}"}
