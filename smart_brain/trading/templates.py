@@ -145,6 +145,6 @@ CLOSE_POSITION_BINANCE = {
         "positionSide": None,        # 持仓方向
         "quantity": None,          # 从私人数据读取持仓币数
         "type": "MARKET",   # 固定：市价
-        "reduceOnly": "true"       # 关键：只减仓不反向开仓
+#         "reduceOnly": "true"       # 关键：只减仓不反向开仓
     }
 }
