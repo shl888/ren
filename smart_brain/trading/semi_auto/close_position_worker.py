@@ -1,0 +1,215 @@
+# trading/semi_auto/close_position_worker.py
+"""
+平仓工人 - 独立负责平仓
+
+工作流程：
+1. 收到平仓指令 → 缓存，开始工作
+2. 拷贝欧易和币安的平仓模板
+3. 填充合约名
+4. 读取私人数据（开仓方向）
+5. 填充方向字段
+6. 推送给下单工人
+7. 清空所有缓存
+"""
+
+import copy
+import asyncio
+import logging
+from typing import Dict, Any
+
+from ..templates import CLOSE_POSITION_OKX, CLOSE_POSITION_BINANCE
+
+logger = logging.getLogger(__name__)
+
+
+class ClosePositionWorker:
+    def __init__(self, brain):
+        self.brain = brain
+        self.data_manager = brain.data_manager
+        
+        # 缓存
+        self.pending_command = None      # 原始指令
+        self.pending_params = None       # 指令中的data部分
+        
+        self.okx_cache = None            # 欧易平仓参数缓存
+        self.binance_cache = None        # 币安平仓参数缓存
+        
+        # 临时数据
+        self.okx_symbol = None           # 欧易合约名
+        self.binance_symbol = None       # 币安合约名
+        
+        # 从私人数据提取
+        self.okx_position_side = ""      # 欧易开仓方向
+        self.binance_position_side = ""  # 币安开仓方向
+        
+        # 防重入标志
+        self._is_executing = False
+        
+        logger.info("🔧【平仓工人】初始化完成")
+    
+    def on_data(self, data: Dict[str, Any]):
+        """接收大脑推送的数据"""
+        if data.get("type") == "close_position":
+            logger.info("📥【平仓工人】收到平仓指令")
+            # 新指令覆盖旧的
+            self._cleanup()
+            self.pending_command = data
+            self.pending_params = data.get("data", {})
+            self._start_work()
+    
+    def _start_work(self):
+        """开始工作（只触发一次）"""
+        if self._is_executing:
+            return
+        
+        if self.pending_params:
+            self._is_executing = True
+            asyncio.create_task(self._execute())
+    
+    async def _execute(self):
+        """执行平仓流程"""
+        try:
+            logger.info("🔧【平仓工人】开始执行")
+            
+            # 1. 提取指令参数
+            if not self._extract_command_params():
+                self._cleanup()
+                return
+            
+            # 2. 拷贝模板
+            self._init_cache()
+            
+            # 3. 填充合约名
+            self._fill_symbols()
+            
+            # 4. 读取私人数据（开仓方向）
+            if not await self._load_private_data():
+                self._cleanup()
+                return
+            
+            # 5. 填充方向
+            self._fill_direction()
+            
+            # 6. 推送给下单工人
+            self._send_to_trader()
+            
+            # 7. 清理
+            self._cleanup()
+            
+            logger.info("✅【平仓工人】完成")
+            
+        except Exception as e:
+            logger.error(f"❌【平仓工人】执行异常: {e}")
+            self._cleanup()
+        finally:
+            self._is_executing = False
+    
+    def _extract_command_params(self) -> bool:
+        """提取指令参数"""
+        try:
+            data = self.pending_params
+            
+            # 提取合约名
+            okx_data = data.get("okx", {})
+            binance_data = data.get("binance", {})
+            
+            self.okx_symbol = okx_data.get("symbol")
+            self.binance_symbol = binance_data.get("symbol")
+            
+            if not self.okx_symbol or not self.binance_symbol:
+                logger.error("❌【平仓工人】合约名缺失")
+                return False
+            
+            logger.info(f"📋【平仓工人】指令参数: 欧易={self.okx_symbol}, 币安={self.binance_symbol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌【平仓工人】提取指令参数失败: {e}")
+            return False
+    
+    def _init_cache(self):
+        """拷贝模板到缓存"""
+        self.okx_cache = copy.deepcopy(CLOSE_POSITION_OKX)
+        self.binance_cache = copy.deepcopy(CLOSE_POSITION_BINANCE)
+        logger.info("📦【平仓工人】模板已拷贝")
+    
+    def _fill_symbols(self):
+        """填充合约名"""
+        # 欧易
+        self.okx_cache["params"]["instId"] = self.okx_symbol
+        
+        # 币安
+        self.binance_cache["params"]["symbol"] = self.binance_symbol
+        
+        logger.info(f"📝【平仓工人】合约名已填充: 欧易={self.okx_symbol}, 币安={self.binance_symbol}")
+    
+    async def _load_private_data(self) -> bool:
+        """读取私人数据，重试1次"""
+        max_attempts = 2
+        
+        for attempt in range(max_attempts):
+            try:
+                result = await self.data_manager.get_private_user_data()
+                user_data = result.get("data", {})
+                
+                okx_data = user_data.get("okx", {})
+                binance_data = user_data.get("binance", {})
+                
+                # 提取开仓方向
+                self.okx_position_side = okx_data.get("开仓方向", "")
+                self.binance_position_side = binance_data.get("开仓方向", "")
+                
+                # 校验
+                if not self.okx_position_side:
+                    logger.warning("⚠️【平仓工人】欧易开仓方向为空")
+                    continue
+                
+                if not self.binance_position_side:
+                    logger.warning("⚠️【平仓工人】币安开仓方向为空")
+                    continue
+                
+                logger.info(f"✅【平仓工人】私人数据: 欧易方向={self.okx_position_side}, 币安方向={self.binance_position_side}")
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌【平仓工人】读取私人数据失败 (尝试 {attempt+1}/{max_attempts}): {e}")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(1)
+        
+        return False
+    
+    def _fill_direction(self):
+        """填充方向字段"""
+        # 欧易：小写
+        self.okx_cache["params"]["posSide"] = self.okx_position_side.lower()
+        
+        # 币安：大写（保持不变）
+        self.binance_cache["params"]["positionSide"] = self.binance_position_side
+        
+        logger.info(f"📝【平仓工人】方向已填充: 欧易={self.okx_cache['params']['posSide']}, 币安={self.binance_cache['params']['positionSide']}")
+    
+    def _send_to_trader(self):
+        """推送给下单工人"""
+        orders = []
+        if self.okx_cache:
+            orders.append(self.okx_cache)
+        if self.binance_cache:
+            orders.append(self.binance_cache)
+        
+        if orders and self.brain.trader:
+            self.brain.trader.send_orders(orders)
+            logger.info(f"📤【平仓工人】已推送 {len(orders)} 个订单给下单工人")
+    
+    def _cleanup(self):
+        """清空所有缓存"""
+        self.pending_command = None
+        self.pending_params = None
+        self.okx_cache = None
+        self.binance_cache = None
+        
+        self.okx_symbol = None
+        self.binance_symbol = None
+        self.okx_position_side = ""
+        self.binance_position_side = ""
+        
+        logger.info("🧹【平仓工人】缓存已清空")
