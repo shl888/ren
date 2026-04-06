@@ -104,7 +104,7 @@ OCO_BINANCE = {
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
             "triggerPrice": None,         # 止损触发价
-            "algotype": "STOP_MARKET"   # 新增：触发后以市价成交
+            "algotype": "CONDITIONAL"   # 新增：条件单
         },
         {
             # ============================================================
@@ -119,7 +119,7 @@ OCO_BINANCE = {
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
             "triggerPrice": None,         # 止盈触发价
-            "algotype": "TAKE_PROFIT_MARKET"   # 新增：触发后以市价平仓
+            "algotype": "CONDITIONAL"   # 新增：条件单
         }
     ]
 }
