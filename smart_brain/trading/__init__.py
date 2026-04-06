@@ -4,11 +4,14 @@
 
 现在采用工人模式：
 - 杠杆工人和开仓工人独立执行
+- 止损止盈工人和平仓工人独立执行
 - TradingLogic 作为转发层，把指令转发给对应的工人
 """
 
 from .semi_auto.leverage_worker import LeverageWorker
 from .semi_auto.open_position_worker import OpenPositionWorker
+from .semi_auto.sl_tp_worker import SlTpWorker
+from .semi_auto.close_position_worker import ClosePositionWorker
 
 
 class TradingLogic:
@@ -28,6 +31,8 @@ class TradingLogic:
         self.brain = brain
         self.leverage_worker = LeverageWorker(brain)
         self.open_worker = OpenPositionWorker(brain)
+        self.sl_tp_worker = SlTpWorker(brain)
+        self.close_worker = ClosePositionWorker(brain)
     
     async def enter_room(self, command: str, params: dict) -> dict:
         """
@@ -47,12 +52,14 @@ class TradingLogic:
             return {"success": True, "message": "开仓指令已转发给工人"}
         
         elif command == "set_sl_tp":
-            # TODO: 转发给止损止盈工人（待实现）
-            return {"success": False, "error": "止损止盈流程未实现"}
+            # 转发给止损止盈工人
+            self.sl_tp_worker.on_data({"type": "set_sl_tp", "data": params})
+            return {"success": True, "message": "止损止盈指令已转发给工人"}
         
         elif command == "close_position":
-            # TODO: 转发给平仓工人（待实现）
-            return {"success": False, "error": "平仓流程未实现"}
+            # 转发给平仓工人
+            self.close_worker.on_data({"type": "close_position", "data": params})
+            return {"success": True, "message": "平仓指令已转发给工人"}
         
         else:
             return {"success": False, "error": f"未知指令: {command}"}
