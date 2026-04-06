@@ -1,6 +1,6 @@
 """
 币安合约精度清洗器 - 清洗模块
-职责：接收原始合约数据，清洗出4个核心字段，推送到大脑模块
+职责：接收原始合约数据，清洗出5个核心字段，推送到大脑模块
 """
 import asyncio
 import logging
@@ -16,10 +16,11 @@ logger = logging.getLogger(__name__)
 class BinanceContractCleaner:
     """币安合约精度清洗器"""
     
-    # 4个核心字段
+    # 5个核心字段（新增 tickSize）
     CORE_FIELDS = [
         'symbol',       # 合约ID，如 BTCUSDT
-        'stepSize',     # 最小交易步长（精度），从 LOT_SIZE filter 获取
+        'tickSize',     # 价格最小变动单位（价格精度），从 PRICE_FILTER 获取
+        'stepSize',     # 最小交易步长（数量精度），从 LOT_SIZE filter 获取
         'minQty',       # 最小开仓数量，从 LOT_SIZE filter 获取
         'minNotional'   # 最小名义价值，从 MIN_NOTIONAL filter 获取
     ]
@@ -94,7 +95,8 @@ class BinanceContractCleaner:
         if cleaned_contracts:
             sample = cleaned_contracts[0]
             logger.info(f"📋 样例合约: {sample.get('symbol')}")
-            logger.info(f"   - 步长(stepSize): {sample.get('stepSize')}")
+            logger.info(f"   - 价格精度(tickSize): {sample.get('tickSize')}")
+            logger.info(f"   - 数量精度(stepSize): {sample.get('stepSize')}")
             logger.info(f"   - 最小数量(minQty): {sample.get('minQty')}")
             logger.info(f"   - 最小名义值(minNotional): {sample.get('minNotional')}")
         
@@ -103,7 +105,7 @@ class BinanceContractCleaner:
     def _clean_single_contract(self, raw_contract: Dict) -> Optional[Dict]:
         """
         清洗单个合约，只保留核心字段
-        从 filters 数组中提取 LOT_SIZE 和 MIN_NOTIONAL
+        从 filters 数组中提取 PRICE_FILTER、LOT_SIZE 和 MIN_NOTIONAL
         """
         cleaned = {}
         
@@ -114,20 +116,34 @@ class BinanceContractCleaner:
             return None
         cleaned['symbol'] = symbol
         
-        # 2. 从 filters 中提取 LOT_SIZE 和 MIN_NOTIONAL
+        # 2. 从 filters 中提取 PRICE_FILTER、LOT_SIZE 和 MIN_NOTIONAL
         filters = raw_contract.get('filters', [])
         
+        price_filter = None
         lot_size_filter = None
         min_notional_filter = None
         
         for f in filters:
             filter_type = f.get('filterType')
-            if filter_type == 'LOT_SIZE':
+            if filter_type == 'PRICE_FILTER':
+                price_filter = f
+            elif filter_type == 'LOT_SIZE':
                 lot_size_filter = f
             elif filter_type == 'MIN_NOTIONAL':
                 min_notional_filter = f
         
-        # 3. 提取 stepSize 和 minQty（从 LOT_SIZE）
+        # 3. 提取 tickSize（从 PRICE_FILTER）
+        if price_filter:
+            try:
+                cleaned['tickSize'] = float(price_filter.get('tickSize', 0))
+            except (ValueError, TypeError):
+                cleaned['tickSize'] = 0.0
+                logger.warning(f"⚠️ 合约 {symbol} PRICE_FILTER tickSize 字段格式异常")
+        else:
+            cleaned['tickSize'] = 0.0
+            logger.warning(f"⚠️ 合约 {symbol} 缺少 PRICE_FILTER filter")
+        
+        # 4. 提取 stepSize 和 minQty（从 LOT_SIZE）
         if lot_size_filter:
             try:
                 cleaned['stepSize'] = float(lot_size_filter.get('stepSize', 0))
@@ -141,7 +157,7 @@ class BinanceContractCleaner:
             cleaned['minQty'] = 0.0
             logger.warning(f"⚠️ 合约 {symbol} 缺少 LOT_SIZE filter")
         
-        # 4. 提取 minNotional（从 MIN_NOTIONAL）
+        # 5. 提取 minNotional（从 MIN_NOTIONAL）
         if min_notional_filter:
             try:
                 cleaned['minNotional'] = float(min_notional_filter.get('notional', 0))
@@ -157,4 +173,3 @@ class BinanceContractCleaner:
     def get_last_cleaned_data(self) -> Optional[Dict]:
         """获取最后一次清洗的数据"""
         return self.last_cleaned_data
-        
