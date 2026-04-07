@@ -590,7 +590,7 @@ class PrivateDataProcessor:
                         "timestamp": data.get('timestamp'),
                         "received_at": data.get('received_at'),
                         "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else str(type(raw_data)),
-                        "note": f"{data.get('data_type')}数据大纲，详情请访问 /private/{data.get('exchange')}/{data.get('data_type')}"
+                        "note": f"{data.get('data_type')}数据大纲，详情请访问 /api/private_data_processing/data/private/{data.get('exchange')}/{data.get('data_type')}"
                     }
             
             return {
@@ -645,7 +645,7 @@ class PrivateDataProcessor:
                             "timestamp": data.get('timestamp'),
                             "received_at": data.get('received_at'),
                             "data_keys": list(raw_data.keys()) if isinstance(raw_data, dict) else str(type(raw_data)),
-                            "note": f"{data.get('data_type')}数据大纲，详情请访问 /private/{exchange}/{data.get('data_type')}"
+                            "note": f"{data.get('data_type')}数据大纲，详情请访问 /api/private_data_processing/data/private/{data.get('exchange')}/{data.get('data_type')}"
                         }
             
             return {
