@@ -46,6 +46,12 @@ class Step1Extract:
         '_10_主动平仓(全部成交)'
     }
 
+    # ===== 币安算法订单数据白名单（只提取这些分类）=====
+    BINANCE_VALID_ALGO_EVENTS = {
+        'A01_设置止损',
+        'A02_设置止盈'
+    }
+
     def __init__(self):
         """初始化提取器（不再需要队列参数）"""
         # ===== 欧易相关缓存 =====
@@ -57,6 +63,7 @@ class Step1Extract:
         
         logger.info("✅【私人step1】字段提取器已创建（并行优化版）")
         logger.debug(f"📋【私人step1】币安有效订单事件: {self.BINANCE_VALID_ORDER_EVENTS}")
+        logger.debug(f"📋【私人step1】币安有效算法事件: {self.BINANCE_VALID_ALGO_EVENTS}")
 
     def _get_executor(self):
         """懒加载线程池执行器"""
@@ -173,6 +180,22 @@ class Step1Extract:
                 )
                 if results:
                     logger.debug(f"✅【私人step1】从 {key} 提取了 {len(results)} 条订单结果")
+                return results or []
+            
+            # ========== 币安算法订单（止盈止损）==========
+            elif key == 'binance_algo_update':
+                pseudo_item = {
+                    'exchange': 'binance',
+                    'data_type': 'algo_update',
+                    'classified': data_item.get('classified', {})
+                }
+                results = await loop.run_in_executor(
+                    executor,
+                    self._extract_binance_algo,
+                    pseudo_item
+                )
+                if results:
+                    logger.debug(f"✅【私人step1】从 {key} 提取了 {len(results)} 条算法订单结果")
                 return results or []
             
             # ========== 币安HTTP账户 ==========
@@ -397,6 +420,55 @@ class Step1Extract:
                 results.append(result)
 
         logger.debug(f"📊【私人step1】币安订单提取完成，共 {len(results)} 条")
+        return results
+
+    # ========== 币安算法订单提取函数 ==========
+    def _extract_binance_algo(self, item: Dict) -> List[Dict[str, Any]]:
+        """
+        提取币安算法订单数据（止盈止损）
+        只提取 A01_设置止损 和 A02_设置止盈
+        """
+        classified = item.get('classified', {})
+        if not classified:
+            logger.debug(f"⚠️【私人step1】币安algo_update无classified数据")
+            return []
+
+        logger.debug(f"🔍【私人step1】币安算法classified keys: {list(classified.keys())}")
+
+        results = []
+        for event_key, event_data in classified.items():
+            # 检查是否在白名单中
+            if event_key not in self.BINANCE_VALID_ALGO_EVENTS:
+                logger.debug(f"⏭️【私人step1】跳过非白名单算法事件: {event_key}")
+                continue
+
+            # event_data 是字典，包含 timestamp, received_at, data
+            data = event_data.get('data', {})
+            o_data = data.get('o', {})
+
+            result = {
+                "交易所": "binance",
+                "data_type": "algo_update",
+                "event_type": event_key
+            }
+
+            # A01_设置止损
+            if event_key == 'A01_设置止损':
+                if o_data.get('wt') is not None:
+                    result["止损触发方式"] = o_data['wt']
+                if o_data.get('tp') is not None:
+                    result["止损触发价"] = o_data['tp']
+
+            # A02_设置止盈
+            elif event_key == 'A02_设置止盈':
+                if o_data.get('wt') is not None:
+                    result["止盈触发方式"] = o_data['wt']
+                if o_data.get('tp') is not None:
+                    result["止盈触发价"] = o_data['tp']
+
+            results.append(result)
+
+        logger.debug(f"📊【私人step1】币安算法订单提取完成，共 {len(results)} 条")
         return results
 
     # ========== 欧易工具函数 ==========
