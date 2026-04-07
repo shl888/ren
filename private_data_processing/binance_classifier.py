@@ -111,3 +111,63 @@ def is_closing_event(category: str) -> bool:
         '08_触发止盈(全部成交)', 
         '10_主动平仓(全部成交)'
     ]
+
+
+# ========== 算法订单分类器（止盈止损）==========
+
+def classify_binance_algo(data: Dict[str, Any]) -> str:
+    """
+    币安算法订单更新事件分类（止盈止损）
+    输入: 完整的 private_data 或包含 o 字段的字典
+    返回:
+    'A01_设置止损'
+    'A02_设置止盈'
+    'A03_取消止损'
+    'A04_取消止盈'
+    'A05_触发止损'
+    'A06_触发止盈'
+    'A07_止损过期'
+    'A08_止盈过期'
+    'A09_其它'
+    """
+    try:
+        # 兼容两种数据格式
+        if 'data' in data and 'o' in data['data']:
+            o = data['data']['o']
+        elif 'o' in data:
+            o = data['o']
+        else:
+            return 'A09'
+        
+        x_status = o.get('X', '')           # 状态: NEW/CANCELED/TRIGGERED/EXPIRED
+        order_type = o.get('o', '')         # 订单类型: STOP_MARKET / TAKE_PROFIT_MARKET
+        
+        # ===== 止损 =====
+        if order_type == 'STOP_MARKET':
+            if x_status == 'NEW':
+                return 'A01_设置止损'      # 设置止损
+            if x_status == 'CANCELED':
+                return 'A03_取消止损'      # 取消止损
+            if x_status == 'TRIGGERED':
+                return 'A05_触发止损'      # 触发止损
+            if x_status == 'EXPIRED':
+                return 'A07_止损过期'      # 止损过期
+        
+        # ===== 止盈 =====
+        if order_type == 'TAKE_PROFIT_MARKET':
+            if x_status == 'NEW':
+                return 'A02_设置止盈'      # 设置止盈
+            if x_status == 'CANCELED':
+                return 'A04_取消止盈'      # 取消止盈
+            if x_status == 'TRIGGERED':
+                return 'A06_触发止盈'      # 触发止盈
+            if x_status == 'EXPIRED':
+                return 'A08_止盈过期'      # 止盈过期
+        
+        return 'A09_其它'   # 其它
+        
+    except (KeyError, TypeError, AttributeError):
+        return 'A09_其它'
+        
+        
+        

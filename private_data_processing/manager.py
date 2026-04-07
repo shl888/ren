@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
-from .binance_classifier import classify_binance_order, is_closing_event as is_binance_closing
+from .binance_classifier import classify_binance_order, is_closing_event as is_binance_closing, classify_binance_algo
 from .okx_classifier import classify_okx_order, is_closing_event as is_okx_closing
 from .scheduler import get_scheduler
 
@@ -478,6 +478,54 @@ class PrivateDataProcessor:
                     logger.error(traceback.format_exc())
                     return
             
+            # ========== 币安算法订单更新处理（止盈止损）==========
+            if exchange == 'binance' and raw_data.get('e') == 'ALGO_UPDATE':
+                
+                logger.debug(f"📥【私人数据处理】 [币安算法订单] 收到止盈止损更新")
+                
+                try:
+                    # 分类
+                    category = classify_binance_algo(private_data)
+                    logger.debug(f"🔍【私人数据处理】 [币安算法订单] 分类结果: {category}")
+                    
+                    # 获取 symbol 和订单信息
+                    o = raw_data.get('o', {})
+                    symbol = o.get('s', 'unknown')
+                    
+                    classified_key = f"{symbol}_{category}"
+                    
+                    # 初始化存储结构
+                    with self._lock:
+                        if 'binance_algo_update' not in self.memory_store['private_data']:
+                            self.memory_store['private_data']['binance_algo_update'] = {
+                                'key': 'binance_algo_update',
+                                'exchange': 'binance',
+                                'data_type': 'algo_update',
+                                'classified': {}
+                            }
+                        
+                        classified = self.memory_store['private_data']['binance_algo_update']['classified']
+                        
+                        # 同分类内覆盖（只保留最新一条）
+                        classified[classified_key] = {
+                            'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
+                            'received_at': private_data.get('received_at', datetime.now().isoformat()),
+                            'data': raw_data,
+                            'category': category
+                        }
+                        
+                        logger.debug(f"📦【私人数据处理】 [币安算法订单] {classified_key} 已保存（覆盖同分类旧数据）")
+                    
+                    # 喂给 Step1
+                    await self._feed_full_storage_to_step1()
+                    return
+                    
+                except Exception as e:
+                    logger.error(f"❌【私人数据处理】 [币安算法订单] 处理失败: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    return
+            
             # ========== OKX持仓更新处理 ==========
             if exchange == 'okx' and private_data.get('data_type') == 'position_update':
                 
@@ -581,6 +629,14 @@ class PrivateDataProcessor:
                         "data_keys": list(classified.keys()) if classified else "No classified data",
                         "note": "订单数据的时间取自classified中的最新记录"
                     }
+                elif key == 'binance_algo_update':
+                    classified = data.get('classified', {})
+                    formatted_data[key] = {
+                        "exchange": data.get('exchange'),
+                        "data_type": data.get('data_type'),
+                        "classified": classified,
+                        "note": "算法订单数据，按分类存储（同分类内覆盖）"
+                    }
                 else:
                     raw_data = data.get('data', {})
                     
@@ -636,6 +692,14 @@ class PrivateDataProcessor:
                             "summary": summary,
                             "note": "各类别事件数量统计，详情请查询具体data_type"
                         }
+                    elif key == 'binance_algo_update':
+                        classified = data.get('classified', {})
+                        exchange_data[key] = {
+                            "exchange": data.get('exchange'),
+                            "data_type": data.get('data_type'),
+                            "classified": classified,
+                            "note": "算法订单数据，按分类存储（同分类内覆盖）"
+                        }
                     else:
                         raw_data = data.get('data', {})
                         
@@ -664,7 +728,7 @@ class PrivateDataProcessor:
         try:
             key = f"{exchange.lower()}_{data_type.lower()}"
             
-            if key in ['binance_order_update', 'okx_order_update']:
+            if key in ['binance_order_update', 'okx_order_update', 'binance_algo_update']:
                 if key in self.memory_store['private_data']:
                     return self.memory_store['private_data'][key]
                 else:
@@ -672,7 +736,7 @@ class PrivateDataProcessor:
                         "exchange": exchange,
                         "data_type": data_type,
                         "classified": {},
-                        "note": "暂无订单数据"
+                        "note": "暂无数据"
                     }
             
             if key in self.memory_store['private_data']:
