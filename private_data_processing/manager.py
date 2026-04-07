@@ -64,6 +64,7 @@ class PrivateDataProcessor:
         - 新逻辑：一次持锁，按合约名批量删除，锁内无 sleep，持锁时间极短
         - 只删除当前合约的数据，不影响其他合约
         - 新增：清理 binance_http_account 中该合约的持仓数据，防止残留
+        - 新增：清理 binance_algo_update 中该合约的算法订单数据
         """
         try:
             time.sleep(5)
@@ -84,7 +85,20 @@ class PrivateDataProcessor:
                     if keys_to_delete:
                         logger.debug(f"🧹【私人数据处理】 [币安订单] 已删除 {symbol} 的 {len(keys_to_delete)} 个分类")
                 
-                # 2. 清理账户资产中的该合约持仓
+                # 2. 清理算法订单数据（止盈止损）
+                if 'binance_algo_update' in self.memory_store['private_data']:
+                    algo_classified = self.memory_store['private_data']['binance_algo_update'].get('classified', {})
+                    
+                    # 找出该合约的所有算法订单key
+                    algo_keys_to_delete = [k for k in list(algo_classified.keys()) if k.startswith(f"{symbol}_")]
+                    
+                    for k in algo_keys_to_delete:
+                        del algo_classified[k]
+                    
+                    if algo_keys_to_delete:
+                        logger.debug(f"🧹【私人数据处理】 [币安算法订单] 已删除 {symbol} 的 {len(algo_keys_to_delete)} 个算法订单记录")
+                
+                # 3. 清理账户资产中的该合约持仓
                 if 'binance_http_account' in self.memory_store['private_data']:
                     account_data = self.memory_store['private_data']['binance_http_account']
                     data = account_data.get('data', {})
