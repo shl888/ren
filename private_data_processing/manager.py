@@ -488,11 +488,17 @@ class PrivateDataProcessor:
                     category = classify_binance_algo(private_data)
                     logger.debug(f"🔍【私人数据处理】 [币安算法订单] 分类结果: {category}")
                     
-                    # 获取 symbol 和订单信息
+                    # 获取 symbol
                     o = raw_data.get('o', {})
                     symbol = o.get('s', 'unknown')
                     
-                    classified_key = f"{symbol}_{category}"
+                    # 按分组确定 storage_key（止损组、止盈组、其他组）
+                    if category in ['A01_设置止损', 'A03_取消止损', 'A05_触发止损', 'A07_止损过期']:
+                        group_key = f"{symbol}_止损"
+                    elif category in ['A02_设置止盈', 'A04_取消止盈', 'A06_触发止盈', 'A08_止盈过期']:
+                        group_key = f"{symbol}_止盈"
+                    else:
+                        group_key = f"{symbol}_其他"
                     
                     # 初始化存储结构
                     with self._lock:
@@ -506,15 +512,14 @@ class PrivateDataProcessor:
                         
                         classified = self.memory_store['private_data']['binance_algo_update']['classified']
                         
-                        # 同分类内覆盖（只保留最新一条）
-                        classified[classified_key] = {
+                        # 同分组内覆盖（只保留最新一条），不存多余的 category 字段
+                        classified[group_key] = {
                             'timestamp': private_data.get('timestamp', datetime.now().isoformat()),
                             'received_at': private_data.get('received_at', datetime.now().isoformat()),
-                            'data': raw_data,
-                            'category': category
+                            'data': raw_data
                         }
                         
-                        logger.debug(f"📦【私人数据处理】 [币安算法订单] {classified_key} 已保存（覆盖同分类旧数据）")
+                        logger.debug(f"📦【私人数据处理】 [币安算法订单] {group_key} 已保存（覆盖同分组旧数据）")
                     
                     # 喂给 Step1
                     await self._feed_full_storage_to_step1()
@@ -635,7 +640,7 @@ class PrivateDataProcessor:
                         "exchange": data.get('exchange'),
                         "data_type": data.get('data_type'),
                         "classified": classified,
-                        "note": "算法订单数据，按分类存储（同分类内覆盖）"
+                        "note": "算法订单数据，按分组存储（止损组、止盈组、其他组，同组内覆盖）"
                     }
                 else:
                     raw_data = data.get('data', {})
@@ -698,7 +703,7 @@ class PrivateDataProcessor:
                             "exchange": data.get('exchange'),
                             "data_type": data.get('data_type'),
                             "classified": classified,
-                            "note": "算法订单数据，按分类存储（同分类内覆盖）"
+                            "note": "算法订单数据，按分组存储（止损组、止盈组、其他组，同组内覆盖）"
                         }
                     else:
                         raw_data = data.get('data', {})
