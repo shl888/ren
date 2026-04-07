@@ -671,11 +671,27 @@ class PrivateDataProcessor:
                     }
                 elif key == 'binance_algo_update':
                     classified = data.get('classified', {})
+                    summary = {}
+                    latest_timestamp = None
+                    latest_received_at = None
+                    
+                    for k, v in classified.items():
+                        # 算法订单每个分类只有一条数据，用"最新一条"表示
+                        summary[k] = "最新一条"
+                        if v:
+                            item_ts = v.get('timestamp')
+                            item_ra = v.get('received_at')
+                            if latest_timestamp is None or (item_ts and item_ts > latest_timestamp):
+                                latest_timestamp = item_ts
+                                latest_received_at = item_ra
+                    
                     formatted_data[key] = {
                         "exchange": data.get('exchange'),
                         "data_type": data.get('data_type'),
-                        "classified": classified,
-                        "note": "算法订单数据，止损类型(A01/A03/A05/A07)互相覆盖，止盈类型(A02/A04/A06/A08)互相覆盖"
+                        "received_at": latest_received_at,
+                        "timestamp": latest_timestamp,
+                        "summary": summary,
+                        "note": "算法订单数据，止损类型(A01/A03/A05/A07)互相覆盖，止盈类型(A02/A04/A06/A08)互相覆盖，详情请查询具体data_type"
                     }
                 else:
                     raw_data = data.get('data', {})
@@ -734,11 +750,26 @@ class PrivateDataProcessor:
                         }
                     elif key == 'binance_algo_update':
                         classified = data.get('classified', {})
+                        summary = {}
+                        latest_timestamp = None
+                        latest_received_at = None
+                        
+                        for k, v in classified.items():
+                            summary[k] = "最新一条"
+                            if v:
+                                item_ts = v.get('timestamp')
+                                item_ra = v.get('received_at')
+                                if latest_timestamp is None or (item_ts and item_ts > latest_timestamp):
+                                    latest_timestamp = item_ts
+                                    latest_received_at = item_ra
+                        
                         exchange_data[key] = {
                             "exchange": data.get('exchange'),
                             "data_type": data.get('data_type'),
-                            "classified": classified,
-                            "note": "算法订单数据，止损类型(A01/A03/A05/A07)互相覆盖，止盈类型(A02/A04/A06/A08)互相覆盖"
+                            "timestamp": latest_timestamp,
+                            "received_at": latest_received_at,
+                            "summary": summary,
+                            "note": "算法订单数据，止损类型(A01/A03/A05/A07)互相覆盖，止盈类型(A02/A04/A06/A08)互相覆盖，详情请查询具体data_type"
                         }
                     else:
                         raw_data = data.get('data', {})
