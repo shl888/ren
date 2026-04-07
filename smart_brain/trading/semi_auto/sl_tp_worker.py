@@ -6,7 +6,7 @@
 1. 收到止损止盈指令 → 缓存，开始工作
 2. 拷贝欧易和币安的止损止盈模板
 3. 填充合约名
-4. 读取私人数据（开仓价、开仓方向、持仓张数）
+4. 读取私人数据（开仓价、开仓方向）
 5. 读取欧易面值数据（tickSz）
 6. 读取币安精度数据（tickSize）
 7. 计算止损价和止盈价
@@ -48,7 +48,6 @@ class SlTpWorker:
         # 从私人数据提取
         self.okx_open_price = 0.0        # 欧易开仓价
         self.okx_position_side = ""      # 欧易开仓方向 long/short
-        self.okx_sz = 0.0                # 欧易持仓张数
         self.binance_open_price = 0.0    # 币安开仓价
         self.binance_position_side = ""  # 币安开仓方向 LONG/SHORT
         
@@ -102,7 +101,7 @@ class SlTpWorker:
             # 3. 填充合约名
             self._fill_symbols()
             
-            # 4. 读取私人数据（开仓价、开仓方向、持仓张数）
+            # 4. 读取私人数据（开仓价、开仓方向）
             if not await self._load_private_data():
                 self._cleanup()
                 return
@@ -201,7 +200,6 @@ class SlTpWorker:
                 # 提取欧易数据
                 self.okx_open_price = float(okx_data.get("开仓价", 0))
                 self.okx_position_side = okx_data.get("开仓方向", "").lower()
-                self.okx_sz = float(okx_data.get("持仓张数", 0))
                 
                 # 提取币安数据
                 self.binance_open_price = float(binance_data.get("开仓价", 0))
@@ -216,10 +214,6 @@ class SlTpWorker:
                     logger.warning("⚠️【止损止盈工人】欧易开仓方向为空")
                     continue
                 
-                if self.okx_sz <= 0:
-                    logger.warning(f"⚠️【止损止盈工人】欧易持仓张数无效: {self.okx_sz}")
-                    continue
-                
                 if self.binance_open_price <= 0:
                     logger.warning(f"⚠️【止损止盈工人】币安开仓价无效: {self.binance_open_price}")
                     continue
@@ -228,7 +222,7 @@ class SlTpWorker:
                     logger.warning("⚠️【止损止盈工人】币安开仓方向为空")
                     continue
                 
-                logger.info(f"✅【止损止盈工人】私人数据: 欧易开仓价={self.okx_open_price}, 方向={self.okx_position_side}, 张数={self.okx_sz}")
+                logger.info(f"✅【止损止盈工人】私人数据: 欧易开仓价={self.okx_open_price}, 方向={self.okx_position_side}")
                 logger.info(f"✅【止损止盈工人】私人数据: 币安开仓价={self.binance_open_price}, 方向={self.binance_position_side}")
                 return True
                 
@@ -382,10 +376,6 @@ class SlTpWorker:
     def _fill_params(self):
         """填充参数"""
         # ========== 欧易参数 ==========
-        # sz：持仓张数（转字符串，去掉多余小数位）
-        sz_formatted = f"{self.okx_sz:.8f}".rstrip('0').rstrip('.')
-        self.okx_cache["params"]["sz"] = sz_formatted
-        
         # posSide：开仓方向小写
         self.okx_cache["params"]["posSide"] = self.okx_position_side
         
@@ -399,7 +389,7 @@ class SlTpWorker:
         self.okx_cache["params"]["slTriggerPx"] = self.okx_stop_price
         self.okx_cache["params"]["tpTriggerPx"] = self.okx_take_price
         
-        logger.info(f"📝【止损止盈工人】欧易参数已填充: sz={sz_formatted}, side={self.okx_cache['params']['side']}, posSide={self.okx_cache['params']['posSide']}")
+        logger.info(f"📝【止损止盈工人】欧易参数已填充: side={self.okx_cache['params']['side']}, posSide={self.okx_cache['params']['posSide']}")
         
         # ========== 币安参数 ==========
         # 止损单（索引0）
@@ -446,7 +436,6 @@ class SlTpWorker:
         
         self.okx_open_price = 0.0
         self.okx_position_side = ""
-        self.okx_sz = 0.0
         self.binance_open_price = 0.0
         self.binance_position_side = ""
         
