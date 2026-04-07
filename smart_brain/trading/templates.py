@@ -106,7 +106,7 @@ OCO_BINANCE = {
             "positionSide": None,        # 持仓方向
             "quantity": None,            # 平仓数量（从私人数据读取持仓币数）
             "stopPrice": None,           # 止损触发价（注意参数名是 stopPrice）
-            "reduceOnly": "true",        # 只减仓
+#            "reduceOnly": "true",        # 只减仓
             "workingType": "CONTRACT_PRICE",
             "priceProtect": "true"       # 防插针误触发
         },
@@ -122,7 +122,7 @@ OCO_BINANCE = {
             "positionSide": None,        # 持仓方向
             "quantity": None,            # 平仓数量（从私人数据读取持仓币数）
             "stopPrice": None,           # 止盈触发价
-            "reduceOnly": "true",        # 只减仓
+#            "reduceOnly": "true",        # 只减仓
             "workingType": "CONTRACT_PRICE",
             "priceProtect": "true"       # 防插针误触发
         }
