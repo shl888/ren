@@ -102,7 +102,7 @@ OCO_BINANCE = {
           
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向，"SELL" 或 "BUY"
-            "type": "MARKET",       # 止损单类型
+            "type": "STOP_MARKET",       # 止损单类型
             "positionSide": None,        # 持仓方向
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
@@ -117,7 +117,7 @@ OCO_BINANCE = {
          
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向
-            "type": "MARKET", # 止盈单类型
+            "type": "TAKE_PROFIT_MARKET", # 止盈单类型
             "positionSide": None,        # 持仓方向
             "workingType": "CONTRACT_PRICE",
             "closePosition": "true",
