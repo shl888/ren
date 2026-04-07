@@ -97,32 +97,34 @@ OCO_BINANCE = {
         {
             # ============================================================
             # 索引 0：止损单（STOP_MARKET）
-            # 填充方式：oco_cache["orders"][0]["triggerPrice"] = "止损价"
+            # 填充方式：oco_cache["orders"][0]["stopPrice"] = "止损价"
             # ============================================================
           
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向，"SELL" 或 "BUY"
             "type": "STOP_MARKET",       # 止损单类型
             "positionSide": None,        # 持仓方向
+            "quantity": None,            # 平仓数量（从私人数据读取持仓币数）
+            "stopPrice": None,           # 止损触发价（注意参数名是 stopPrice）
+            "reduceOnly": "true",        # 只减仓
             "workingType": "CONTRACT_PRICE",
-            "closePosition": "true",
-            "triggerPrice": None,         # 止损触发价
-#            "algotype": "CONDITIONAL"   # 新增：条件单
+            "priceProtect": "true"       # 防插针误触发
         },
         {
             # ============================================================
             # 索引 1：止盈单（TAKE_PROFIT_MARKET）
-            # 填充方式：oco_cache["orders"][1]["triggerPrice"] = "止盈价"
+            # 填充方式：oco_cache["orders"][1]["stopPrice"] = "止盈价"
             # ============================================================
          
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向
             "type": "TAKE_PROFIT_MARKET", # 止盈单类型
             "positionSide": None,        # 持仓方向
+            "quantity": None,            # 平仓数量（从私人数据读取持仓币数）
+            "stopPrice": None,           # 止盈触发价
+            "reduceOnly": "true",        # 只减仓
             "workingType": "CONTRACT_PRICE",
-            "closePosition": "true",
-            "triggerPrice": None,         # 止盈触发价
-#            "algotype": "CONDITIONAL"   # 新增：条件单
+            "priceProtect": "true"       # 防插针误触发
         }
     ]
 }
