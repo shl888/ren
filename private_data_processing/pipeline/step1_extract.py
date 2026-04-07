@@ -47,9 +47,10 @@ class Step1Extract:
     }
 
     # ===== 币安算法订单数据白名单（只提取这些分类）=====
+    # 注意：格式为 _A01_设置止损，因为完整key是 BTCUSDT_A01_设置止损，我们需要匹配 _A01_设置止损 这个结尾
     BINANCE_VALID_ALGO_EVENTS = {
-        'A01_设置止损',
-        'A02_设置止盈'
+        '_A01_设置止损',
+        '_A02_设置止盈'
     }
 
     def __init__(self):
@@ -282,7 +283,7 @@ class Step1Extract:
             logger.error(traceback.format_exc())
             return []
 
-    # ========== 币安提取函数（原样保留，都是同步函数）==========
+    # ========== 币安提取函数 ==========
     def _extract_binance_http(self, item: Dict) -> Optional[Dict[str, Any]]:
         """提取币安HTTP账户数据"""
         data = item.get('data', {})
@@ -430,15 +431,19 @@ class Step1Extract:
         """
         classified = item.get('classified', {})
         if not classified:
-            logger.debug(f"⚠️【私人step1】币安algo_update无classified数据")
+            logger.info(f"⚠️【私人step1】币安algo_update无classified数据")
             return []
 
-        logger.debug(f"🔍【私人step1】币安算法classified keys: {list(classified.keys())}")
+        logger.info(f"🔍【私人step1】币安算法classified keys: {list(classified.keys())}")
 
         results = []
         for event_key, event_data in classified.items():
-            # 检查是否在白名单中
-            if event_key not in self.BINANCE_VALID_ALGO_EVENTS:
+            # 匹配结尾：_A01_设置止损 或 _A02_设置止盈
+            if event_key.endswith('_A01_设置止损'):
+                pure_event = '_A01_设置止损'
+            elif event_key.endswith('_A02_设置止盈'):
+                pure_event = '_A02_设置止盈'
+            else:
                 logger.debug(f"⏭️【私人step1】跳过非白名单算法事件: {event_key}")
                 continue
 
@@ -452,15 +457,15 @@ class Step1Extract:
                 "event_type": event_key
             }
 
-            # A01_设置止损
-            if event_key == 'A01_设置止损':
+            # _A01_设置止损
+            if pure_event == '_A01_设置止损':
                 if o_data.get('wt') is not None:
                     result["止损触发方式"] = o_data['wt']
                 if o_data.get('tp') is not None:
                     result["止损触发价"] = o_data['tp']
 
-            # A02_设置止盈
-            elif event_key == 'A02_设置止盈':
+            # _A02_设置止盈
+            elif pure_event == '_A02_设置止盈':
                 if o_data.get('wt') is not None:
                     result["止盈触发方式"] = o_data['wt']
                 if o_data.get('tp') is not None:
@@ -468,7 +473,7 @@ class Step1Extract:
 
             results.append(result)
 
-        logger.debug(f"📊【私人step1】币安算法订单提取完成，共 {len(results)} 条")
+        logger.info(f"📊【私人step1】币安算法订单提取完成，共 {len(results)} 条")
         return results
 
     # ========== 欧易工具函数 ==========
@@ -479,7 +484,7 @@ class Step1Extract:
         # 先去掉 -SWAP，再去掉所有 -
         return symbol.replace('-SWAP', '').replace('-', '')
 
-    # ========== 欧易提取函数（原样保留，都是同步函数）==========
+    # ========== 欧易提取函数 ==========
     def _extract_okx_contract(self, item: Dict):
         """提取欧易合约面值数据 - 只缓存，不输出"""
         if self.okx_contract_loaded:
@@ -705,7 +710,6 @@ class Step1Extract:
             u_time = order_data.get('uTime')
             if u_time is not None and u_time != '':
                 result["平仓时间"] = self._convert_timestamp(u_time)
-            
             
             logger.debug(f"📤【私人step1-欧易平仓】提取结果: {result}")
             return result if len(result) > 2 else None
