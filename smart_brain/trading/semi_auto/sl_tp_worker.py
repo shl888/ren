@@ -6,7 +6,7 @@
 1. 收到止损止盈指令 → 缓存，开始工作
 2. 拷贝欧易和币安的止损止盈模板
 3. 填充合约名
-4. 读取私人数据（开仓价、开仓方向）
+4. 读取私人数据（开仓价、开仓方向、币安持仓币数）
 5. 读取欧易面值数据（tickSz）
 6. 读取币安精度数据（tickSize）
 7. 计算止损价和止盈价
@@ -50,6 +50,7 @@ class SlTpWorker:
         self.okx_position_side = ""      # 欧易开仓方向 long/short
         self.binance_open_price = 0.0    # 币安开仓价
         self.binance_position_side = ""  # 币安开仓方向 LONG/SHORT
+        self.binance_quantity = 0.0      # 币安持仓币数（平仓用）
         
         # 精度
         self.okx_tick_sz = 0.0           # 欧易价格精度
@@ -101,7 +102,7 @@ class SlTpWorker:
             # 3. 填充合约名
             self._fill_symbols()
             
-            # 4. 读取私人数据（开仓价、开仓方向）
+            # 4. 读取私人数据（开仓价、开仓方向、币安持仓币数）
             if not await self._load_private_data():
                 self._cleanup()
                 return
@@ -204,6 +205,7 @@ class SlTpWorker:
                 # 提取币安数据
                 self.binance_open_price = float(binance_data.get("开仓价", 0))
                 self.binance_position_side = binance_data.get("开仓方向", "").upper()
+                self.binance_quantity = float(binance_data.get("持仓币数", 0))
                 
                 # 校验
                 if self.okx_open_price <= 0:
@@ -222,8 +224,12 @@ class SlTpWorker:
                     logger.warning("⚠️【止损止盈工人】币安开仓方向为空")
                     continue
                 
+                if self.binance_quantity <= 0:
+                    logger.warning(f"⚠️【止损止盈工人】币安持仓币数无效: {self.binance_quantity}")
+                    continue
+                
                 logger.info(f"✅【止损止盈工人】私人数据: 欧易开仓价={self.okx_open_price}, 方向={self.okx_position_side}")
-                logger.info(f"✅【止损止盈工人】私人数据: 币安开仓价={self.binance_open_price}, 方向={self.binance_position_side}")
+                logger.info(f"✅【止损止盈工人】私人数据: 币安开仓价={self.binance_open_price}, 方向={self.binance_position_side}, 持仓币数={self.binance_quantity}")
                 return True
                 
             except Exception as e:
@@ -392,13 +398,18 @@ class SlTpWorker:
         logger.info(f"📝【止损止盈工人】欧易参数已填充: side={self.okx_cache['params']['side']}, posSide={self.okx_cache['params']['posSide']}")
         
         # ========== 币安参数 ==========
+        # 格式化 quantity
+        quantity_formatted = f"{self.binance_quantity:.8f}".rstrip('0').rstrip('.')
+        
         # 止损单（索引0）
         self.binance_cache["orders"][0]["positionSide"] = self.binance_position_side
-        self.binance_cache["orders"][0]["triggerPrice"] = self.binance_stop_price
+        self.binance_cache["orders"][0]["quantity"] = quantity_formatted
+        self.binance_cache["orders"][0]["stopPrice"] = self.binance_stop_price
         
         # 止盈单（索引1）
         self.binance_cache["orders"][1]["positionSide"] = self.binance_position_side
-        self.binance_cache["orders"][1]["triggerPrice"] = self.binance_take_price
+        self.binance_cache["orders"][1]["quantity"] = quantity_formatted
+        self.binance_cache["orders"][1]["stopPrice"] = self.binance_take_price
         
         # side：平仓方向（与开仓方向相反）
         if self.binance_position_side == "LONG":
@@ -408,7 +419,7 @@ class SlTpWorker:
             self.binance_cache["orders"][0]["side"] = "BUY"
             self.binance_cache["orders"][1]["side"] = "BUY"
         
-        logger.info(f"📝【止损止盈工人】币安参数已填充: 止损价={self.binance_stop_price}, 止盈价={self.binance_take_price}")
+        logger.info(f"📝【止损止盈工人】币安参数已填充: quantity={quantity_formatted}, 止损价={self.binance_stop_price}, 止盈价={self.binance_take_price}")
     
     def _send_to_trader(self):
         """推送给下单工人"""
@@ -438,6 +449,7 @@ class SlTpWorker:
         self.okx_position_side = ""
         self.binance_open_price = 0.0
         self.binance_position_side = ""
+        self.binance_quantity = 0.0
         
         self.okx_tick_sz = 0.0
         self.binance_tick_size = 0.0
