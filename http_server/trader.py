@@ -345,7 +345,7 @@ class Trader:
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
         elif order_type == "algo_order":
-            endpoint = "/fapi/v1/algoOrder"
+            endpoint = "/fapi/v1/order"
             req_params = params.copy()
             return await self._binance_http_request(api_key, api_secret, "POST", endpoint, req_params)
         
