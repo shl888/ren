@@ -64,26 +64,29 @@ OPEN_MARKET_BINANCE = {
 
 # ==================== 止损止盈 ====================
 
-# 注意：止盈止损的开仓方向（side）和平仓方向相反
-# 做多时：开仓 side="buy"，平仓 side="sell"
-# 做空时：开仓 side="sell"，平仓 side="buy"
+# 注意：止盈止损的订单方向（side）和现仓位持仓方向（posSide）相反。
+# 多单时：posSide="long"   side="sell"，
+# 空单时：posSide="short"  side="buy"，
 
 OCO_OKX = {
     "exchange": "okx",
     "type": "oco",
     "params": {
         "instId": None,              # 合约名，如 "BTC-USDT-SWAP"
-        "tdMode": "cross",           # 固定：全仓
-        "side": None,                # 平仓方向，"buy" 或 "sell"
         "ordType": "oco",            # 固定
-        "sz": None,                  # 持仓张数（与开仓张数相同）
-        "posSide": None,             # 持仓方向，"long" 或 "short"
+        "tdMode": "cross",           # 固定：全仓
+        "side": None,                # 订单方向，"sell" 或 "buy"
+#        "sz": None,                  # 持仓张数（与开仓张数相同）
+        "posSide": None,             # 现仓位持仓方向，"long" 或 "short"
         "tpTriggerPx": None,         # 止盈触发价
         "tpOrdPx": "-1",             # 固定：市价
         "slTriggerPx": None,         # 止损触发价
         "slOrdPx": "-1",             # 固定：市价
         "tpTriggerPxType": "last",   # 固定：最新价触发
-        "slTriggerPxType": "last"    # 固定：最新价触发
+        "slTriggerPxType": "last",    # 固定：最新价触发
+        "closeFraction": "1",        # ← 关键：平全部仓位，不是开仓
+        "reduceOnly": "true",        # ← 必须：只减仓
+        "cxlOnClosePos": "true"      # ← 与仓位绑定
     }
 }
 
@@ -99,13 +102,12 @@ OCO_BINANCE = {
           
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向，"SELL" 或 "BUY"
+            "type": "STOP_MARKET",       # 止损单类型
             "positionSide": None,        # 持仓方向
-            "triggerPrice": None,         # 止损触发价
-            "type": "STOP_MARKET",       # 类型止损单
             "workingType": "CONTRACT_PRICE",
-            # 以最新价触发
-            "closePosition": "true",     #    全部仓位
-#            "algotype": "CONDITIONAL"   # 新增：条件单
+            "closePosition": "true",
+            "triggerPrice": None,         # 止损触发价
+            "algotype": "CONDITIONAL"   # 新增：条件单
         },
         {
             # ============================================================
@@ -115,13 +117,12 @@ OCO_BINANCE = {
          
             "symbol": None,              # 合约名
             "side": None,                # 平仓方向
+            "type": "TAKE_PROFIT_MARKET", # 止盈单类型
             "positionSide": None,        # 持仓方向
-            "triggerPrice": None,         # 止盈触发价
-            "type": "TAKE_PROFIT_MARKET", # 类型止盈单
             "workingType": "CONTRACT_PRICE",
-            # 以最新价触发
-            "closePosition": "true",     #    全部仓位
-#            "algotype": "CONDITIONAL"   # 新增：条件单
+            "closePosition": "true",
+            "triggerPrice": None,         # 止盈触发价
+            "algotype": "CONDITIONAL"   # 新增：条件单
         }
     ]
 }
