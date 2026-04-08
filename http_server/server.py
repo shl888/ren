@@ -84,6 +84,9 @@ class HTTPServer:
             
             # 4. 参考数据（币安精度）
             self.app.router.add_get('/api/brain/data/binance_contracts', brain_routes.get_binance_contracts_data)
+            
+            # 5. 币安24小时涨跌幅数据
+            self.app.router.add_get('/api/brain/data/binance_ticker_24hr', brain_routes.get_binance_ticker_24hr)
 
             # ===== 系统管理路由 =====
             self.app.router.add_get('/api/brain/apis', brain_routes.get_apis)
@@ -91,7 +94,7 @@ class HTTPServer:
             self.app.router.add_delete('/api/brain/data/clear', brain_routes.clear_data)
             self.app.router.add_delete('/api/brain/data/clear/{data_type}', brain_routes.clear_data_type)
             
-            logger.info(f"✅ 已注册大脑数据API路由（4个来源：public_market/private_user/okx_contracts/binance_contracts）")
+            logger.info(f"✅ 已注册大脑数据API路由（5个来源：public_market/private_user/okx_contracts/binance_contracts/binance_ticker_24hr）")
             
         except ImportError as e:
             logger.warning(f"无法导入大脑路由: {e}")
