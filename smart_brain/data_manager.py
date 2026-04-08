@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,12 @@ class DataManager:
         
         # 内存存储（按来源分类）
         self.memory_store = {
-            'market_data': {},      # 公开市场数据（实时行情、费率差）
-            'user_data': {},        # 私人用户数据（币安+欧易）
-            'reference_data': {},   # 公开参考数据（合约面值等）
+            'market_data': {},           # 公开市场数据（实时行情、费率差）
+            'user_data': {},             # 私人用户数据（币安+欧易）
+            'reference_data': {},        # 公开参考数据（合约面值等）
             'env_apis': self._load_apis_from_env(),
-            'exchange_tokens': {}   # 专门存储listenKey
+            'exchange_tokens': {},       # 专门存储listenKey
+            'binance_ticker_24hr': {}    # 币安24小时涨跌幅数据
         }
     
     # ==================== 接收步骤 ====================
@@ -322,6 +324,17 @@ class DataManager:
                             "last_update": data.get('timestamp')
                         })
             
+            # 4. 币安24h涨跌幅数据
+            if self.memory_store['binance_ticker_24hr']:
+                ticker_count = len(self.memory_store['binance_ticker_24hr']) - 1  # 减去 _updated_at
+                sources.append({
+                    "name": "binance_ticker_24hr",
+                    "description": "币安24小时涨跌幅数据",
+                    "item_count": ticker_count,
+                    "endpoint": "/api/brain/data/binance_ticker_24hr",
+                    "last_update": self.memory_store['binance_ticker_24hr'].get('_updated_at')
+                })
+            
             return {
                 "timestamp": datetime.now().isoformat(),
                 "source_count": len(sources),
@@ -409,6 +422,24 @@ class DataManager:
             logger.error(f"❌【智能大脑】获取币安合约精度数据失败: {e}")
             return {"error": str(e)}
     
+    async def get_binance_ticker_24hr(self):
+        """获取币安24小时涨跌幅数据"""
+        try:
+            ticker_data = self.memory_store.get('binance_ticker_24hr', {})
+            # 复制一份，去掉内部更新时间戳
+            result = {k: v for k, v in ticker_data.items() if k != '_updated_at'}
+            
+            return {
+                "source": "binance_ticker_24hr",
+                "description": "币安24小时涨跌幅数据",
+                "timestamp": ticker_data.get('_updated_at', datetime.now().isoformat()),
+                "count": len(result),
+                "data": result
+            }
+        except Exception as e:
+            logger.error(f"❌【智能大脑】获取币安涨跌幅数据失败: {e}")
+            return {"error": str(e)}
+    
     async def get_api_credentials_status(self):
         """获取API凭证状态（隐藏敏感信息）"""
         try:
@@ -447,6 +478,9 @@ class DataManager:
                 "last_update": self._format_time_diff(self.last_reference_time) if self.last_reference_time else "从未更新",
                 "stored_count": len(self.memory_store['reference_data'])
             },
+            "binance_ticker_24hr": {
+                "stored_count": len(self.memory_store.get('binance_ticker_24hr', {})) - 1
+            },
             "timestamp": datetime.now().isoformat()
         }
         
@@ -471,7 +505,8 @@ class DataManager:
                 "market_data_count": len(self.memory_store['market_data']),
                 "user_data_count": len(self.memory_store['user_data']),
                 "reference_data_count": len(self.memory_store['reference_data']),
-                "exchange_tokens_count": len(self.memory_store['exchange_tokens'])
+                "exchange_tokens_count": len(self.memory_store['exchange_tokens']),
+                "binance_ticker_24hr_count": len(self.memory_store.get('binance_ticker_24hr', {}))
             }
             
             if data_type == 'market':
@@ -496,23 +531,29 @@ class DataManager:
                 self.memory_store['exchange_tokens'].clear()
                 message = f"清空令牌数据，共{token_count}条"
                 
+            elif data_type == 'ticker':
+                ticker_count = before_stats['binance_ticker_24hr_count']
+                self.memory_store['binance_ticker_24hr'].clear()
+                message = f"清空涨跌幅数据，共{ticker_count}条"
+                
             elif data_type is None:
                 self.memory_store['market_data'].clear()
                 self.memory_store['user_data'].clear()
                 self.memory_store['reference_data'].clear()
                 self.memory_store['exchange_tokens'].clear()
+                self.memory_store['binance_ticker_24hr'].clear()
                 self.last_market_time = None
                 self.last_market_count = 0
                 self.last_account_time = None
                 self.last_trade_time = None
                 self.last_reference_time = None
-                message = f"清空所有数据，市场数据{before_stats['market_data_count']}条，用户数据{before_stats['user_data_count']}条，参考数据{before_stats['reference_data_count']}条，令牌{before_stats['exchange_tokens_count']}条"
+                message = f"清空所有数据，市场{before_stats['market_data_count']}条，用户{before_stats['user_data_count']}条，参考{before_stats['reference_data_count']}条，令牌{before_stats['exchange_tokens_count']}条，涨跌幅{before_stats['binance_ticker_24hr_count']}条"
                 
             else:
                 return {
                     "success": False,
                     "error": f"不支持的数据类型: {data_type}",
-                    "supported_types": ["market", "user", "reference", "tokens"]
+                    "supported_types": ["market", "user", "reference", "tokens", "ticker"]
                 }
             
             logger.warning(f"⚠️【智能大脑】清空{data_type or '所有'}数据")
@@ -526,7 +567,8 @@ class DataManager:
                     "market_data_count": len(self.memory_store['market_data']),
                     "user_data_count": len(self.memory_store['user_data']),
                     "reference_data_count": len(self.memory_store['reference_data']),
-                    "exchange_tokens_count": len(self.memory_store['exchange_tokens'])
+                    "exchange_tokens_count": len(self.memory_store['exchange_tokens']),
+                    "binance_ticker_24hr_count": len(self.memory_store.get('binance_ticker_24hr', {}))
                 },
                 "timestamp": datetime.now().isoformat()
             }
@@ -608,6 +650,7 @@ class DataManager:
                 user_time = self._format_time_diff(self.last_account_time)
                 ref_count = len(self.memory_store['reference_data'])
                 ref_time = self._format_time_diff(self.last_reference_time)
+                ticker_count = len(self.memory_store.get('binance_ticker_24hr', {})) - 1
                 
                 if self.brain.frontend_relay:
                     frontend_stats = self.brain.frontend_relay.get_stats_summary()
@@ -621,6 +664,7 @@ class DataManager:
 市场数据: {market_count}条, {market_time}
 用户数据: {user_count}条, {user_time}
 参考数据: {ref_count}条, {ref_time}
+涨跌幅数据: {ticker_count}条
 前端连接: {frontend_status}""")
                 
                 # 推送系统状态到前端
@@ -638,6 +682,9 @@ class DataManager:
                             'reference_data': {
                                 'count': ref_count,
                                 'last_update': ref_time
+                            },
+                            'binance_ticker_24hr': {
+                                'count': ticker_count
                             },
                             'frontend': {
                                 'clients': frontend_clients,
@@ -677,3 +724,19 @@ class DataManager:
                 await self.brain.private_pool._reconnect_exchange('okx')
         except Exception as e:
             logger.error(f"❌【智能大脑】触发重连失败: {e}")
+    
+    # ==================== 币安24h涨跌幅数据接口 ====================
+    
+    async def update_binance_ticker_24hr(self, ticker_data: Dict):
+        """更新币安24小时涨跌幅数据"""
+        # 添加更新时间戳
+        ticker_data['_updated_at'] = datetime.now().isoformat()
+        
+        # 存入存储区
+        self.memory_store['binance_ticker_24hr'] = ticker_data
+        
+        # 推送到前端
+        if self.brain.frontend_relay:
+            await self.brain.frontend_relay.broadcast_binance_ticker_24hr(ticker_data)
+        
+        logger.debug(f"📊【数据管理器】币安24h涨跌幅数据已更新，共 {len(ticker_data) - 1} 条")
