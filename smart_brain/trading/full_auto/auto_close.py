@@ -2,16 +2,16 @@
 """
 全自动清仓工人 - 持续监控，条件触发清仓
 
-工作流程：
-1. 收到标签 {"info": "开启全自动"} → 立刻启动监控循环
-2. 收到标签 {"info": "结束全自动"} → 立刻停止循环，取消所有任务，完全重置状态
+架构：
+- 步骤1-3（准备阶段）：拷贝模板、读数据、填充参数创建副本，只执行一次
+- 步骤4-5（监控阶段）：循环检测清仓条件，触发后清仓并回到准备阶段
 
-主循环：
-- 步骤1：拷贝平仓模板
-- 步骤2：读取行情数据和私人数据
-- 步骤3：填充平仓参数，有值就填充，填充完立即创建副本
-- 步骤4：缓存本次资金费结算时间，检测变化并启动60秒倒计时
-- 步骤5：检测清仓条件，任一触发即平仓
+工作流程：
+1. 收到标签 {"info": "开启全自动"} → 立刻启动
+2. 执行准备阶段（步骤1-3），创建平仓参数副本
+3. 进入监控阶段（步骤4-5），循环检测清仓条件
+4. 任一条件触发 → 发送副本 → 清空缓存 → 回到准备阶段
+5. 收到标签 {"info": "结束全自动"} → 立刻停止，完全重置
 
 清仓条件：
 1. 孤儿单：只有一个交易所有持仓
@@ -19,12 +19,6 @@
 3. 危险仓位：|标记价涨跌盈亏幅| ≥ 36 或 |最新价涨跌盈亏幅| ≥ 36
 4. 费率差缩小：rate_diff ≤ 0.3
 5/6. 资金费后公式：60秒倒计时结束后，综合盈亏 ≥ 0.5 或 ≤ -0.2
-
-触发清仓后：
-- 推送平仓参数副本给下单工人
-- 打印日志说明触发条件
-- 清空参数和数据缓存
-- 保留开启全自动状态，继续下一轮循环
 """
 
 import asyncio
@@ -64,6 +58,13 @@ class FullAutoCloser:
         
         # 当前持仓合约名（用于检测费率差）
         self.current_symbol = None
+        
+        # 防重复触发（记录各条件是否已触发）
+        self.last_orphan_type = None            # 孤儿单类型: 'okx' 或 'binance'
+        self.last_not_arbitrage_key = None      # 不是套利单的标识
+        self.last_dangerous_key = None          # 危险仓位的标识
+        self.last_rate_diff_triggered = False   # 费率差是否已触发
+        self.last_formula_triggered = False     # 公式是否已触发
         
         # 防重入标志
         self._is_closing = False
@@ -128,26 +129,54 @@ class FullAutoCloser:
         
         while self.is_active:
             try:
+                # ========== 准备阶段：步骤1-3（执行一次，直到成功创建副本） ==========
+                
                 # 步骤1：拷贝平仓模板
                 self._init_close_cache()
                 
-                # 步骤2：读取数据
-                market_data, user_data = await self._fetch_data()
-                if market_data is None or user_data is None:
+                # 步骤2-3：循环读取数据，直到成功填充参数创建副本
+                while self.is_active:
+                    # 步骤2：读取数据
+                    market_data, user_data = await self._fetch_data()
+                    if market_data is None or user_data is None:
+                        await asyncio.sleep(0.5)
+                        continue
+                    
+                    # 步骤3：填充平仓参数，创建副本
+                    has_position = self._fill_close_params(user_data)
+                    if has_position:
+                        logger.info("📦【全自动清仓工人】准备阶段完成，副本已创建，进入监控阶段")
+                        break
+                    
                     await asyncio.sleep(0.5)
-                    continue
                 
-                # 步骤3：填充平仓参数，有值就填充，填充完立即创建副本
-                has_position = self._fill_close_params(user_data)
+                if not self.is_active:
+                    break
                 
-                # 步骤4：缓存资金费结算时间，检测变化
-                self._update_settle_time_cache(user_data)
+                # ========== 监控阶段：步骤4-5（循环检测，直到触发清仓） ==========
                 
-                # 步骤5：检测清仓条件（有持仓才检测）
-                if has_position:
-                    await self._check_close_conditions(market_data, user_data)
+                # 重置防重复状态
+                self._reset_trigger_state()
                 
-                await asyncio.sleep(0.5)
+                while self.is_active:
+                    # 更新数据
+                    market_data, user_data = await self._fetch_data()
+                    if market_data is None or user_data is None:
+                        await asyncio.sleep(0.5)
+                        continue
+                    
+                    # 步骤4：缓存资金费结算时间，检测变化
+                    self._update_settle_time_cache(user_data)
+                    
+                    # 步骤5：检测清仓条件
+                    triggered = await self._check_close_conditions(market_data, user_data)
+                    
+                    if triggered:
+                        # 触发清仓，退出监控阶段，回到外层重新从准备阶段开始
+                        logger.info("🔄【全自动清仓工人】清仓已触发，返回准备阶段")
+                        break
+                    
+                    await asyncio.sleep(0.5)
                 
             except asyncio.CancelledError:
                 logger.info("🛑【全自动清仓工人】监控循环被取消")
@@ -159,6 +188,14 @@ class FullAutoCloser:
                 await asyncio.sleep(1)
         
         logger.info("🛑【全自动清仓工人】监控循环结束")
+    
+    def _reset_trigger_state(self):
+        """重置防重复触发状态"""
+        self.last_orphan_type = None
+        self.last_not_arbitrage_key = None
+        self.last_dangerous_key = None
+        self.last_rate_diff_triggered = False
+        self.last_formula_triggered = False
     
     # ==================== 步骤1：拷贝模板 ====================
     
@@ -192,7 +229,7 @@ class FullAutoCloser:
         """
         填充平仓参数，有值就填充，填充完立即创建副本
         
-        返回: True 表示至少有一个交易所有持仓
+        返回: True 表示至少有一个交易所有持仓，副本创建成功
               False 表示两个交易所都没有持仓，或数据未到
         """
         okx_data = user_data.get('okx', {})
@@ -231,7 +268,7 @@ class FullAutoCloser:
             
             # 创建副本
             self.okx_close_copy = copy.deepcopy(self.okx_close_cache)
-            logger.debug(f"📝【全自动清仓工人】欧易平仓参数已填充: {okx_inst_id}")
+            logger.info(f"📝【全自动清仓工人】欧易平仓参数已填充: {okx_inst_id}")
         else:
             self.okx_close_copy = None
         
@@ -265,7 +302,7 @@ class FullAutoCloser:
             
             # 创建副本
             self.binance_close_copy = copy.deepcopy(self.binance_close_cache)
-            logger.debug(f"📝【全自动清仓工人】币安平仓参数已填充: {binance_symbol}")
+            logger.info(f"📝【全自动清仓工人】币安平仓参数已填充: {binance_symbol}")
         else:
             self.binance_close_copy = None
         
@@ -308,8 +345,9 @@ class FullAutoCloser:
         self.cached_okx_settle_time = current_okx_time
         self.cached_binance_settle_time = current_binance_time
         
-        # 任意一个变了，启动60秒倒计时
+        # 任意一个变了，启动60秒倒计时，并重置公式触发状态
         if settle_changed:
+            self.last_formula_triggered = False
             self._start_funding_delay_timer()
     
     def _start_funding_delay_timer(self):
@@ -331,65 +369,95 @@ class FullAutoCloser:
     
     # ==================== 步骤5：检测清仓条件 ====================
     
-    async def _check_close_conditions(self, market_data: Dict, user_data: Dict):
-        """检测所有清仓条件，任一触发即平仓"""
+    async def _check_close_conditions(self, market_data: Dict, user_data: Dict) -> bool:
+        """
+        检测所有清仓条件，任一触发即平仓
+        
+        返回: True 表示触发了清仓
+              False 表示没有触发
+        """
         if self._is_closing:
-            return
+            return False
         
         okx_data = user_data.get('okx', {})
         binance_data = user_data.get('binance', {})
         
         # 条件1：孤儿单（只有一个交易所有持仓）
-        if self._check_orphan(okx_data, binance_data):
-            await self._execute_close("孤儿单")
-            return
+        orphan_type = self._check_orphan(okx_data, binance_data)
+        if orphan_type:
+            await self._execute_close(f"{orphan_type}孤儿单")
+            return True
         
         # 两个都有持仓，继续检测其他条件
         if not self.okx_close_copy or not self.binance_close_copy:
-            return
+            return False
         
         # 条件2：不是套利单
         if self._check_not_arbitrage(okx_data, binance_data):
             await self._execute_close("不是套利单")
-            return
+            return True
         
         # 条件3：危险仓位
         if self._check_dangerous(okx_data, binance_data):
             await self._execute_close("危险仓位")
-            return
+            return True
         
         # 条件4：费率差缩小
         if self._check_rate_diff_small(market_data):
             await self._execute_close("费率差缩小")
-            return
+            return True
         
         # 条件5/6：资金费后公式
-        if self.funding_check_active:
+        if self.funding_check_active and not self.last_formula_triggered:
             formula_result = self._check_funding_formula(okx_data, binance_data)
             if formula_result == "profit":
+                self.last_formula_triggered = True
                 self.funding_check_active = False
                 await self._execute_close("资金费后公式触发（≥0.5）")
-                return
+                return True
             elif formula_result == "loss":
+                self.last_formula_triggered = True
                 self.funding_check_active = False
                 await self._execute_close("资金费后公式触发（≤-0.2）")
-                return
+                return True
+        
+        return False
     
     # -------------------- 条件1：孤儿单 --------------------
     
-    def _check_orphan(self, okx_data: Dict, binance_data: Dict) -> bool:
-        """检查是否孤儿单（只有一个交易所有持仓）"""
+    def _check_orphan(self, okx_data: Dict, binance_data: Dict) -> Optional[str]:
+        """
+        检查是否孤儿单（只有一个交易所有持仓）
+        
+        返回: '欧易' 表示欧易孤儿单
+              '币安' 表示币安孤儿单
+              None 表示不是孤儿单或已触发过
+        """
         okx_symbol = okx_data.get('开仓合约名') or ''
         binance_symbol = binance_data.get('开仓合约名') or ''
         
         has_okx = bool(okx_symbol)
         has_binance = bool(binance_symbol)
         
-        if has_okx != has_binance:
-            logger.warning(f"⚠️【全自动清仓工人】检测到孤儿单: 欧易={has_okx}, 币安={has_binance}")
-            return True
+        # 欧易孤儿单
+        if has_okx and not has_binance:
+            if self.last_orphan_type == 'okx':
+                return None  # 已触发过，不重复
+            self.last_orphan_type = 'okx'
+            logger.warning(f"⚠️【全自动清仓工人】检测到欧易孤儿单")
+            return '欧易'
         
-        return False
+        # 币安孤儿单
+        if has_binance and not has_okx:
+            if self.last_orphan_type == 'binance':
+                return None
+            self.last_orphan_type = 'binance'
+            logger.warning(f"⚠️【全自动清仓工人】检测到币安孤儿单")
+            return '币安'
+        
+        # 不是孤儿单，重置状态
+        self.last_orphan_type = None
+        return None
     
     # -------------------- 条件2：不是套利单 --------------------
     
@@ -414,60 +482,90 @@ class FullAutoCloser:
         okx_value = float(okx_value)
         binance_value = float(binance_value)
         
+        # 生成当前状态标识
+        current_key = f"{okx_symbol}_{binance_symbol}_{okx_side}_{binance_side}_{okx_value:.2f}_{binance_value:.2f}"
+        
         # 合约名不同
         if okx_symbol != binance_symbol:
-            logger.warning(f"⚠️【全自动清仓工人】合约名不同: 欧易={okx_symbol}, 币安={binance_symbol}")
+            if current_key == self.last_not_arbitrage_key:
+                return False
+            self.last_not_arbitrage_key = current_key
+            logger.warning(f"⚠️【全自動清仓工人】合约名不同: 欧易={okx_symbol}, 币安={binance_symbol}")
             return True
         
         # 方向相同
         if okx_side == binance_side:
+            if current_key == self.last_not_arbitrage_key:
+                return False
+            self.last_not_arbitrage_key = current_key
             logger.warning(f"⚠️【全自动清仓工人】方向相同: 欧易={okx_side}, 币安={binance_side}")
             return True
         
         # 仓位价值差 > 100
         value_diff = abs(okx_value - binance_value)
         if value_diff > 100:
+            if current_key == self.last_not_arbitrage_key:
+                return False
+            self.last_not_arbitrage_key = current_key
             logger.warning(f"⚠️【全自动清仓工人】仓位价值差 > 100: {value_diff:.2f}")
             return True
         
+        # 条件不满足，重置标识
+        self.last_not_arbitrage_key = None
         return False
     
     # -------------------- 条件3：危险仓位 --------------------
     
     def _check_dangerous(self, okx_data: Dict, binance_data: Dict) -> bool:
         """检查是否危险仓位（涨跌幅绝对值 ≥ 36）"""
-        # 欧易
-        okx_mark = okx_data.get('标记价涨跌盈亏幅')
-        okx_last = okx_data.get('最新价涨跌盈亏幅')
+        # 生成当前状态标识
+        okx_mark_val = okx_data.get('标记价涨跌盈亏幅')
+        okx_last_val = okx_data.get('最新价涨跌盈亏幅')
+        binance_mark_val = binance_data.get('标记价涨跌盈亏幅')
+        binance_last_val = binance_data.get('最新价涨跌盈亏幅')
         
-        if okx_mark is not None:
-            okx_mark = abs(float(okx_mark))
+        current_key = f"{okx_mark_val}_{okx_last_val}_{binance_mark_val}_{binance_last_val}"
+        
+        # 欧易
+        if okx_mark_val is not None:
+            okx_mark = abs(float(okx_mark_val))
             if okx_mark >= 36:
+                if current_key == self.last_dangerous_key:
+                    return False
+                self.last_dangerous_key = current_key
                 logger.warning(f"⚠️【全自动清仓工人】欧易标记价涨跌盈亏幅 ≥ 36: {okx_mark:.2f}")
                 return True
         
-        if okx_last is not None:
-            okx_last = abs(float(okx_last))
+        if okx_last_val is not None:
+            okx_last = abs(float(okx_last_val))
             if okx_last >= 36:
+                if current_key == self.last_dangerous_key:
+                    return False
+                self.last_dangerous_key = current_key
                 logger.warning(f"⚠️【全自动清仓工人】欧易最新价涨跌盈亏幅 ≥ 36: {okx_last:.2f}")
                 return True
         
         # 币安
-        binance_mark = binance_data.get('标记价涨跌盈亏幅')
-        binance_last = binance_data.get('最新价涨跌盈亏幅')
-        
-        if binance_mark is not None:
-            binance_mark = abs(float(binance_mark))
+        if binance_mark_val is not None:
+            binance_mark = abs(float(binance_mark_val))
             if binance_mark >= 36:
+                if current_key == self.last_dangerous_key:
+                    return False
+                self.last_dangerous_key = current_key
                 logger.warning(f"⚠️【全自动清仓工人】币安标记价涨跌盈亏幅 ≥ 36: {binance_mark:.2f}")
                 return True
         
-        if binance_last is not None:
-            binance_last = abs(float(binance_last))
+        if binance_last_val is not None:
+            binance_last = abs(float(binance_last_val))
             if binance_last >= 36:
+                if current_key == self.last_dangerous_key:
+                    return False
+                self.last_dangerous_key = current_key
                 logger.warning(f"⚠️【全自动清仓工人】币安最新价涨跌盈亏幅 ≥ 36: {binance_last:.2f}")
                 return True
         
+        # 条件不满足，重置标识
+        self.last_dangerous_key = None
         return False
     
     # -------------------- 条件4：费率差缩小 --------------------
@@ -487,9 +585,15 @@ class FullAutoCloser:
         
         try:
             rate_diff = float(rate_diff)
-            if rate_diff <= 0:
+            if rate_diff <= 0.3:
+                if self.last_rate_diff_triggered:
+                    return False
+                self.last_rate_diff_triggered = True
                 logger.warning(f"⚠️【全自动清仓工人】费率差缩小: {self.current_symbol} rate_diff={rate_diff}")
                 return True
+            else:
+                # 费率差恢复到0.3以上，重置触发状态
+                self.last_rate_diff_triggered = False
         except Exception as e:
             logger.error(f"❌【全自动清仓工人】检查费率差异常: {e}")
         
@@ -609,4 +713,5 @@ class FullAutoCloser:
         self.current_symbol = None
         self._is_closing = False
         self._cancel_funding_timer()
+        self._reset_trigger_state()
         logger.info("🧹【全自动清仓工人】完全重置")
