@@ -13,6 +13,9 @@ from .semi_auto.open_position_worker import OpenPositionWorker
 from .semi_auto.sl_tp_worker import SlTpWorker
 from .semi_auto.close_position_worker import ClosePositionWorker
 
+# 全自动模块
+from .full_auto import AutoOpen, AutoSlTp, AutoClose
+
 
 class TradingLogic:
     """
@@ -29,10 +32,17 @@ class TradingLogic:
             brain: 大脑实例
         """
         self.brain = brain
+        
+        # 半自动工人
         self.leverage_worker = LeverageWorker(brain)
         self.open_worker = OpenPositionWorker(brain)
         self.sl_tp_worker = SlTpWorker(brain)
         self.close_worker = ClosePositionWorker(brain)
+        
+        # 全自动工人
+        self.auto_open = AutoOpen(brain)
+        self.auto_sltp = AutoSlTp(brain)
+        self.auto_close = AutoClose(brain)
     
     async def enter_room(self, command: str, params: dict) -> dict:
         """
