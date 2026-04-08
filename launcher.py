@@ -219,6 +219,16 @@ async def run_completion_module(brain):
     except Exception as e:
         logger.error(f"❌ 数据完成部门线程异常: {e}")
 
+async def run_ticker_manager(brain):
+    """运行币安24h涨跌幅数据管理器（多线程用）"""
+    logger.info("📈【币安Ticker线程】已启动")
+    try:
+        # ticker_manager 已经在运行，只需要保持
+        while brain.running:
+            await asyncio.sleep(1)
+    except Exception as e:
+        logger.error(f"❌ 币安Ticker线程异常: {e}")
+
 
 # ==================== 主启动函数 ====================
 async def main():
@@ -460,13 +470,24 @@ async def main():
             logger.error(f"❌ 启动数据完成模块失败: {e}")
             logger.error(traceback.format_exc())
         
-        # ==================== 完成初始化 ====================
+        # ==================== 17. 启动币安24h涨跌幅数据管理器 ====================
+        logger.info("【📈】启动币安24h涨跌幅数据管理器...")
+        try:
+            from public_http_fetcher.binance_ticker import BinanceTickerManager
+            ticker_manager = BinanceTickerManager(brain.data_manager, update_interval=60)
+            await ticker_manager.start()
+            brain.ticker_manager = ticker_manager
+            logger.info("✅ 币安24h涨跌幅数据管理器已启动")
+        except Exception as e:
+            logger.error(f"❌ 启动币安24h涨跌幅数据管理器失败: {e}")
+        
+        # ==================== 18. 完成初始化 ====================
         brain.running = True
         logger.info("=" * 60)
         logger.info("🎉 所有模块初始化完成！")
         logger.info("=" * 60)
         
-        # ==================== 17. 根据模式选择运行方式 ====================
+        # ==================== 19. 根据模式选择运行方式 ====================
         if MULTI_THREAD_MODE:
             # ===== 多线程模式 =====
             logger.info("🚀 进入多模块并行运行模式...")
@@ -511,7 +532,15 @@ async def main():
                     lambda: run_completion_module(brain),
                     "Completion"
                 ))
-                logger.info("  └─ 数据完成部门线程已启动")
+                logger.info("  ├─ 数据完成部门线程已启动")
+            
+            # 6. 币安24h涨跌幅数据管理器线程
+            if brain.ticker_manager:
+                module_threads.append(run_async_in_thread(
+                    lambda: run_ticker_manager(brain),
+                    "TickerManager"
+                ))
+                logger.info("  └─ 币安Ticker线程已启动")
             
             logger.info(f"✅ 共启动 {len(module_threads)} 个模块线程")
             logger.info("=" * 60)
@@ -527,13 +556,27 @@ async def main():
                     if not thread.is_alive():
                         logger.error(f"⚠️ 模块线程 {thread.name} 已停止，尝试重启...")
                         # 重启线程
-                        new_thread = run_async_in_thread(
-                            [run_public_websocket, run_private_websocket, 
-                             run_public_pipeline, run_private_pipeline, 
-                             run_completion_module][i](brain),
-                            thread.name
-                        )
-                        module_threads[i] = new_thread
+                        thread_funcs = [
+                            lambda: run_public_websocket(brain),
+                            lambda: run_private_websocket(brain),
+                            lambda: run_public_pipeline(brain),
+                            lambda: run_private_pipeline(brain),
+                            lambda: run_completion_module(brain),
+                            lambda: run_ticker_manager(brain)
+                        ]
+                        # 根据线程名称找到对应的函数
+                        name_to_func = {
+                            "PublicWS": thread_funcs[0],
+                            "PrivateWS": thread_funcs[1],
+                            "Pipeline": thread_funcs[2],
+                            "PrivatePipeline": thread_funcs[3],
+                            "Completion": thread_funcs[4],
+                            "TickerManager": thread_funcs[5]
+                        }
+                        func = name_to_func.get(thread.name)
+                        if func:
+                            new_thread = run_async_in_thread(func, thread.name)
+                            module_threads[i] = new_thread
         
         else:
             # ===== 单线程模式 =====
