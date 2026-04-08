@@ -329,8 +329,8 @@ class Scout:
             larger = max(okx_asset, binance_asset)
             smaller = min(okx_asset, binance_asset)
             ratio = larger / smaller if smaller > 0 else float('inf')
-            
-            if ratio > 2:
+            # 测试用，正常是2
+            if ratio > 200:
                 logger.warning(f"⚠️【全自动侦察兵】资产比例不匹配: 欧易={okx_asset:.2f}, 币安={binance_asset:.2f}, 比例={ratio:.2f}")
                 return False
             
@@ -353,14 +353,14 @@ class Scout:
                 rate_diff = float(data.get('rate_diff') or 0)
                 okx_countdown = int(data.get('okx_countdown_seconds') or 0)
                 binance_countdown = int(data.get('binance_countdown_seconds') or 0)
-                
-                if rate_diff < 0.8:
+                # 测试用，正常是0.8
+                if rate_diff < 0.08:
                     continue
                 
                 countdown_diff = abs(okx_countdown - binance_countdown)
-                if countdown_diff > 10:
+                if countdown_diff > 10000:
                     continue
-                
+                # 测试用，正常是10
                 candidates.append({
                     'symbol': symbol,
                     'rate_diff': rate_diff
