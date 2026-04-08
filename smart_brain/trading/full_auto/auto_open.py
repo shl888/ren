@@ -135,16 +135,16 @@ class Scout:
             except Exception as e:
                 logger.error(f"❌【全自动侦察兵】侦察循环异常: {e}")
                 await asyncio.sleep(60)
-    
+    # 测试用，正常第57分钟
     def _calculate_next_run(self, now: datetime) -> datetime:
         """计算下一个第57分钟的时间，正确处理跨小时和跨天"""
-        current_hour_57 = now.replace(minute=57, second=0, microsecond=0)
+        current_hour_27 = now.replace(minute=27, second=0, microsecond=0)
         
-        if now < current_hour_57:
-            return current_hour_57
+        if now < current_hour_27:
+            return current_hour_27
         else:
             next_hour = now + timedelta(hours=1)
-            return next_hour.replace(minute=57, second=0, microsecond=0)
+            return next_hour.replace(minute=27, second=0, microsecond=0)
     
     # ==================== 重试控制 ====================
     
