@@ -487,7 +487,7 @@ class FullAutoCloser:
         
         try:
             rate_diff = float(rate_diff)
-            if rate_diff <= 0.3:
+            if rate_diff <= 0:
                 logger.warning(f"⚠️【全自动清仓工人】费率差缩小: {self.current_symbol} rate_diff={rate_diff}")
                 return True
         except Exception as e:
