@@ -79,5 +79,5 @@ class BinanceTickerFetcher:
                 logger.warning(f"⚠️【币安Ticker】解析 {symbol} 数据异常: {e}")
                 continue
         
-        logger.info(f"✅【币安Ticker】获取成功，共 {len(result)} 个USDT永续合约")
+        logger.debug(f"✅【币安Ticker】获取成功，共 {len(result)} 个USDT永续合约")
         return result

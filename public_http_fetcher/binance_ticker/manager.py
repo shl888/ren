@@ -38,7 +38,7 @@ class BinanceTickerManager:
         
         self._running = True
         self._task = asyncio.create_task(self._update_loop())
-        logger.info("🚀【币安Ticker管理器】已启动")
+        logger.info("🚀【币安Ticker管理器】已启动，1分钟后开始首次获取")
     
     async def stop(self):
         """停止定时更新任务"""
@@ -54,21 +54,38 @@ class BinanceTickerManager:
     
     async def _update_loop(self):
         """定时更新循环"""
+        # 启动后先等1分钟，不立即请求
+        logger.info("⏳【币安Ticker管理器】等待60秒后开始首次获取...")
+        await asyncio.sleep(60)
+        
         while self._running:
             try:
+                # 尝试获取数据
                 await self._update_once()
-                await asyncio.sleep(self.update_interval)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"❌【币安Ticker管理器】更新循环异常: {e}")
-                await asyncio.sleep(10)  # 出错后等10秒再试
+            except Exception:
+                # 任何异常都吞掉，打印日志，继续下一轮
+                logger.error("❌【币安Ticker管理器】更新失败，跳过本次，等待下一轮", exc_info=True)
+            
+            # 等待下一轮（无论成功失败都等）
+            if self._running:
+                await asyncio.sleep(self.update_interval)
     
     async def _update_once(self):
         """执行一次数据更新"""
-        data = await self.fetcher.fetch()
+        # 加上超时控制，防止请求卡死
+        try:
+            data = await asyncio.wait_for(self.fetcher.fetch(), timeout=15.0)
+        except asyncio.TimeoutError:
+            logger.error("❌【币安Ticker管理器】请求超时（15秒），跳过本次")
+            return
+        except Exception as e:
+            logger.error(f"❌【币安Ticker管理器】请求异常: {e}")
+            return
         
         if data is None:
+            logger.warning("⚠️【币安Ticker管理器】获取数据为空，跳过本次")
             return
         
         # 添加更新时间戳
@@ -77,17 +94,19 @@ class BinanceTickerManager:
         
         # 推送到 data_manager 的存储区
         await self._push_to_storage(data)
+        logger.info(f"✅【币安Ticker管理器】数据已更新，共 {len(data)} 个合约")
     
     async def _push_to_storage(self, data: dict):
         """
         推送数据到 data_manager 的 binance_ticker_24hr 存储区
         """
-        if hasattr(self.data_manager, 'update_binance_ticker_24hr'):
-            await self.data_manager.update_binance_ticker_24hr(data)
-        else:
-            # 如果 data_manager 还没有这个方法，直接操作 memory_store
-            self.data_manager.memory_store['binance_ticker_24hr'] = data
-            logger.debug(f"📤【币安Ticker管理器】数据已更新到存储区")
+        try:
+            if hasattr(self.data_manager, 'update_binance_ticker_24hr'):
+                await self.data_manager.update_binance_ticker_24hr(data)
+            else:
+                self.data_manager.memory_store['binance_ticker_24hr'] = data
+        except Exception as e:
+            logger.error(f"❌【币安Ticker管理器】推送数据到存储区失败: {e}")
     
     async def fetch_once(self) -> dict:
         """手动获取一次数据（供测试用）"""
