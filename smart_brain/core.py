@@ -1,5 +1,12 @@
 """
 大脑核心主控 - 调度版（只转发，不干活）
+
+职责：
+- 初始化和管理所有工人（半自动、全自动、下单工人）
+- 接收前端指令，转发给对应工人
+- 接收下单工人返回的结果，根据信息标签转发给对应工人
+- 管理交易模式（forbidden / half / full）
+- 不解析指令内容，不处理业务逻辑
 """
 
 import asyncio
@@ -19,79 +26,67 @@ if PROJECT_ROOT not in sys.path:
 
 logger = logging.getLogger(__name__)
 
+
 class SmartBrain:
+    """
+    智能大脑 - 调度中心
+    
+    架构：
+    - 大脑只做转发，不处理业务逻辑
+    - 工人各自独立，通过数据驱动工作
+    - 交易模式控制：forbidden（禁止）/ half（半自动）/ full（全自动）
+    """
+    
     def __init__(self, http_server=None, http_runner=None, 
                  pipeline_manager=None, funding_manager=None, 
                  frontend_relay=None):
-        # 注入的服务
+        
+        # ========== 注入的外部服务 ==========
         self.http_server = http_server
         self.http_runner = http_runner
         self.pipeline_manager = pipeline_manager
         self.funding_manager = funding_manager
         self.frontend_relay = frontend_relay
         
-        # 自己的管理器
+        # ========== 数据管理器 ==========
         from .data_manager import DataManager
         self.data_manager = DataManager(self)
 
-        # HTTP模块服务（用于执行交易）
+        # ========== HTTP模块服务（用于执行交易） ==========
         self.http_module = None
         
-        # 下单工人（只负责执行，大脑不直接发数据给它）
+        # ========== 下单工人（只负责执行，大脑不直接发数据给它） ==========
         self.trader = None
         
-        # 半自动工人
-        self.leverage_worker = None
-        self.open_worker = None
-        self.sl_tp_worker = None
-        self.close_worker = None
+        # ========== 半自动工人 ==========
+        self.leverage_worker = None      # 杠杆设置
+        self.open_worker = None          # 开仓
+        self.sl_tp_worker = None         # 止损止盈
+        self.close_worker = None         # 平仓
         
-        # 运行状态
+        # ========== 全自动工人 ==========
+        self.auto_open = None            # 侦察兵，检测开仓条件
+        self.auto_sltp = None            # 止损止盈
+        self.auto_close = None           # 持续监控清仓
+        
+        # ========== 运行状态 ==========
         self.running = False
         self.status_log_task = None
         
-        # 控制指令存储
+        # ========== 配置数据 ==========
         self.config_data = None
         
-        # 交易模式：默认禁止交易
-        self.trade_mode = "forbidden"  # forbidden / half / full
+        # ========== 交易模式 ==========
+        # forbidden: 禁止交易
+        # half: 半自动模式（前端手动操作）
+        # full: 全自动模式（策略自动执行）
+        self.trade_mode = "forbidden"
         
-        # 信号处理
+        # ========== 信号处理 ==========
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
     
-    # ========== 大脑不再有 send_to_worker 方法 ==========
-    
-    async def on_trader_results(self, data):
-        """
-        接收下单工人发来的数据（独立的一条数据）
-        
-        判断规则：
-        - 如果数据里有 "info" 字段 → 这是信息标签，根据内容转发给对应工人
-        - 否则 → 这是原始数据，直接推送到前端
-        """
-        # 判断是否是信息标签
-        if "info" in data:
-            info_value = data["info"]
-            logger.info(f"🏷️【智能大脑】收到信息标签: {info_value}")
-            
-            # 根据标签内容路由
-            if info_value in ["欧易杠杆设置成功", "币安杠杆设置成功"]:
-                if self.open_worker:
-                    self.open_worker.on_data(data)
-                    logger.info(f"📤【智能大脑】信息标签已转发给开仓工人: {info_value}")
-            elif info_value in ["欧易开仓成功", "币安开仓成功"]:
-                # TODO: 转发给全自动文件夹的止损止盈工人
-                logger.info(f"📌【智能大脑】开仓成功标签待转发: {info_value}")
-            else:
-                logger.warning(f"⚠️【智能大脑】未知信息标签: {info_value}")
-        else:
-            # 原始数据，直接推送到前端
-            if self.frontend_relay:
-                await self.frontend_relay.broadcast_execution_results([data])
-                logger.info(f"📤【智能大脑】原始数据已推送到前端")
-            else:
-                logger.warning("⚠️【智能大脑】frontend_relay 未设置，无法推送")
+    # ==================== 初始化 ====================
     
     async def initialize(self):
         """初始化智能大脑核心"""
@@ -105,14 +100,14 @@ class SmartBrain:
                 self.http_module = HTTPModuleService()
                 http_init_success = await self.http_module.initialize(self)
                 if not http_init_success:
-                    logger.error("❌【智能大脑】 HTTP模块服务初始化失败")
+                    logger.error("❌【智能大脑】HTTP模块服务初始化失败")
                     return False
-                logger.info("✅【智能大脑】 HTTP模块服务初始化成功")
+                logger.info("✅【智能大脑】HTTP模块服务初始化成功")
             except ImportError as e:
-                logger.error(f"❌【智能大脑】 无法导入HTTP模块服务: {e}")
+                logger.error(f"❌【智能大脑】无法导入HTTP模块服务: {e}")
                 return False
             except Exception as e:
-                logger.error(f"❌【智能大脑】 HTTP模块服务初始化异常: {e}")
+                logger.error(f"❌【智能大脑】HTTP模块服务初始化异常: {e}")
                 return False
             
             # 2. 创建下单工人
@@ -131,19 +126,27 @@ class SmartBrain:
             self.open_worker = OpenPositionWorker(self)
             self.sl_tp_worker = SlTpWorker(self)
             self.close_worker = ClosePositionWorker(self)
-            logger.info("✅【智能大脑】杠杆工人、开仓工人、止损止盈工人、平仓工人已创建")
+            logger.info("✅【智能大脑】半自动工人已创建（杠杆、开仓、止损止盈、平仓）")
             
-            # 4. 启动状态日志任务
+            # 4. 创建全自动工人
+            from .trading.full_auto import AutoOpen, AutoSlTp, AutoClose
+            
+            self.auto_open = AutoOpen(self)
+            self.auto_sltp = AutoSlTp(self)
+            self.auto_close = AutoClose(self)
+            logger.info("✅【智能大脑】全自动工人已创建（侦察兵、止损止盈、清仓）")
+            
+            # 5. 启动状态日志任务
             self.status_log_task = asyncio.create_task(self.data_manager._log_data_status())
             
-            # 5. 完成初始化
+            # 6. 完成初始化
             self.running = True
-            logger.info("✅【智能大脑】 大脑核心初始化完成")
+            logger.info("✅【智能大脑】大脑核心初始化完成")
             
             # 输出HTTP模块状态
             if self.http_module:
                 http_status = self.http_module.get_status()
-                logger.info(f"📊【智能大脑】 HTTP模块状态: {http_status}")
+                logger.info(f"📊【智能大脑】HTTP模块状态: {http_status}")
             
             return True
             
@@ -152,6 +155,8 @@ class SmartBrain:
             logger.error(traceback.format_exc())
             return False
     
+    # ==================== 数据接收 ====================
+    
     async def receive_market_data(self, processed_data):
         """接收市场数据（委托给data_manager）"""
         return await self.data_manager.receive_market_data(processed_data)
@@ -159,6 +164,44 @@ class SmartBrain:
     async def receive_private_data(self, private_data):
         """接收私人数据（委托给data_manager）"""
         return await self.data_manager.receive_private_data(private_data)
+    
+    # ==================== 接收下单工人返回的结果 ====================
+    
+    async def on_trader_results(self, data):
+        """
+        接收下单工人发来的数据（独立的一条数据）
+        
+        判断规则：
+        - 如果数据里有 "info" 字段 → 这是信息标签，根据内容转发给对应工人
+        - 否则 → 这是原始数据，直接推送到前端
+        """
+        # 判断是否是信息标签
+        if "info" in data:
+            info_value = data["info"]
+            logger.info(f"🏷️【智能大脑】收到信息标签: {info_value}")
+            
+            # 根据标签内容路由
+            if info_value in ["欧易杠杆设置成功", "币安杠杆设置成功"]:
+                # 转发给半自动开仓工人
+                if self.open_worker:
+                    self.open_worker.on_data(data)
+                    logger.info(f"📤【智能大脑】信息标签已转发给开仓工人: {info_value}")
+            
+            elif info_value in ["欧易开仓成功", "币安开仓成功"]:
+                # 转发给全自动止损止盈工人
+                if self.auto_sltp:
+                    self.auto_sltp.on_data(data)
+                    logger.info(f"📤【智能大脑】开仓成功标签已转发给全自动止损止盈工人: {info_value}")
+            
+            else:
+                logger.warning(f"⚠️【智能大脑】未知信息标签: {info_value}")
+        else:
+            # 原始数据，直接推送到前端
+            if self.frontend_relay:
+                await self.frontend_relay.broadcast_execution_results([data])
+                logger.info(f"📤【智能大脑】原始数据已推送到前端")
+            else:
+                logger.warning("⚠️【智能大脑】frontend_relay 未设置，无法推送")
     
     # ==================== 前端指令处理 ====================
     
@@ -177,6 +220,27 @@ class SmartBrain:
             new_mode = params.get('mode', 'forbidden')
             old_mode = self.trade_mode
             self.trade_mode = new_mode
+            
+            # 切换到全自动模式：发送「开启全自动」标签
+            if new_mode == 'full' and old_mode != 'full':
+                if self.auto_open:
+                    self.auto_open.on_data({"info": "开启全自动"})
+                if self.auto_sltp:
+                    self.auto_sltp.on_data({"info": "开启全自动"})
+                if self.auto_close:
+                    self.auto_close.on_data({"info": "开启全自动"})
+                logger.info("🎮【智能大脑】已向全自动工人发送「开启全自动」标签")
+            
+            # 从全自动切换到其他模式：发送「结束全自动」标签
+            elif old_mode == 'full' and new_mode != 'full':
+                if self.auto_open:
+                    self.auto_open.on_data({"info": "结束全自动"})
+                if self.auto_sltp:
+                    self.auto_sltp.on_data({"info": "结束全自动"})
+                if self.auto_close:
+                    self.auto_close.on_data({"info": "结束全自动"})
+                logger.info("🎮【智能大脑】已向全自动工人发送「结束全自动」标签")
+            
             logger.info(f"🎮【智能大脑】交易模式已切换: {old_mode} → {self.trade_mode}")
             return {
                 "success": True,
@@ -199,11 +263,11 @@ class SmartBrain:
                 "config_length": len(self.config_data)
             }
         
-        # ========== 开仓指令 ==========
+        # ========== 开仓指令（半自动） ==========
         if command == 'place_order':
             # 检查是否是禁止交易模式
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，开仓指令被拒绝")
+                logger.warning(f"🚫【智能大脑】当前为禁止交易模式，开仓指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -228,10 +292,10 @@ class SmartBrain:
                 "message": "开仓指令已转发给工人"
             }
         
-        # ========== 止损止盈指令 ==========
+        # ========== 止损止盈指令（半自动） ==========
         if command == 'set_sl_tp':
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，止损止盈指令被拒绝")
+                logger.warning(f"🚫【智能大脑】当前为禁止交易模式，止损止盈指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -252,10 +316,10 @@ class SmartBrain:
                 "message": "止损止盈指令已转发给工人"
             }
         
-        # ========== 平仓指令 ==========
+        # ========== 平仓指令（半自动） ==========
         if command == 'close_position':
             if self.trade_mode == "forbidden":
-                logger.warning(f"🚫【智能大脑】 当前为禁止交易模式，平仓指令被拒绝")
+                logger.warning(f"🚫【智能大脑】当前为禁止交易模式，平仓指令被拒绝")
                 return {
                     "success": False,
                     "received": True,
@@ -285,6 +349,8 @@ class SmartBrain:
             "command": command
         }
     
+    # ==================== 运行与关闭 ====================
+    
     async def run(self):
         """运行大脑核心"""
         try:
@@ -292,7 +358,6 @@ class SmartBrain:
             
             # 主循环
             while self.running:
-                await asyncio.sleep(0)
                 await asyncio.sleep(1)
         
         except KeyboardInterrupt:
@@ -314,11 +379,21 @@ class SmartBrain:
         logger.info("☑️【智能大脑】正在关闭大脑核心...")
         
         try:
-            # 1. 关闭HTTP模块服务
+            # 1. 如果当前是全自动模式，先发送结束标签
+            if self.trade_mode == 'full':
+                if self.auto_open:
+                    self.auto_open.on_data({"info": "结束全自动"})
+                if self.auto_sltp:
+                    self.auto_sltp.on_data({"info": "结束全自动"})
+                if self.auto_close:
+                    self.auto_close.on_data({"info": "结束全自动"})
+                logger.info("🎮【智能大脑】已向全自动工人发送「结束全自动」标签")
+            
+            # 2. 关闭HTTP模块服务
             if self.http_module:
                 await self.http_module.shutdown()
             
-            # 2. 取消状态日志任务
+            # 3. 取消状态日志任务
             if self.status_log_task:
                 self.status_log_task.cancel()
                 try:
@@ -326,11 +401,11 @@ class SmartBrain:
                 except asyncio.CancelledError:
                     pass
             
-            # 3. 关闭前端中继服务器
+            # 4. 关闭前端中继服务器
             if self.frontend_relay:
                 await self.frontend_relay.stop()
             
-            # 4. 关闭下单工人
+            # 5. 关闭下单工人
             if self.trader:
                 await self.trader.stop()
             
