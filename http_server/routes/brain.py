@@ -26,13 +26,14 @@ class BrainRoutes:
                 "/api/brain/data/private_user": "查看私人用户数据详情（币安+欧易）",
                 "/api/brain/data/okx_contracts": "查看OKX合约面值数据详情（262个合约）",
                 "/api/brain/data/binance_contracts": "查看币安合约精度数据详情",
+                "/api/brain/data/binance_ticker_24hr": "查看币安24小时涨跌幅数据",
                 "/api/brain/apis": "查看API凭证状态",
                 "/api/brain/status": "查看系统状态",
                 "/api/brain/data/clear": "清空所有数据（谨慎使用）",
                 "/api/brain/data/clear/{data_type}": "清空特定类型数据"
             },
             "current_time": datetime.now().isoformat(),
-            "note": "数据按来源分类：public_market（公开市场）、private_user（私人用户）、okx_contracts/binance_contracts（参考数据）"
+            "note": "数据按来源分类：public_market（公开市场）、private_user（私人用户）、okx_contracts/binance_contracts（参考数据）、binance_ticker_24hr（涨跌幅数据）"
         }
         return web.json_response(api_docs)
     
@@ -117,6 +118,18 @@ class BrainRoutes:
                 "timestamp": datetime.now().isoformat()
             }, status=500)
     
+    async def get_binance_ticker_24hr(self, request):
+        """获取币安24小时涨跌幅数据"""
+        try:
+            data = await self.brain.data_manager.get_binance_ticker_24hr()
+            return web.json_response(data)
+        except Exception as e:
+            logger.error(f"获取币安涨跌幅数据失败: {e}")
+            return web.json_response({
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }, status=500)
+    
     async def get_apis(self, request):
         """查看API凭证状态"""
         try:
@@ -159,7 +172,7 @@ class BrainRoutes:
         """清空特定类型数据"""
         try:
             data_type = request.match_info.get('data_type', '').lower()
-            valid_types = ['market', 'user', 'reference', 'tokens']
+            valid_types = ['market', 'user', 'reference', 'tokens', 'ticker']
             
             if data_type not in valid_types:
                 return web.json_response({
@@ -178,3 +191,4 @@ class BrainRoutes:
                 "success": False,
                 "error": str(e)
             }, status=500)
+            
