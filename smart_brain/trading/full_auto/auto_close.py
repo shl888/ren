@@ -154,6 +154,8 @@ class FullAutoCloser:
                 break
             except Exception as e:
                 logger.error(f"❌【全自动清仓工人】监控循环异常: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 await asyncio.sleep(1)
         
         logger.info("🛑【全自动清仓工人】监控循环结束")
@@ -191,14 +193,14 @@ class FullAutoCloser:
         填充平仓参数，有值就填充，填充完立即创建副本
         
         返回: True 表示至少有一个交易所有持仓
-              False 表示两个交易所都没有持仓
+              False 表示两个交易所都没有持仓，或数据未到
         """
         okx_data = user_data.get('okx', {})
         binance_data = user_data.get('binance', {})
         
-        # 提取开仓合约名
-        okx_symbol = okx_data.get('开仓合约名', '')
-        binance_symbol = binance_data.get('开仓合约名', '')
+        # 提取开仓合约名（None 或空字符串都视为无持仓）
+        okx_symbol = okx_data.get('开仓合约名') or ''
+        binance_symbol = binance_data.get('开仓合约名') or ''
         
         # 记录当前持仓合约名（用于检测费率差）
         self.current_symbol = binance_symbol if binance_symbol else okx_symbol
@@ -214,10 +216,15 @@ class FullAutoCloser:
         
         # ========== 欧易有持仓，填充欧易参数，创建副本 ==========
         if has_okx:
+            # 开仓方向（如果为None则跳过，数据未到）
+            okx_position_side = okx_data.get('开仓方向')
+            if okx_position_side is None:
+                self.okx_close_copy = None
+                return False
+            okx_position_side = okx_position_side.lower()
+            
             # 转换合约名格式：BTCUSDT → BTC-USDT-SWAP
             okx_inst_id = self._convert_okx_symbol(okx_symbol)
-            # 开仓方向转小写
-            okx_position_side = okx_data.get('开仓方向', '').lower()
             
             self.okx_close_cache['params']['instId'] = okx_inst_id
             self.okx_close_cache['params']['posSide'] = okx_position_side
@@ -230,10 +237,18 @@ class FullAutoCloser:
         
         # ========== 币安有持仓，填充币安参数，创建副本 ==========
         if has_binance:
-            # 开仓方向保持大写
-            binance_position_side = binance_data.get('开仓方向', '').upper()
-            # 持仓币数
-            binance_quantity = binance_data.get('持仓币数', 0)
+            # 开仓方向（如果为None则跳过，数据未到）
+            binance_position_side = binance_data.get('开仓方向')
+            if binance_position_side is None:
+                self.binance_close_copy = None
+                return False
+            binance_position_side = binance_position_side.upper()
+            
+            # 持仓币数（如果为None则跳过，数据未到）
+            binance_quantity = binance_data.get('持仓币数')
+            if binance_quantity is None:
+                self.binance_close_copy = None
+                return False
             
             self.binance_close_cache['params']['symbol'] = binance_symbol
             self.binance_close_cache['params']['positionSide'] = binance_position_side
@@ -364,8 +379,8 @@ class FullAutoCloser:
     
     def _check_orphan(self, okx_data: Dict, binance_data: Dict) -> bool:
         """检查是否孤儿单（只有一个交易所有持仓）"""
-        okx_symbol = okx_data.get('开仓合约名', '')
-        binance_symbol = binance_data.get('开仓合约名', '')
+        okx_symbol = okx_data.get('开仓合约名') or ''
+        binance_symbol = binance_data.get('开仓合约名') or ''
         
         has_okx = bool(okx_symbol)
         has_binance = bool(binance_symbol)
@@ -380,13 +395,24 @@ class FullAutoCloser:
     
     def _check_not_arbitrage(self, okx_data: Dict, binance_data: Dict) -> bool:
         """检查是否不是套利单"""
-        okx_symbol = okx_data.get('开仓合约名', '')
-        binance_symbol = binance_data.get('开仓合约名', '')
-        okx_side = okx_data.get('开仓方向', '').lower()
-        binance_side = binance_data.get('开仓方向', '').lower()
+        okx_symbol = okx_data.get('开仓合约名') or ''
+        binance_symbol = binance_data.get('开仓合约名') or ''
         
-        okx_value = float(okx_data.get('开仓价仓位价值', 0))
-        binance_value = float(binance_data.get('开仓价仓位价值', 0))
+        # 开仓方向（如果为None则跳过，数据未到）
+        okx_side = okx_data.get('开仓方向')
+        binance_side = binance_data.get('开仓方向')
+        if okx_side is None or binance_side is None:
+            return False
+        okx_side = okx_side.lower()
+        binance_side = binance_side.lower()
+        
+        # 开仓价仓位价值（如果为None则跳过，数据未到）
+        okx_value = okx_data.get('开仓价仓位价值')
+        binance_value = binance_data.get('开仓价仓位价值')
+        if okx_value is None or binance_value is None:
+            return False
+        okx_value = float(okx_value)
+        binance_value = float(binance_value)
         
         # 合约名不同
         if okx_symbol != binance_symbol:
@@ -411,26 +437,36 @@ class FullAutoCloser:
     def _check_dangerous(self, okx_data: Dict, binance_data: Dict) -> bool:
         """检查是否危险仓位（涨跌幅绝对值 ≥ 36）"""
         # 欧易
-        okx_mark = abs(float(okx_data.get('标记价涨跌盈亏幅', 0)))
-        okx_last = abs(float(okx_data.get('最新价涨跌盈亏幅', 0)))
+        okx_mark = okx_data.get('标记价涨跌盈亏幅')
+        okx_last = okx_data.get('最新价涨跌盈亏幅')
         
-        if okx_mark >= 36:
-            logger.warning(f"⚠️【全自动清仓工人】欧易标记价涨跌盈亏幅 ≥ 36: {okx_mark:.2f}")
-            return True
-        if okx_last >= 36:
-            logger.warning(f"⚠️【全自动清仓工人】欧易最新价涨跌盈亏幅 ≥ 36: {okx_last:.2f}")
-            return True
+        if okx_mark is not None:
+            okx_mark = abs(float(okx_mark))
+            if okx_mark >= 36:
+                logger.warning(f"⚠️【全自动清仓工人】欧易标记价涨跌盈亏幅 ≥ 36: {okx_mark:.2f}")
+                return True
+        
+        if okx_last is not None:
+            okx_last = abs(float(okx_last))
+            if okx_last >= 36:
+                logger.warning(f"⚠️【全自动清仓工人】欧易最新价涨跌盈亏幅 ≥ 36: {okx_last:.2f}")
+                return True
         
         # 币安
-        binance_mark = abs(float(binance_data.get('标记价涨跌盈亏幅', 0)))
-        binance_last = abs(float(binance_data.get('最新价涨跌盈亏幅', 0)))
+        binance_mark = binance_data.get('标记价涨跌盈亏幅')
+        binance_last = binance_data.get('最新价涨跌盈亏幅')
         
-        if binance_mark >= 36:
-            logger.warning(f"⚠️【全自动清仓工人】币安标记价涨跌盈亏幅 ≥ 36: {binance_mark:.2f}")
-            return True
-        if binance_last >= 36:
-            logger.warning(f"⚠️【全自动清仓工人】币安最新价涨跌盈亏幅 ≥ 36: {binance_last:.2f}")
-            return True
+        if binance_mark is not None:
+            binance_mark = abs(float(binance_mark))
+            if binance_mark >= 36:
+                logger.warning(f"⚠️【全自动清仓工人】币安标记价涨跌盈亏幅 ≥ 36: {binance_mark:.2f}")
+                return True
+        
+        if binance_last is not None:
+            binance_last = abs(float(binance_last))
+            if binance_last >= 36:
+                logger.warning(f"⚠️【全自动清仓工人】币安最新价涨跌盈亏幅 ≥ 36: {binance_last:.2f}")
+                return True
         
         return False
     
@@ -445,8 +481,12 @@ class FullAutoCloser:
         if not symbol_data:
             return False
         
+        rate_diff = symbol_data.get('rate_diff')
+        if rate_diff is None:
+            return False
+        
         try:
-            rate_diff = float(symbol_data.get('rate_diff') or 0)
+            rate_diff = float(rate_diff)
             if rate_diff <= 0.3:
                 logger.warning(f"⚠️【全自动清仓工人】费率差缩小: {self.current_symbol} rate_diff={rate_diff}")
                 return True
@@ -466,14 +506,22 @@ class FullAutoCloser:
         
         返回: "profit" 表示 ≥ 0.5
               "loss" 表示 ≤ -0.2
-              None 表示不满足
+              None 表示不满足或数据未到
         """
+        # 获取所需字段，任一为None则跳过
+        okx_pnl = okx_data.get('最新价浮盈')
+        binance_pnl = binance_data.get('最新价浮盈')
+        okx_value = okx_data.get('开仓价仓位价值')
+        binance_value = binance_data.get('开仓价仓位价值')
+        
+        if okx_pnl is None or binance_pnl is None or okx_value is None or binance_value is None:
+            return None
+        
         try:
-            okx_pnl = float(okx_data.get('最新价浮盈', 0))
-            binance_pnl = float(binance_data.get('最新价浮盈', 0))
-            
-            okx_value = float(okx_data.get('开仓价仓位价值', 0))
-            binance_value = float(binance_data.get('开仓价仓位价值', 0))
+            okx_pnl = float(okx_pnl)
+            binance_pnl = float(binance_pnl)
+            okx_value = float(okx_value)
+            binance_value = float(binance_value)
             
             # 分母 = |最新价浮盈| 较大一方的开仓价仓位价值
             if abs(okx_pnl) >= abs(binance_pnl):
