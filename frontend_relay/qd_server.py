@@ -420,6 +420,22 @@ class FrontendRelayServer:
         
         await self._safe_broadcast(message)
     
+    async def broadcast_binance_ticker_24hr(self, ticker_data: Dict):
+        """广播币安24小时涨跌幅数据到所有前端"""
+        logger.debug(f"📤【客户端】【涨跌幅数据推送】开始推送，客户端数: {len(self.ws_clients)}")
+        
+        if not self.ws_clients:
+            logger.debug(f"⚠️【客户端】【涨跌幅数据推送】没有客户端连接，跳过推送")
+            return
+        
+        message = {
+            "type": "binance_ticker_24hr",
+            "data": ticker_data,
+            "timestamp": time.time()
+        }
+        
+        await self._safe_broadcast(message)
+    
     async def _safe_broadcast(self, message):
         """
         安全广播 - 只推送给已认证的客户端，带详细日志
