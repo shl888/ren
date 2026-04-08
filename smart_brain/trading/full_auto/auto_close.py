@@ -174,6 +174,7 @@ class FullAutoCloser:
                     if triggered:
                         # 触发清仓，退出监控阶段，回到外层重新从准备阶段开始
                         logger.info("🔄【全自动清仓工人】清仓已触发，返回准备阶段")
+                        await asyncio.sleep(10)  # ← 就这一行
                         break
                     
                     await asyncio.sleep(0.5)
