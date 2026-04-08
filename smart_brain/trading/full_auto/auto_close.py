@@ -79,7 +79,7 @@ class FullAutoCloser:
             return
         
         info = data["info"]
-        logger.info(f"📥【全自动清仓工人】收到标签: {info}")
+        logger.debug(f"📥【全自动清仓工人】收到标签: {info}")
         
         if info == "开启全自动":
             self._activate()
@@ -139,7 +139,7 @@ class FullAutoCloser:
                     # 步骤2：读取数据
                     market_data, user_data = await self._fetch_data()
                     if market_data is None or user_data is None:
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)
                         continue
                     
                     # 步骤3：填充平仓参数，创建副本
@@ -148,7 +148,7 @@ class FullAutoCloser:
                         logger.info("📦【全自动清仓工人】准备阶段完成，副本已创建，进入监控阶段")
                         break
                     
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)
                 
                 if not self.is_active:
                     break
@@ -162,7 +162,7 @@ class FullAutoCloser:
                     # 更新数据
                     market_data, user_data = await self._fetch_data()
                     if market_data is None or user_data is None:
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(1)
                         continue
                     
                     # 步骤4：缓存资金费结算时间，检测变化
@@ -177,7 +177,7 @@ class FullAutoCloser:
                         await asyncio.sleep(10)  # ← 就这一行
                         break
                     
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(1)
                 
             except asyncio.CancelledError:
                 logger.info("🛑【全自动清仓工人】监控循环被取消")
@@ -269,7 +269,7 @@ class FullAutoCloser:
             
             # 创建副本
             self.okx_close_copy = copy.deepcopy(self.okx_close_cache)
-            logger.info(f"📝【全自动清仓工人】欧易平仓参数已填充: {okx_inst_id}")
+            logger.debug(f"📝【全自动清仓工人】欧易平仓参数已填充: {okx_inst_id}")
         else:
             self.okx_close_copy = None
         
@@ -303,7 +303,7 @@ class FullAutoCloser:
             
             # 创建副本
             self.binance_close_copy = copy.deepcopy(self.binance_close_cache)
-            logger.info(f"📝【全自动清仓工人】币安平仓参数已填充: {binance_symbol}")
+            logger.debug(f"📝【全自动清仓工人】币安平仓参数已填充: {binance_symbol}")
         else:
             self.binance_close_copy = None
         
