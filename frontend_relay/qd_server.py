@@ -406,7 +406,10 @@ class FrontendRelayServer:
     
     async def broadcast_execution_results(self, results):
         """广播订单执行结果到前端"""
-        logger.info(f"📤【客户端】【执行结果推送】开始推送，客户端数: {len(self.ws_clients)}")
+        # ========== 收到数据时打印 ==========
+        logger.info(f"📥【中继收到】results 数量: {len(results)}")
+        for i, res in enumerate(results):
+            logger.info(f"📥【中继收到】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}, success={res.get('success')}")
         
         if not self.ws_clients:
             logger.debug(f"⚠️【客户端】【执行结果推送】没有客户端连接，跳过推送")
@@ -417,6 +420,11 @@ class FrontendRelayServer:
             "data": results,
             "timestamp": time.time()
         }
+        
+        # ========== 发送前打印 ==========
+        logger.info(f"📤【中继发送】准备广播: type={message['type']}, data数量={len(message['data'])}")
+        for i, res in enumerate(message['data']):
+            logger.info(f"📤【中继发送】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}")
         
         await self._safe_broadcast(message)
     
