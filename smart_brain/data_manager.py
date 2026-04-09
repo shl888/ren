@@ -64,13 +64,13 @@ class DataManager:
                     'source': 'reference_task'
                 }
                 self.last_reference_time = now
-                logger.debug(f"✅【智能大脑】参考数据 {exchange}.{data_type} 已保存")
+                logger.debug(f"✅【智能大脑】参考数据 {exchange}.{data_type} 已保存（不推送前端）")
                 
-                # ✅ 推送存储后的面值数据
-                if self.brain.frontend_relay:
-                    reference_data_to_push = self.memory_store.get('reference_data', {})
-                    await self.brain.frontend_relay.broadcast_reference_data(reference_data_to_push)
-                    logger.debug(f"📤【智能大脑】已推送面值数据，共{len(reference_data_to_push)}条")
+                # ❌ 不再推送到前端（前端不需要面值/精度数据）
+                # if self.brain.frontend_relay:
+                #     reference_data_to_push = self.memory_store.get('reference_data', {})
+                #     await self.brain.frontend_relay.broadcast_reference_data(reference_data_to_push)
+                #     logger.debug(f"📤【智能大脑】已推送面值数据，共{len(reference_data_to_push)}条")
                 
             elif data_type == 'user_summary':
                 # 🎯 用户数据：账户、持仓、订单等
@@ -638,7 +638,7 @@ class DataManager:
             return f"{int(diff.total_seconds() / 3600)}小时前"
     
     async def _log_data_status(self):
-        """定期记录数据状态"""
+        """定期记录数据状态（只打印日志，不推送到前端）"""
         while self.brain.running:
             await asyncio.sleep(0)
             try:
@@ -667,34 +667,34 @@ class DataManager:
 涨跌幅数据: {ticker_count}条
 前端连接: {frontend_status}""")
                 
-                # 推送系统状态到前端
-                if self.brain.frontend_relay and frontend_clients > 0:
-                    try:
-                        system_status = {
-                            'market_data': {
-                                'count': market_count,
-                                'last_update': market_time
-                            },
-                            'user_data': {
-                                'count': user_count,
-                                'last_update': user_time
-                            },
-                            'reference_data': {
-                                'count': ref_count,
-                                'last_update': ref_time
-                            },
-                            'binance_ticker_24hr': {
-                                'count': ticker_count
-                            },
-                            'frontend': {
-                                'clients': frontend_clients,
-                                'messages_sent': frontend_stats.get('messages_broadcast', 0)
-                            },
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        await self.brain.frontend_relay.broadcast_system_status(system_status)
-                    except Exception as e:
-                        logger.debug(f"❌【智能大脑】推送系统状态失败: {e}")
+                # ❌ 不再推送系统状态到前端
+                # if self.brain.frontend_relay and frontend_clients > 0:
+                #     try:
+                #         system_status = {
+                #             'market_data': {
+                #                 'count': market_count,
+                #                 'last_update': market_time
+                #             },
+                #             'user_data': {
+                #                 'count': user_count,
+                #                 'last_update': user_time
+                #             },
+                #             'reference_data': {
+                #                 'count': ref_count,
+                #                 'last_update': ref_time
+                #             },
+                #             'binance_ticker_24hr': {
+                #                 'count': ticker_count
+                #             },
+                #             'frontend': {
+                #                 'clients': frontend_clients,
+                #                 'messages_sent': frontend_stats.get('messages_broadcast', 0)
+                #             },
+                #             'timestamp': datetime.now().isoformat()
+                #         }
+                #         await self.brain.frontend_relay.broadcast_system_status(system_status)
+                #     except Exception as e:
+                #         logger.debug(f"❌【智能大脑】推送系统状态失败: {e}")
                 
             except asyncio.CancelledError:
                 break

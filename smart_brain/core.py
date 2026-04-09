@@ -5,7 +5,7 @@
 - 初始化和管理所有工人（半自动、全自动、下单工人）
 - 接收前端指令，转发给对应工人
 - 接收下单工人返回的结果，根据信息标签转发给对应工人
-- 管理交易模式（forbidden / half / full）
+- 管理交易模式（禁止交易 / 半自动 / 全自动）
 - 不解析指令内容，不处理业务逻辑
 """
 
@@ -34,7 +34,7 @@ class SmartBrain:
     架构：
     - 大脑只做转发，不处理业务逻辑
     - 工人各自独立，通过数据驱动工作
-    - 交易模式控制：forbidden（禁止）/ half（半自动）/ full（全自动）
+    - 交易模式控制：禁止交易（禁止）/ 半自动（半自动）/ 全自动（全自动）
     """
     
     def __init__(self, http_server=None, http_runner=None, 
@@ -77,10 +77,10 @@ class SmartBrain:
         self.config_data = None
         
         # ========== 交易模式 ==========
-        # forbidden: 禁止交易
-        # half: 半自动模式（前端手动操作）
-        # full: 全自动模式（策略自动执行）
-        self.trade_mode = "forbidden"
+        # 禁止交易: 禁止交易
+        # 半自动: 半自动模式（前端手动操作）
+        # 全自动: 全自动模式（策略自动执行）
+        self.trade_mode = "禁止交易"
         
         # ========== 信号处理 ==========
         signal.signal(signal.SIGINT, self.handle_signal)
@@ -129,7 +129,7 @@ class SmartBrain:
             logger.info("✅【智能大脑】半自动工人已创建（杠杆、开仓、止损止盈、平仓）")
             
             # 4. 创建全自动工人
-            from .trading.full_auto import AutoOpen, AutoSlTp, AutoClose
+            from .trading.全自动_auto import AutoOpen, AutoSlTp, AutoClose
             
             self.auto_open = AutoOpen(self)
             self.auto_sltp = AutoSlTp(self)
@@ -217,12 +217,12 @@ class SmartBrain:
         
         # ========== 交易模式指令 ==========
         if command == 'set_trade_mode':
-            new_mode = params.get('mode', 'forbidden')
+            new_mode = params.get('mode', '禁止交易')
             old_mode = self.trade_mode
             self.trade_mode = new_mode
             
             # 切换到全自动模式：发送「开启全自动」标签
-            if new_mode == 'full' and old_mode != 'full':
+            if new_mode == '全自动' and old_mode != '全自动':
                 if self.auto_open:
                     self.auto_open.on_data({"info": "开启全自动"})
                 if self.auto_sltp:
@@ -232,7 +232,7 @@ class SmartBrain:
                 logger.info("🎮【智能大脑】已向全自动工人发送「开启全自动」标签")
             
             # 从全自动切换到其他模式：发送「结束全自动」标签
-            elif old_mode == 'full' and new_mode != 'full':
+            elif old_mode == '全自动' and new_mode != '全自动':
                 if self.auto_open:
                     self.auto_open.on_data({"info": "结束全自动"})
                 if self.auto_sltp:
@@ -266,7 +266,7 @@ class SmartBrain:
         # ========== 开仓指令（半自动） ==========
         if command == 'place_order':
             # 检查是否是禁止交易模式
-            if self.trade_mode == "forbidden":
+            if self.trade_mode == "禁止交易":
                 logger.warning(f"🚫【智能大脑】当前为禁止交易模式，开仓指令被拒绝")
                 return {
                     "success": False,
@@ -294,7 +294,7 @@ class SmartBrain:
         
         # ========== 止损止盈指令（半自动） ==========
         if command == 'set_sl_tp':
-            if self.trade_mode == "forbidden":
+            if self.trade_mode == "禁止交易":
                 logger.warning(f"🚫【智能大脑】当前为禁止交易模式，止损止盈指令被拒绝")
                 return {
                     "success": False,
@@ -318,7 +318,7 @@ class SmartBrain:
         
         # ========== 平仓指令（半自动） ==========
         if command == 'close_position':
-            if self.trade_mode == "forbidden":
+            if self.trade_mode == "禁止交易":
                 logger.warning(f"🚫【智能大脑】当前为禁止交易模式，平仓指令被拒绝")
                 return {
                     "success": False,
@@ -380,7 +380,7 @@ class SmartBrain:
         
         try:
             # 1. 如果当前是全自动模式，先发送结束标签
-            if self.trade_mode == 'full':
+            if self.trade_mode == '全自动':
                 if self.auto_open:
                     self.auto_open.on_data({"info": "结束全自动"})
                 if self.auto_sltp:
