@@ -129,7 +129,7 @@ class SmartBrain:
             logger.info("✅【智能大脑】半自动工人已创建（杠杆、开仓、止损止盈、平仓）")
             
             # 4. 创建全自动工人
-            from .trading.全自动_auto import AutoOpen, AutoSlTp, AutoClose
+            from .trading.full_auto import AutoOpen, AutoSlTp, AutoClose
             
             self.auto_open = AutoOpen(self)
             self.auto_sltp = AutoSlTp(self)
