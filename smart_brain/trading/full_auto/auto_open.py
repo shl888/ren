@@ -14,13 +14,22 @@
 - 任何步骤失败（除资产检查外），10秒后从第一步（读取数据）重新开始
 - 最多重试2次（即总共执行3次完整流程）
 - 资产检查失败直接结束，不重试
+
+合约筛选条件（必须同时满足）：
+- 费率差 > 0.8
+- 欧易结算倒计时 < 200秒
+- 币安结算倒计时 < 200秒
+
+精选规则：
+- 1个合约：直接选中
+- 多个合约：选费率差最大的
 """
 
 import asyncio
 import logging
 import copy
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 
 logger = logging.getLogger(__name__)
 
@@ -135,16 +144,16 @@ class Scout:
             except Exception as e:
                 logger.error(f"❌【全自动侦察兵】侦察循环异常: {e}")
                 await asyncio.sleep(60)
-    # 测试用，正常第57分钟
+    
     def _calculate_next_run(self, now: datetime) -> datetime:
         """计算下一个第57分钟的时间，正确处理跨小时和跨天"""
-        current_hour_27 = now.replace(minute=27, second=0, microsecond=0)
+        current_hour_57 = now.replace(minute=57, second=0, microsecond=0)
         
-        if now < current_hour_27:
-            return current_hour_27
+        if now < current_hour_57:
+            return current_hour_57
         else:
             next_hour = now + timedelta(hours=1)
-            return next_hour.replace(minute=27, second=0, microsecond=0)
+            return next_hour.replace(minute=57, second=0, microsecond=0)
     
     # ==================== 重试控制 ====================
     
@@ -311,7 +320,7 @@ class Scout:
         return True
     
     def _check_asset(self, user_data: Dict) -> bool:
-        """检查资产是否满足条件"""
+        """检查资产是否满足条件（欧易和币安资产都必须 >= 50）"""
         try:
             okx_data = user_data.get('okx', {})
             binance_data = user_data.get('binance', {})
@@ -319,22 +328,14 @@ class Scout:
             okx_asset = float(okx_data.get('账户资产额', 0))
             binance_asset = float(binance_data.get('账户资产额', 0))
             
-            if okx_asset < 10:
-                logger.warning(f"⚠️【全自动侦察兵】欧易资产太少: {okx_asset:.2f}")
+            if okx_asset < 50:
+                logger.warning(f"⚠️【全自动侦察兵】欧易资产不足50: {okx_asset:.2f}")
                 return False
-            if binance_asset < 10:
-                logger.warning(f"⚠️【全自动侦察兵】币安资产太少: {binance_asset:.2f}")
-                return False
-            
-            larger = max(okx_asset, binance_asset)
-            smaller = min(okx_asset, binance_asset)
-            ratio = larger / smaller if smaller > 0 else float('inf')
-            # 测试用，正常是2
-            if ratio > 200:
-                logger.warning(f"⚠️【全自动侦察兵】资产比例不匹配: 欧易={okx_asset:.2f}, 币安={binance_asset:.2f}, 比例={ratio:.2f}")
+            if binance_asset < 50:
+                logger.warning(f"⚠️【全自动侦察兵】币安资产不足50: {binance_asset:.2f}")
                 return False
             
-            logger.info(f"✅【全自动侦察兵】资产检查通过: 欧易={okx_asset:.2f}, 币安={binance_asset:.2f}, 比例={ratio:.2f}")
+            logger.info(f"✅【全自动侦察兵】资产检查通过: 欧易={okx_asset:.2f}, 币安={binance_asset:.2f}")
             return True
             
         except Exception as e:
@@ -342,8 +343,19 @@ class Scout:
             return False
     
     def _select_best_symbol(self, market_data: Dict) -> Optional[str]:
-        """筛选最佳交易标的"""
-        candidates = []
+        """
+        筛选最佳交易标的
+        
+        条件（必须同时满足）：
+        1. 费率差 > 0.8
+        2. 欧易结算倒计时 < 200秒
+        3. 币安结算倒计时 < 200秒
+        
+        精选规则：
+        - 1个合约：直接选中
+        - 多个合约：选费率差最大的
+        """
+        candidates: List[Dict] = []
         
         for symbol, data in market_data.items():
             if not isinstance(data, dict):
@@ -353,29 +365,50 @@ class Scout:
                 rate_diff = float(data.get('rate_diff') or 0)
                 okx_countdown = int(data.get('okx_countdown_seconds') or 0)
                 binance_countdown = int(data.get('binance_countdown_seconds') or 0)
-                # 测试用，正常是0.8
-                if rate_diff < 0.08:
+                
+                
+                # 这里的0.3，只是测试用，其实是0.8
+                
+                # 三个必须同时满足的条件
+                if rate_diff <= 0.3:
+                    logger.debug(f"⏭️【全自动侦察兵】{symbol} 费率差不足: {rate_diff} <= 0.8")
                     continue
                 
-                countdown_diff = abs(okx_countdown - binance_countdown)
-                if countdown_diff > 10000:
+                if okx_countdown >= 200:
+                    logger.debug(f"⏭️【全自动侦察兵】{symbol} 欧易倒计时过长: {okx_countdown} >= 200")
                     continue
-                # 测试用，正常是10
+                
+                if binance_countdown >= 200:
+                    logger.debug(f"⏭️【全自动侦察兵】{symbol} 币安倒计时过长: {binance_countdown} >= 200")
+                    continue
+                
+                # 满足所有条件的合约
                 candidates.append({
                     'symbol': symbol,
-                    'rate_diff': rate_diff
+                    'rate_diff': rate_diff,
+                    'okx_countdown': okx_countdown,
+                    'binance_countdown': binance_countdown
                 })
+                
+                logger.info(f"✅【全自动侦察兵】符合条件的合约: {symbol}, rate_diff={rate_diff}, 欧易倒计时={okx_countdown}秒, 币安倒计时={binance_countdown}秒")
                 
             except Exception as e:
                 logger.debug(f"⚠️【全自动侦察兵】解析合约 {symbol} 数据异常: {e}")
                 continue
         
         if not candidates:
-            logger.warning("⚠️【全自动侦察兵】未找到符合条件的合约")
+            logger.warning("⚠️【全自动侦察兵】未找到同时满足三个条件的合约")
             return None
         
-        best = max(candidates, key=lambda x: x['rate_diff'])
-        logger.info(f"✅【全自动侦察兵】选中交易标的: {best['symbol']}, rate_diff={best['rate_diff']}")
+        # 精选规则
+        if len(candidates) == 1:
+            best = candidates[0]
+            logger.info(f"🎯【全自动侦察兵】仅1个符合条件的合约，直接选中: {best['symbol']}")
+        else:
+            # 选择费率差最大的
+            best = max(candidates, key=lambda x: x['rate_diff'])
+            logger.info(f"🎯【全自动侦察兵】共{len(candidates)}个合约符合条件，选费率差最大的: {best['symbol']} (rate_diff={best['rate_diff']})")
+        
         return best['symbol']
     
     # ==================== 参数计算 ====================

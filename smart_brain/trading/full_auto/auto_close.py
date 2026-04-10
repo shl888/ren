@@ -19,11 +19,13 @@
 3. 危险仓位：|标记价涨跌盈亏幅| ≥ 36 或 |最新价涨跌盈亏幅| ≥ 36
 4. 费率差缩小：rate_diff ≤ 0.3
 5/6. 资金费后公式：60秒倒计时结束后，综合盈亏 ≥ 0.5 或 ≤ -0.2
+7. 本小时不结算：结算时间更新后检测到倒计时 > 3610，安排第55分钟强制平仓（最后闸门）
 """
 
 import asyncio
 import logging
 import copy
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
 from ..templates import CLOSE_POSITION_OKX, CLOSE_POSITION_BINANCE
@@ -40,6 +42,7 @@ class FullAutoCloser:
         self.is_active = False                  # 是否激活
         self.monitor_task = None                # 监控循环任务
         self.funding_timer_task = None          # 60秒倒计时任务
+        self.delayed_close_task = None          # 延迟平仓任务（第55分钟）
         
         # 平仓参数缓存（填充时使用）
         self.okx_close_cache = None
@@ -105,6 +108,7 @@ class FullAutoCloser:
         
         self._stop_monitor_task()
         self._cancel_funding_timer()
+        self._cancel_delayed_close_task()
         
         self._full_cleanup()
         logger.info("🛑【全自动清仓工人】已停用，状态完全重置")
@@ -120,6 +124,12 @@ class FullAutoCloser:
         if self.funding_timer_task and not self.funding_timer_task.done():
             self.funding_timer_task.cancel()
             self.funding_timer_task = None
+    
+    def _cancel_delayed_close_task(self):
+        """取消延迟平仓任务"""
+        if self.delayed_close_task and not self.delayed_close_task.done():
+            self.delayed_close_task.cancel()
+            self.delayed_close_task = None
     
     # ==================== 主监控循环 ====================
     
@@ -166,7 +176,7 @@ class FullAutoCloser:
                         continue
                     
                     # 步骤4：缓存资金费结算时间，检测变化
-                    self._update_settle_time_cache(user_data)
+                    self._update_settle_time_cache(user_data, market_data)
                     
                     # 步骤5：检测清仓条件
                     triggered = await self._check_close_conditions(market_data, user_data)
@@ -174,7 +184,7 @@ class FullAutoCloser:
                     if triggered:
                         # 触发清仓，退出监控阶段，回到外层重新从准备阶段开始
                         logger.info("🔄【全自动清仓工人】清仓已触发，返回准备阶段")
-                        await asyncio.sleep(10)  # ← 就这一行
+                        await asyncio.sleep(10)
                         break
                     
                     await asyncio.sleep(1)
@@ -322,7 +332,7 @@ class FullAutoCloser:
     
     # ==================== 步骤4：缓存资金费结算时间 ====================
     
-    def _update_settle_time_cache(self, user_data: Dict):
+    def _update_settle_time_cache(self, user_data: Dict, market_data: Dict = None):
         """缓存本次资金费结算时间，检测变化并启动倒计时"""
         okx_data = user_data.get('okx', {})
         binance_data = user_data.get('binance', {})
@@ -346,10 +356,14 @@ class FullAutoCloser:
         self.cached_okx_settle_time = current_okx_time
         self.cached_binance_settle_time = current_binance_time
         
-        # 任意一个变了，启动60秒倒计时，并重置公式触发状态
+        # 任意一个变了，执行后续逻辑
         if settle_changed:
             self.last_formula_triggered = False
             self._start_funding_delay_timer()
+            
+            # 新增：检测本小时是否结算
+            if market_data is not None:
+                self._check_countdown_for_delayed_settle(market_data)
     
     def _start_funding_delay_timer(self):
         """启动60秒倒计时任务"""
@@ -367,6 +381,83 @@ class FullAutoCloser:
                 logger.info("✅【全自动清仓工人】60秒倒计时结束，开始公式检测")
         except asyncio.CancelledError:
             logger.info("🛑【全自动清仓工人】倒计时被取消")
+    
+    # ==================== 新增：检测本小时是否结算 ====================
+    
+    def _check_countdown_for_delayed_settle(self, market_data: Dict):
+        """
+        检测本小时是否结算，如果不结算，设置第55分钟强制平仓（最后一道闸门）
+        
+        逻辑说明：
+        - 结算时间更新后立即调用一次
+        - 如果倒计时 > 3610秒，说明本小时不结算
+        - 启动定时任务，等待到第55分钟
+        - 在这55分钟内，其他清仓条件仍正常监控
+        - 第55分钟时若仍持仓，强制平仓，让位给第57分钟的侦察兵
+        """
+        if not self.current_symbol:
+            logger.debug("⏭️【全自动清仓工人】无持仓合约，跳过倒计时检测")
+            return
+        
+        symbol_data = market_data.get(self.current_symbol)
+        if not symbol_data:
+            logger.warning(f"⚠️【全自动清仓工人】未找到合约 {self.current_symbol} 的行情数据")
+            return
+        
+        try:
+            okx_countdown = int(symbol_data.get('okx_countdown_seconds') or 0)
+            binance_countdown = int(symbol_data.get('binance_countdown_seconds') or 0)
+            
+            logger.info(f"🔍【全自动清仓工人】结算时间已更新，检测下次结算: 欧易倒计时={okx_countdown}秒, 币安倒计时={binance_countdown}秒")
+            
+            # 任一倒计时 > 3610（约1小时），说明本小时不结算
+            if okx_countdown > 3610 or binance_countdown > 3610:
+                logger.info(f"📅【全自动清仓工人】本小时不结算（倒计时 > 1小时），安排第55分钟平仓（最后闸门）")
+                self._schedule_close_at_minute_55()
+            else:
+                logger.info(f"✅【全自动清仓工人】本小时会结算（倒计时 < 1小时），继续正常监控")
+                
+        except Exception as e:
+            logger.error(f"❌【全自动清仓工人】检测结算倒计时异常: {e}")
+    
+    def _schedule_close_at_minute_55(self):
+        """安排在本小时第55分钟执行平仓"""
+        self._cancel_delayed_close_task()
+        self.delayed_close_task = asyncio.create_task(self._delayed_close_worker())
+    
+    async def _delayed_close_worker(self):
+        """等待到本小时第55分钟，然后执行平仓"""
+        try:
+            now = datetime.now()
+            
+            # 计算本小时第55分钟的时间
+            target_time = now.replace(minute=55, second=0, microsecond=0)
+            
+            # 如果当前时间已经过了第55分钟，取下一个小时
+            if now >= target_time:
+                target_time = target_time + timedelta(hours=1)
+            
+            wait_seconds = (target_time - now).total_seconds()
+            
+            logger.info(f"⏰【全自动清仓工人】安排延迟平仓: 目标时间={target_time.strftime('%Y-%m-%d %H:%M:%S')}, 等待 {wait_seconds:.0f} 秒")
+            
+            await asyncio.sleep(wait_seconds)
+            
+            if not self.is_active:
+                logger.info("🛑【全自动清仓工人】已停用，取消延迟平仓")
+                return
+            
+            # 检查是否仍有有效的平仓副本
+            if self.okx_close_copy or self.binance_close_copy:
+                logger.warning(f"🔚【全自动清仓工人】执行延迟平仓（本小时第55分钟）- 最后闸门")
+                await self._execute_close("本小时不结算，第55分钟强制平仓")
+            else:
+                logger.info("📭【全自动清仓工人】无持仓，取消延迟平仓")
+                
+        except asyncio.CancelledError:
+            logger.info("🛑【全自动清仓工人】延迟平仓任务被取消")
+        except Exception as e:
+            logger.error(f"❌【全自动清仓工人】延迟平仓任务异常: {e}")
     
     # ==================== 步骤5：检测清仓条件 ====================
     
@@ -583,18 +674,15 @@ class FullAutoCloser:
         rate_diff = symbol_data.get('rate_diff')
         if rate_diff is None:
             return False
-        #  测试用，正常是0.3
+        # 这里的0.1，只是测试用，其实是0.3
         try:
             rate_diff = float(rate_diff)
-            if rate_diff <= 0:
+            if rate_diff <= 0.1:
                 if self.last_rate_diff_triggered:
                     return False
                 self.last_rate_diff_triggered = True
                 logger.warning(f"⚠️【全自动清仓工人】费率差缩小: {self.current_symbol} rate_diff={rate_diff}")
                 return True
-            else:
-                # 费率差恢复到0.3以上，重置触发状态
-                self.last_rate_diff_triggered = False
         except Exception as e:
             logger.error(f"❌【全自动清仓工人】检查费率差异常: {e}")
         
@@ -668,6 +756,9 @@ class FullAutoCloser:
             logger.info("=" * 50)
             logger.info(f"🔚【全自动清仓工人】触发清仓！原因: {reason}")
             
+            # 取消延迟平仓任务（因为已经要平仓了）
+            self._cancel_delayed_close_task()
+            
             # 发送准备好的副本
             orders = []
             if self.okx_close_copy:
@@ -700,6 +791,7 @@ class FullAutoCloser:
         self.current_symbol = None
         self.funding_check_active = False
         self._cancel_funding_timer()
+        self._cancel_delayed_close_task()
         logger.debug("🧹【全自动清仓工人】工作缓存已清空")
     
     def _full_cleanup(self):
@@ -714,5 +806,6 @@ class FullAutoCloser:
         self.current_symbol = None
         self._is_closing = False
         self._cancel_funding_timer()
+        self._cancel_delayed_close_task()
         self._reset_trigger_state()
         logger.info("🧹【全自动清仓工人】完全重置")
