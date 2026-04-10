@@ -674,10 +674,10 @@ class FullAutoCloser:
         rate_diff = symbol_data.get('rate_diff')
         if rate_diff is None:
             return False
-        # 这里的0.1，只是测试用，其实是0.3
+        # 这里的0，只是测试用，其实是0.3
         try:
             rate_diff = float(rate_diff)
-            if rate_diff <= 0.1:
+            if rate_diff <= 0:
                 if self.last_rate_diff_triggered:
                     return False
                 self.last_rate_diff_triggered = True
