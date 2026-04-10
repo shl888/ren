@@ -173,7 +173,7 @@ class SmartBrain:
         
         判断规则：
         - 如果数据里有 "info" 字段 → 这是信息标签，根据内容转发给对应工人
-        - 否则 → 这是原始数据，直接推送到前端
+        - 否则 → 这是交易执行结果原始数据，直接推送到前端
         """
         # 判断是否是信息标签
         if "info" in data:
@@ -196,10 +196,10 @@ class SmartBrain:
             else:
                 logger.warning(f"⚠️【智能大脑】未知信息标签: {info_value}")
         else:
-            # 原始数据，直接推送到前端
+            # 交易执行结果原始数据，直接推送到前端
             if self.frontend_relay:
                 await self.frontend_relay.broadcast_execution_results([data])
-                logger.info(f"📤【智能大脑】原始数据已推送到前端")
+                logger.info(f"📤【智能大脑】交易执行结果原始数据已推送到前端")
             else:
                 logger.warning("⚠️【智能大脑】frontend_relay 未设置，无法推送")
     
