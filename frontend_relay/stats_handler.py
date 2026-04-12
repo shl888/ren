@@ -1,9 +1,9 @@
 # frontend_relay/stats_handler.py
 """
-交易统计处理器 -
+交易数据统计处理器 -
 ======================================================================
 【文件职责】
-这个文件是一个独立的专门处理交易统计请求。
+这个文件是一个独立的专门处理交易数据统计请求。
 
 【数据流向】
 qd_server 收到前端 get_stats 指令
@@ -49,7 +49,7 @@ DECIMAL_PLACES = 4        # 保留小数位数
 
 class StatsHandler:
     """
-    交易统计处理器 - 独立的大脑
+    交易数据统计处理器 - 独立工作
     
     qd_server 调用方式：
         handler = StatsHandler()
@@ -60,9 +60,9 @@ class StatsHandler:
         """初始化处理器，从环境变量读取 MongoDB 连接信息"""
         self.mongo_uri = os.getenv('MONGODB_URI')
         if not self.mongo_uri:
-            logger.error("❌ 【统计处理器】环境变量 MONGODB_URI 未设置")
+            logger.error("❌ 【数据统计处理器】环境变量 MONGODB_URI 未设置")
         else:
-            logger.info("✅ 【统计处理器】MongoDB 连接信息已读取")
+            logger.info("✅ 【数据统计处理器】MongoDB 连接信息已读取")
     
     # ==================== 对外唯一入口 ====================
     
@@ -75,7 +75,7 @@ class StatsHandler:
             data: 前端发来的数据，包含 range 或 start/end
             client_id: 客户端 ID
         """
-        logger.info(f"📊 【统计处理器】收到请求，客户端: {client_id}")
+        logger.info(f"📊 【数据统计处理器】收到请求，客户端: {client_id}")
         
         # 1. 解析参数
         range_param = data.get('range', 'all')
@@ -95,10 +95,10 @@ class StatsHandler:
                 "data": result,
                 "client_id": client_id
             })
-            logger.info(f"✅ 【统计处理器】结果已推送，净盈亏: {result['net_pnl']}")
+            logger.info(f"✅ 【数据统计处理器】结果已推送，净盈亏: {result['net_pnl']}")
             
         except Exception as e:
-            logger.error(f"❌ 【统计处理器】处理失败: {e}", exc_info=True)
+            logger.error(f"❌ 【数据统计处理器】处理失败: {e}", exc_info=True)
             await ws.send_json({
                 "type": "stats_result",
                 "data": self._empty_result(),
@@ -161,7 +161,7 @@ class StatsHandler:
     async def _fetch_records(self, start_time: Optional[str], end_time: Optional[str]) -> List[Dict]:
         """从 MongoDB 的 closed_positions 集合查询数据"""
         if not self.mongo_uri:
-            logger.error("❌ 【统计处理器】MONGODB_URI 未设置")
+            logger.error("❌ 【数据统计处理器】MONGODB_URI 未设置")
             return []
         
         loop = asyncio.get_event_loop()
@@ -194,7 +194,7 @@ class StatsHandler:
             return records
             
         except Exception as e:
-            logger.error(f"❌ 【统计处理器】查询数据库失败: {e}")
+            logger.error(f"❌ 【数据统计处理器】查询数据库失败: {e}")
             return []
         finally:
             if client:

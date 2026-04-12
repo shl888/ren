@@ -204,7 +204,7 @@ class FrontendRelayServer:
                                             
                                             # ========== 🆕 统计指令 ==========
                                             elif msg_type == 'get_stats':
-                                                logger.debug(f"📊【客户端】收到统计指令，转发给统计处理器")
+                                                logger.info(f"📊【客户端】收到数据统计指令，转发给数据统计处理器")
                                                 from .stats_handler import StatsHandler
                                                 handler = StatsHandler()
                                                 await handler.handle(ws, data2, client_id)
