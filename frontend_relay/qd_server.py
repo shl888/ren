@@ -76,13 +76,9 @@ class FrontendRelayServer:
         # 健康检查
         self.app.router.add_get('/health', self._handle_health)
         
-        # ========== 🆕 日志接口（房间2的路由注册） ==========
+        # 日志接口（房间2的路由注册）
         self.app.router.add_get('/api/logs/stream', self._handle_logs_stream)
         self.app.router.add_get('/api/logs/history', self._handle_logs_history)
-    
-    # ======================================================================
-    # 🏠 房间1：WebSocket 和 HTTP API 处理（现有代码，保持不动）
-    # ======================================================================
     
     async def _handle_websocket(self, request):
         """
@@ -205,15 +201,44 @@ class FrontendRelayServer:
                                                 })
                                             
                                             elif msg_type == 'get_stats':
-                                                logger.info(f"📊【客户端】收到数据统计指令，准备转发给数据统计处理器")
-                                                logger.info(f"   参数: {data2}")
-                                                logger.info(f"   客户端: {client_id}")
+                                                logger.info(f"📊【客户端】收到数据统计指令")
                                                 
-                                                from .stats_handler import StatsHandler
-                                                handler = StatsHandler()
-                                                await handler.handle(ws, data2, client_id)
+                                                # 从 data 字段取参数，与其他指令一致
+                                                stats_params = data2.get('data', {})
+                                                logger.info(f"   参数: {stats_params}")
                                                 
+                                                # 直接在这里处理，不依赖外部 handler
+                                                range_type = stats_params.get('range')
+                                                start = stats_params.get('start')
+                                                end = stats_params.get('end')
                                                 
+                                                # TODO: 调用你的统计逻辑
+                                                # 临时返回假数据测试
+                                                result = {
+                                                    'okx_trades': 0,
+                                                    'okx_avg_margin': 0.0,
+                                                    'okx_total_fee': 0.0,
+                                                    'okx_total_funding': 0.0,
+                                                    'okx_total_profit': 0.0,
+                                                    'binance_trades': 0,
+                                                    'binance_avg_margin': 0.0,
+                                                    'binance_total_fee': 0.0,
+                                                    'binance_total_funding': 0.0,
+                                                    'binance_total_profit': 0.0,
+                                                    'net_fee': 0.0,
+                                                    'net_funding': 0.0,
+                                                    'net_profit': 0.0,
+                                                    'net_pnl': 0.0,
+                                                    'net_pnl_rate': 0.0,
+                                                }
+                                                
+                                                await ws.send_json({
+                                                    "type": "stats_result",
+                                                    "data": result,
+                                                    "timestamp": time.time()
+                                                })
+                                                
+                                                logger.info(f"✅ 统计结果已发送")
                                             
                                             else:
                                                 logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
@@ -359,7 +384,7 @@ class FrontendRelayServer:
 
 
     # ======================================================================
-    # 🏠 房间2：日志接口 —— 前端查看容器日志专用（🆕 新增独立区域）
+    # 房间2：日志接口 —— 前端查看容器日志专用（新增独立区域）
     # ======================================================================
     # 
     # 功能说明：
@@ -636,7 +661,7 @@ class FrontendRelayServer:
 
 
     # ======================================================================
-    # 🏠 房间3：数据广播方法（现有代码，保持不动）
+    # 房间3：数据广播方法（现有代码，保持不动）
     # ======================================================================
     
     async def broadcast_market_data(self, market_data):
@@ -705,7 +730,7 @@ class FrontendRelayServer:
     
     async def broadcast_execution_results(self, results):
         """广播订单执行结果到前端"""
-        # ========== 收到数据时打印 ==========
+        # 收到数据时打印
         logger.debug(f"📥【客户端收到】results 数量: {len(results)}")
         for i, res in enumerate(results):
             logger.debug(f"📥【客户端收到】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}, success={res.get('success')}")
@@ -720,7 +745,7 @@ class FrontendRelayServer:
             "timestamp": time.time()
         }
         
-        # ========== 发送前打印 ==========
+        # 发送前打印
         logger.debug(f"📤【客户端发送】准备广播: type={message['type']}, data数量={len(message['data'])}")
         for i, res in enumerate(message['data']):
             logger.debug(f"📤【客户端发送】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}")
@@ -783,7 +808,7 @@ class FrontendRelayServer:
 
 
     # ======================================================================
-    # 🏠 房间4：辅助方法和服务器控制（现有代码，保持不动）
+    # 房间4：辅助方法和服务器控制（现有代码，保持不动）
     # ======================================================================
     
     def _validate_token(self, token: str) -> bool:
