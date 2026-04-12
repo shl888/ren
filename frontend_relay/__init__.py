@@ -4,6 +4,7 @@
 """
 
 from .qd_server import FrontendRelayServer
+from .stats_handler import StatsHandler  # 🆕 新增
 
 __version__ = "1.0.0"
-__all__ = ['FrontendRelayServer']
+__all__ = ['FrontendRelayServer', 'StatsHandler']  # 🆕 新增 StatsHandler

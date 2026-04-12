@@ -202,6 +202,13 @@ class FrontendRelayServer:
                                                     "client_id": client_id
                                                 })
                                             
+                                            # ========== 🆕 统计指令 ==========
+                                            elif msg_type == 'get_stats':
+                                                logger.debug(f"📊【客户端】收到统计指令，转发给统计处理器")
+                                                from .stats_handler import StatsHandler
+                                                handler = StatsHandler()
+                                                await handler.handle(ws, data2, client_id)
+                                            
                                             else:
                                                 logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
                                                 
