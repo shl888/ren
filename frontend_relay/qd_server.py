@@ -1,9 +1,7 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # frontend_relay/qd_server.py
 """
 前端中继服务器 - qd表示前端，避免与http_server/server.py冲突
-功能：1.接收前端连接 2.推送数据 3.执行指令 4.提供容器日志查询（新增）
+功能：1.接收前端连接 2.推送数据 3.执行指令
 """
 
 import asyncio
@@ -11,8 +9,6 @@ import time
 import logging
 import json
 import os
-import subprocess
-import shlex
 from typing import List, Dict, Any, Optional
 from aiohttp import web
 
@@ -75,10 +71,8 @@ class FrontendRelayServer:
         
         # 健康检查
         self.app.router.add_get('/health', self._handle_health)
-        
-        # 日志接口（房间2的路由注册）
-        self.app.router.add_get('/api/logs/stream', self._handle_logs_stream)
-        self.app.router.add_get('/api/logs/history', self._handle_logs_history)
+    
+    # ==================== WebSocket处理 ====================
     
     async def _handle_websocket(self, request):
         """
@@ -201,44 +195,8 @@ class FrontendRelayServer:
                                                 })
                                             
                                             elif msg_type == 'get_stats':
-                                                logger.info(f"📊【客户端】收到数据统计指令")
-                                                
-                                                # 从 data 字段取参数，与其他指令一致
-                                                stats_params = data2.get('data', {})
-                                                logger.info(f"   参数: {stats_params}")
-                                                
-                                                # 直接在这里处理，不依赖外部 handler
-                                                range_type = stats_params.get('range')
-                                                start = stats_params.get('start')
-                                                end = stats_params.get('end')
-                                                
-                                                # TODO: 调用你的统计逻辑
-                                                # 临时返回假数据测试
-                                                result = {
-                                                    'okx_trades': 0,
-                                                    'okx_avg_margin': 0.0,
-                                                    'okx_total_fee': 0.0,
-                                                    'okx_total_funding': 0.0,
-                                                    'okx_total_profit': 0.0,
-                                                    'binance_trades': 0,
-                                                    'binance_avg_margin': 0.0,
-                                                    'binance_total_fee': 0.0,
-                                                    'binance_total_funding': 0.0,
-                                                    'binance_total_profit': 0.0,
-                                                    'net_fee': 0.0,
-                                                    'net_funding': 0.0,
-                                                    'net_profit': 0.0,
-                                                    'net_pnl': 0.0,
-                                                    'net_pnl_rate': 0.0,
-                                                }
-                                                
-                                                await ws.send_json({
-                                                    "type": "stats_result",
-                                                    "data": result,
-                                                    "timestamp": time.time()
-                                                })
-                                                
-                                                logger.info(f"✅ 统计结果已发送")
+                                                logger.debug(f"📊【客户端】收到统计指令")
+                                                logger.debug(f"   参数: {data2.get('params', {})}")
                                             
                                             else:
                                                 logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
@@ -295,6 +253,8 @@ class FrontendRelayServer:
                 logger.info(f"❌【客户端】连接断开: {client_id} (剩余: {len(self.ws_clients)}个)")
         
         return ws
+    
+    # ==================== HTTP指令处理 ====================
     
     async def _handle_command(self, request):
         """处理前端HTTP指令"""
@@ -381,288 +341,8 @@ class FrontendRelayServer:
             "service": "frontend_relay",
             "timestamp": time.time()
         })
-
-
-    # ======================================================================
-    # 房间2：日志接口 —— 前端查看容器日志专用（新增独立区域）
-    # ======================================================================
-    # 
-    # 功能说明：
-    #   - /api/logs/stream  → 实时模式：持续推送容器日志（SSE 流式）
-    #   - /api/logs/history → 查询模式：按时间范围 + 关键词搜索历史日志
-    #
-    # 底层原理：
-    #   - 容器必须挂载 /var/run/docker.sock 才能执行 docker logs 命令
-    #   - 关键词过滤在容器内用 grep 完成，只返回匹配的行
-    #   - 通过容器内的 hostname 自动获取当前容器 ID
-    #
-    # 当前状态：
-    #   - 未部署到 Docker 容器时，返回 503 友好提示
-    #   - 部署到容器并挂载 docker.sock 后自动生效
-    #
-    # 前端调用示例：
-    #   - 实时模式：GET /api/logs/stream?tail=200
-    #   - 查询模式：GET /api/logs/history?range=6h&keyword=error
-    # ======================================================================
-
-    async def _handle_logs_stream(self, request):
-        """
-        实时日志流（SSE 格式 - Server-Sent Events）
-        
-        前端连接后：
-        1. 先返回最近 N 条历史日志（默认200条）
-        2. 然后持续推送新产生的日志
-        
-        查询参数：
-        - tail: 返回最近多少条（默认200，最大1000）
-        - keyword: 可选，只返回包含关键词的行
-        
-        注意：由于 aiohttp 的流式响应特性，这里使用分块传输
-        """
-        # 1. 检查是否在 Docker 环境
-        if not self._is_running_in_docker():
-            return web.Response(
-                text="⚠️ 服务未运行在 Docker 容器中。\n请将后端部署到 Docker 容器并挂载 /var/run/docker.sock 后使用此功能。\n",
-                status=503
-            )
-        
-        # 2. 解析参数
-        tail = request.query.get('tail', '200')
-        keyword = request.query.get('keyword', '').strip()
-        
-        # 限制 tail 最大值
-        try:
-            tail_num = int(tail)
-            if tail_num > 1000:
-                tail_num = 1000
-            elif tail_num < 10:
-                tail_num = 10
-        except ValueError:
-            tail_num = 200
-        
-        # 3. 准备流式响应
-        response = web.StreamResponse()
-        response.headers['Content-Type'] = 'text/plain; charset=utf-8'
-        response.headers['Cache-Control'] = 'no-cache'
-        response.headers['X-Accel-Buffering'] = 'no'  # 禁用 Nginx 缓冲
-        await response.prepare(request)
-        
-        logger.info(f"📋【日志流】开始推送，tail={tail_num}, keyword={keyword if keyword else '无'}")
-        
-        try:
-            # 4. 先推送最近 N 条历史日志
-            history_cmd = f"docker logs --tail {tail_num} {self._get_container_id()}"
-            if keyword:
-                history_cmd += f" | grep --line-buffered -i {shlex.quote(keyword)}"
-            
-            history_logs = await self._execute_docker_logs(history_cmd)
-            if history_logs:
-                await response.write(history_logs.encode('utf-8'))
-            
-            # 5. 持续推送新日志（-f 模式）
-            follow_cmd = f"docker logs -f --tail 0 {self._get_container_id()}"
-            if keyword:
-                follow_cmd += f" | grep --line-buffered -i {shlex.quote(keyword)}"
-            
-            process = await asyncio.create_subprocess_shell(
-                follow_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            # 持续读取输出并推送给前端
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                await response.write(line)
-                
-        except asyncio.CancelledError:
-            logger.info("📋【日志流】客户端断开连接")
-            raise
-        except Exception as e:
-            logger.error(f"❌【日志流】推送失败: {e}")
-            error_msg = f"\n[错误] 日志流中断: {e}\n"
-            await response.write(error_msg.encode('utf-8'))
-        finally:
-            # 清理子进程
-            if 'process' in locals():
-                try:
-                    process.terminate()
-                    await process.wait()
-                except:
-                    pass
-        
-        return response
-
-    async def _handle_logs_history(self, request):
-        """
-        历史日志查询
-        
-        查询参数：
-        - range : 时间范围，如 5m, 30m, 1h, 6h, 24h（默认1h）
-        - since : 起始时间（ISO格式，与 range 二选一）
-        - until : 结束时间（ISO格式，可选）
-        - keyword: 关键词过滤（可选）
-        - limit : 最大返回行数（默认500）
-        """
-        # 1. 检查是否在 Docker 环境
-        if not self._is_running_in_docker():
-            return web.json_response({
-                "success": False,
-                "error": "服务未运行在 Docker 容器中，请部署到容器后使用",
-                "hint": "需要挂载 /var/run/docker.sock"
-            }, status=503)
-        
-        # 2. 解析参数
-        time_range = request.query.get('range', '1h')
-        since = request.query.get('since', '')
-        until = request.query.get('until', '')
-        keyword = request.query.get('keyword', '').strip()
-        limit = request.query.get('limit', '500')
-        
-        # 限制返回行数
-        try:
-            limit_num = int(limit)
-            if limit_num > 2000:
-                limit_num = 2000
-        except ValueError:
-            limit_num = 500
-        
-        # 3. 构建 docker logs 命令
-        cmd_parts = ["docker", "logs"]
-        
-        # 时间范围参数
-        if since:
-            cmd_parts.extend(["--since", shlex.quote(since)])
-        else:
-            cmd_parts.extend(["--since", shlex.quote(time_range)])
-        
-        if until:
-            cmd_parts.extend(["--until", shlex.quote(until)])
-        
-        cmd_parts.append(self._get_container_id())
-        
-        base_cmd = " ".join(cmd_parts)
-        
-        # 添加关键词过滤和行数限制
-        if keyword:
-            full_cmd = f"{base_cmd} 2>&1 | grep -i {shlex.quote(keyword)} | tail -n {limit_num}"
-        else:
-            full_cmd = f"{base_cmd} 2>&1 | tail -n {limit_num}"
-        
-        logger.info(f"📋【历史日志】查询: range={time_range}, keyword={keyword if keyword else '无'}, limit={limit_num}")
-        
-        try:
-            # 4. 执行命令
-            output = await self._execute_docker_logs(full_cmd)
-            
-            # 5. 按行分割
-            lines = output.strip().split('\n') if output.strip() else []
-            
-            return web.json_response({
-                "success": True,
-                "logs": lines,
-                "total": len(lines),
-                "query": {
-                    "range": time_range if not since else None,
-                    "since": since if since else None,
-                    "until": until if until else None,
-                    "keyword": keyword if keyword else None,
-                    "limit": limit_num
-                },
-                "timestamp": time.time()
-            })
-            
-        except Exception as e:
-            logger.error(f"❌【历史日志】查询失败: {e}")
-            return web.json_response({
-                "success": False,
-                "error": str(e),
-                "logs": [],
-                "total": 0
-            }, status=500)
-
-    def _is_running_in_docker(self) -> bool:
-        """
-        检测当前是否在 Docker 容器内运行
-        
-        判断依据：
-        1. 检查 /.dockerenv 文件是否存在
-        2. 检查 /proc/1/cgroup 是否包含 docker
-        """
-        # 方法1：检查 .dockerenv 文件
-        if os.path.exists('/.dockerenv'):
-            return True
-        
-        # 方法2：检查 cgroup
-        try:
-            with open('/proc/1/cgroup', 'r') as f:
-                content = f.read()
-                if 'docker' in content or 'containerd' in content:
-                    return True
-        except:
-            pass
-        
-        return False
-
-    def _get_container_id(self) -> str:
-        """
-        获取当前容器的 ID
-        
-        在容器内，hostname 就是容器 ID（短格式）
-        """
-        try:
-            with open('/etc/hostname', 'r') as f:
-                return f.read().strip()
-        except:
-            # 降级：尝试通过环境变量获取
-            return os.getenv('HOSTNAME', 'unknown')
-
-    async def _execute_docker_logs(self, command: str) -> str:
-        """
-        安全执行 docker logs 命令
-        
-        Args:
-            command: 完整的 shell 命令字符串
-            
-        Returns:
-            命令的标准输出
-            
-        Raises:
-            Exception: 命令执行失败
-        """
-        try:
-            process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=30.0  # 30秒超时
-            )
-            
-            if process.returncode != 0 and process.returncode != 1:
-                # grep 没有匹配时返回 1，这是正常的
-                stderr_msg = stderr.decode('utf-8', errors='ignore')
-                if "grep" not in command or process.returncode != 1:
-                    logger.warning(f"⚠️ 命令执行警告 (code={process.returncode}): {stderr_msg}")
-            
-            return stdout.decode('utf-8', errors='ignore')
-            
-        except asyncio.TimeoutError:
-            logger.error("❌ 命令执行超时")
-            return ""
-        except Exception as e:
-            logger.error(f"❌ 命令执行失败: {e}")
-            raise
-
-
-    # ======================================================================
-    # 房间3：数据广播方法（现有代码，保持不动）
-    # ======================================================================
+    
+    # ==================== 数据广播 ====================
     
     async def broadcast_market_data(self, market_data):
         """广播市场数据到所有前端"""
@@ -730,7 +410,7 @@ class FrontendRelayServer:
     
     async def broadcast_execution_results(self, results):
         """广播订单执行结果到前端"""
-        # 收到数据时打印
+        # ========== 收到数据时打印 ==========
         logger.debug(f"📥【客户端收到】results 数量: {len(results)}")
         for i, res in enumerate(results):
             logger.debug(f"📥【客户端收到】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}, success={res.get('success')}")
@@ -745,7 +425,7 @@ class FrontendRelayServer:
             "timestamp": time.time()
         }
         
-        # 发送前打印
+        # ========== 发送前打印 ==========
         logger.debug(f"📤【客户端发送】准备广播: type={message['type']}, data数量={len(message['data'])}")
         for i, res in enumerate(message['data']):
             logger.debug(f"📤【客户端发送】第{i+1}条: exchange={res.get('exchange')}, type={res.get('type')}")
@@ -805,11 +485,8 @@ class FrontendRelayServer:
         
         self.stats["messages_broadcast"] += len(authenticated_clients) - len(dead_clients)
         logger.debug(f"✅【客户端】【广播完成】类型: {message_type}, 成功发送到 {len(authenticated_clients) - len(dead_clients)} 个客户端")
-
-
-    # ======================================================================
-    # 房间4：辅助方法和服务器控制（现有代码，保持不动）
-    # ======================================================================
+    
+    # ==================== 辅助方法 ====================
     
     def _validate_token(self, token: str) -> bool:
         """验证token"""
@@ -833,6 +510,8 @@ class FrontendRelayServer:
         
         return ''
     
+    # ==================== 服务器控制 ====================
+    
     async def start(self):
         """启动前端中继服务器"""
         try:
@@ -851,8 +530,6 @@ class FrontendRelayServer:
             logger.info(f"📨【客户端】 HTTP API: http://0.0.0.0:{self.port}/api/cmd")
             logger.info(f"📊【客户端】状态查询: http://0.0.0.0:{self.port}/status")
             logger.info(f"❤️【客户端】健康检查: http://0.0.0.0:{self.port}/health")
-            logger.info(f"📋【客户端】日志流: http://0.0.0.0:{self.port}/api/logs/stream")
-            logger.info(f"📋【客户端】历史日志: http://0.0.0.0:{self.port}/api/logs/history")
             logger.info(f"🔐【客户端】认证方式: 连接WebSocket后发送 {{'type':'auth', 'token':'YOUR_TOKEN'}}")
             
             return True
