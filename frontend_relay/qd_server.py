@@ -199,7 +199,7 @@ class FrontendRelayServer:
                                                 logger.debug(f"   参数: {data2.get('params', {})}")
                                             
                                             else:
-                                                logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
+                                                logger.info(f"📨【客户端】收到未知消息类型: {msg_type}")
                                                 
                                         except Exception as e:
                                             logger.error(f"❌【客户端】处理消息异常: {e}")
