@@ -195,7 +195,7 @@ class FrontendRelayServer:
                                                 })
                                             
                                             elif msg_type == 'get_stats':
-                                                logger.debug(f"📊【客户端】收到统计指令")
+                                                logger.info(f"📊【客户端】收到统计指令")
                                                 logger.debug(f"   参数: {data2.get('params', {})}")
                                             
                                             else:
