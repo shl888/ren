@@ -72,15 +72,16 @@ class StatsHandler:
         
         Args:
             ws: WebSocket 连接对象，用于推送结果
-            data: 前端发来的数据，包含 range 或 start/end
+            data: 前端发来的数据，包含 params.range 或 params.start/end
             client_id: 客户端 ID
         """
         logger.info(f"📊 【数据统计处理器】收到请求，客户端: {client_id}")
         
-        # 1. 解析参数
-        range_param = data.get('range', 'all')
-        start_time = data.get('start', '')
-        end_time = data.get('end', '')
+        # 1. 从 params 里解析参数
+        params = data.get('params', {})
+        range_param = params.get('range', 'all')
+        start_time = params.get('start', '')
+        end_time = params.get('end', '')
         
         try:
             # 2. 获取统计数据
