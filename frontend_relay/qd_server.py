@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # frontend_relay/qd_server.py
 """
 前端中继服务器 - qd表示前端，避免与http_server/server.py冲突
@@ -202,13 +204,16 @@ class FrontendRelayServer:
                                                     "client_id": client_id
                                                 })
                                             
-                                            # ========== 🆕 统计指令 ==========
                                             elif msg_type == 'get_stats':
-                                                logger.info(f"📊【客户端】收到数据统计指令，转发给数据统计处理器")
+                                                logger.info(f"📊【客户端】收到数据统计指令，准备转发给数据统计处理器")
+                                                logger.info(f"   参数: {data2}")
+                                                logger.info(f"   客户端: {client_id}")
+                                                
                                                 from .stats_handler import StatsHandler
                                                 handler = StatsHandler()
                                                 await handler.handle(ws, data2, client_id)
-                                                self.stats["commands_processed"] += 1
+                                                
+                                                
                                             
                                             else:
                                                 logger.debug(f"📨【客户端】收到未知消息类型: {msg_type}")
